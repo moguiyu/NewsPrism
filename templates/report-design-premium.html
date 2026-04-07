@@ -1092,7 +1092,7 @@
         <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon">{{ hot.topic_icon }}</span>{{ hot.macro_topic_name }}</button>
         {% endfor %}
         {% for sec in main_sections %}
-        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.css_key }}')">{{ sec.emoji }} {{ sec.label }}</button>
+        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')">{{ sec.emoji }} {{ sec.label }}</button>
         {% endfor %}
       </nav>
     </div>
