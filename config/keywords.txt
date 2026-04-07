@@ -1,4 +1,5 @@
-# TrendRadar Keywords
+# NewsPrism Keywords
+# Initial keyword organization was inspired by TrendRadar.
 # Format: One keyword per line
 # Blank lines separate groups (grouped keywords match together)
 # Lines starting with # are comments

@@ -49,9 +49,9 @@ The default stack includes:
 
 - `newsprism`: scheduler and pipeline worker
 - `web`: static report server on `http://localhost:8080`
-- `newsnow`: optional-but-recommended helper for difficult Chinese sources
+- [`NewsNow`](https://github.com/ourongxing/newsnow): optional-but-recommended helper for difficult Chinese sources
 
-The default image-based install uses the config and templates bundled inside the `newsprism` image. If you want editable host-side `config/`, `templates/`, or nginx config files, use the contributor/source-build stack in `docker-compose.dev.yml`.
+The default image-based install uses the config and templates bundled inside the `newsprism` image. If you want editable host-side `config/`, `templates/`, or nginx config files, use the contributor/source-build stack in `docker-compose.dev.yml`. For Chinese-source coverage, NewsPrism works best with the self-hosted [`NewsNow`](https://github.com/ourongxing/newsnow) proxy enabled.
 
 Full server install, update, backup, and customization guidance lives in `docs/deploy-docker.md`.
 
@@ -75,7 +75,7 @@ python -m newsprism once
 
 Optional helper services:
 
-- `docker compose -f docker-compose.dev.yml up -d newsnow` starts a local `newsnow` proxy for harder Chinese sources.
+- `docker compose -f docker-compose.dev.yml up -d newsnow` starts a local [`NewsNow`](https://github.com/ourongxing/newsnow) proxy for harder Chinese sources.
 - `docker compose -f docker-compose.dev.yml up -d web` serves generated HTML reports from `http://localhost:8080`.
 
 ## Environment Variables
@@ -163,6 +163,12 @@ Most behavior is file-based:
 | Contributing process | `CONTRIBUTING.md` |
 | Security reporting | `SECURITY.md` |
 
+## Acknowledgements
+
+NewsPrism is an independent project inspired by [TrendRadar](https://github.com/sansan0/TrendRadar). Thanks to the TrendRadar project and its author/community for the inspiration.
+
+NewsPrism also relies on the self-hosted [NewsNow](https://github.com/ourongxing/newsnow) project for stronger coverage of difficult Chinese news sources. Thanks to that project and its author for making that workflow practical.
+
 ## Deployment Notes
 
 - Supported public deployment target: one Linux server with Docker Compose
@@ -170,7 +176,7 @@ Most behavior is file-based:
 - Persistence lives in `data/`, `output/`, and the Hugging Face cache volume
 - SQLite is intended for single-host use; this repo does not target clustered multi-writer deployments
 - For public internet exposure, run a reverse proxy with HTTPS in front of the `web` service and set `REPORT_BASE_URL` accordingly
-- Some source coverage, especially difficult Chinese sites, is materially better when `newsnow` is enabled
+- Some source coverage, especially difficult Chinese sites, is materially better when [`NewsNow`](https://github.com/ourongxing/newsnow) is enabled
 
 ## License
 
