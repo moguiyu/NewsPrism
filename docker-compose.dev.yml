@@ -10,12 +10,9 @@ services:
     container_name: newsnow
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3001:4444"   # localhost-only; newsprism reaches it via Docker network as newsnow:4444
+      - "127.0.0.1:3001:4444"
     environment:
       - NUXT_PUBLIC_SITE_URL=http://newsnow:4444
-      # GitHub OAuth (optional — only needed for user login feature)
-      # - NUXT_GITHUB_CLIENT_ID=
-      # - NUXT_GITHUB_CLIENT_SECRET=
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4444/api/s?id=thepaper"]
       interval: 30s
@@ -28,21 +25,22 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── NewsPrism — pipeline (collect + cluster + summarize + publish) ──────────
-  # Core service. Uses the published GHCR image so self-hosters can deploy from
-  # a compose file and .env alone, without cloning the repo.
+  # ── NewsPrism — source-build contributor stack ─────────────────────────────
+  # Uses the local Dockerfile and bind mounts editable config/templates.
   newsprism:
-    image: ghcr.io/moguiyu/newsprism:latest
+    build: .
     container_name: newsprism
     restart: unless-stopped
     env_file: .env
     environment:
-      - NEWSNOW_BASE_URL=http://newsnow:4444    # internal Docker network endpoint
-      - SCHEDULE_TIMEZONE=Europe/Warsaw         # overrides config.yaml schedule.timezone
+      - NEWSNOW_BASE_URL=http://newsnow:4444
+      - SCHEDULE_TIMEZONE=Europe/Warsaw
     volumes:
-      - ./data:/app/data                      # SQLite database (persistent)
-      - ./output:/app/output                  # Generated HTML reports (persistent)
-      - hf_cache:/app/.cache/huggingface      # Embedding model cache
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./config:/app/config
+      - ./templates:/app/templates
+      - hf_cache:/app/.cache/huggingface
     depends_on:
       newsnow:
         condition: service_healthy
@@ -54,16 +52,16 @@ services:
     command: sh -c "umask 022 && python -m newsprism run"
 
   # ── nginx — static HTML report server ──────────────────────────────────────
-  # Core for browser access. The nginx config is baked into a dedicated image so
-  # the default install does not depend on local repo files.
+  # Contributor stack keeps nginx config editable from the repo.
   web:
-    image: ghcr.io/moguiyu/newsprism-web:latest
+    image: nginx:alpine
     container_name: newsprism-web
     restart: unless-stopped
     ports:
       - "8080:80"
     volumes:
       - ./output:/usr/share/nginx/html:ro
+      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     logging:
       driver: "json-file"
       options:

@@ -31,17 +31,15 @@ Layer rule: `types -> config -> repo -> service -> runtime`. Higher layers must 
 
 ## Self-Host With Docker
 
-NewsPrism supports a single-server Docker Compose deployment from this repository.
+NewsPrism supports a single-server Docker Compose deployment with published GHCR images. The default install path only needs `docker-compose.yml` and `.env`; it does not require a local `Dockerfile` or a full repo checkout.
 
 ```bash
-git clone https://github.com/moguiyu/NewsPrism.git
-cd NewsPrism
-
+# Download docker-compose.yml and .env.example from this repo into an empty directory
 cp .env.example .env
 # Fill in at least LITELLM_API_KEY, LITELLM_MODEL, LITELLM_BASE_URL, REPORT_BASE_URL
 
-# Optional: review config/config.yaml and config/keywords.txt before first start
-docker compose up -d --build
+# Start the published images
+docker compose up -d
 
 # Optional: trigger the first run immediately instead of waiting for cron
 docker compose exec newsprism python -m newsprism once
@@ -53,11 +51,16 @@ The default stack includes:
 - `web`: static report server on `http://localhost:8080`
 - `newsnow`: optional-but-recommended helper for difficult Chinese sources
 
+The default image-based install uses the config and templates bundled inside the `newsprism` image. If you want editable host-side `config/`, `templates/`, or nginx config files, use the contributor/source-build stack in `docker-compose.dev.yml`.
+
 Full server install, update, backup, and customization guidance lives in `docs/deploy-docker.md`.
 
 ## Develop Locally
 
 ```bash
+git clone https://github.com/moguiyu/NewsPrism.git
+cd NewsPrism
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
@@ -72,8 +75,8 @@ python -m newsprism once
 
 Optional helper services:
 
-- `docker compose up -d newsnow` starts a local `newsnow` proxy for harder Chinese sources.
-- `docker compose up -d web` serves generated HTML reports from `http://localhost:8080`.
+- `docker compose -f docker-compose.dev.yml up -d newsnow` starts a local `newsnow` proxy for harder Chinese sources.
+- `docker compose -f docker-compose.dev.yml up -d web` serves generated HTML reports from `http://localhost:8080`.
 
 ## Environment Variables
 
@@ -100,6 +103,8 @@ Optional:
 ## Customization
 
 Self-hosters are expected to customize the installation through files, not Python code.
+
+For the default image-based install, those files live inside the container image. Use `docker-compose.dev.yml` from a repo checkout if you want to edit `config/`, `templates/`, or `config/nginx.conf` directly on the host.
 
 | Surface | What you can change |
 |---|---|
@@ -161,6 +166,7 @@ Most behavior is file-based:
 ## Deployment Notes
 
 - Supported public deployment target: one Linux server with Docker Compose
+- Default self-hosting path uses published GHCR images; no local source checkout is required
 - Persistence lives in `data/`, `output/`, and the Hugging Face cache volume
 - SQLite is intended for single-host use; this repo does not target clustered multi-writer deployments
 - For public internet exposure, run a reverse proxy with HTTPS in front of the `web` service and set `REPORT_BASE_URL` accordingly
