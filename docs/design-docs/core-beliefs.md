@@ -2,6 +2,8 @@
 
 Foundational decisions that shape every other design choice in NewsPrism.
 
+NewsPrism is an independent implementation. It is informed in part by the problem framing popularized by [TrendRadar](https://github.com/sansan0/TrendRadar), while its architecture, publishing flow, and codebase are its own.
+
 ---
 
 ## 1. Topic-first, not source-first

@@ -14,7 +14,7 @@ The default `docker-compose.yml` defines three services:
 
 - `newsprism`: the scheduler and pipeline worker from `ghcr.io/moguiyu/newsprism:latest`
 - `web`: nginx serving generated HTML from `output/` from `ghcr.io/moguiyu/newsprism-web:latest`
-- `newsnow`: optional but strongly recommended helper service for difficult Chinese sources
+- [`NewsNow`](https://github.com/ourongxing/newsnow): optional but strongly recommended helper service for difficult Chinese sources
 
 Persistent state:
 
@@ -77,7 +77,7 @@ The report server is available at:
 - `http://SERVER_IP:8080/` directly
 - or your reverse-proxied public domain if you expose it that way
 
-The default image-based install uses the config and templates baked into the application image. If you want editable host-side `config/`, `templates/`, or nginx config files, use the contributor/source-build workflow in `docker-compose.dev.yml`.
+The default image-based install uses the config and templates baked into the application image. If you want editable host-side `config/`, `templates/`, or nginx config files, use the contributor/source-build workflow in `docker-compose.dev.yml`. For Chinese-source coverage, NewsPrism works best with the self-hosted [`NewsNow`](https://github.com/ourongxing/newsnow) proxy enabled.
 
 ## Day-2 Operations
 
