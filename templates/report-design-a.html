@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NewsPrism · {{ report_date_display }}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0e1117;
+      --surface:   #171b26;
+      --border:    #252b3e;
+      --accent:    #4f8cff;
+      --text:      #dde3ef;
+      --muted:     #7a8499;
+      --cat-bg:    #1a1f30;
+      --cat-text:  #7eb0ff;
+      --pill-bg:   rgba(79,140,255,.15);
+      --pill-text: #6aa3ff;
+      --persp-bg:  #161b28;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:        #f5f6fa;
+        --surface:   #ffffff;
+        --border:    #dde1ec;
+        --accent:    #3b74e8;
+        --text:      #1a1f2e;
+        --muted:     #6b7490;
+        --cat-bg:    #eef1fb;
+        --cat-text:  #2a5cd6;
+        --pill-bg:   rgba(59,116,232,.10);
+        --pill-text: #2a5cd6;
+        --persp-bg:  #f0f3fc;
+      }
+    }
+
+    html { color-scheme: dark light; }
+    body {
+      font-family: -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei",
+                   "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      padding: 0 16px 60px;
+      font-size: 15px;
+    }
+
+    header {
+      max-width: 780px; margin: 0 auto;
+      padding: 36px 0 24px;
+      border-bottom: 2px solid var(--accent);
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .logo { font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+            color: var(--accent); font-weight: 700; }
+    header h1 { font-size: clamp(20px, 4vw, 28px); font-weight: 700; }
+    .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+    main { max-width: 780px; margin: 0 auto; }
+
+    .section { margin-top: 32px; }
+    .section-header {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 4px;
+    }
+    .section-label {
+      background: var(--cat-bg); color: var(--cat-text);
+      font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+      text-transform: uppercase; padding: 3px 10px; border-radius: 4px;
+      white-space: nowrap;
+    }
+    .section-line { flex: 1; height: 1px; background: var(--border); }
+
+    .story { padding: 16px 0 14px; border-bottom: 1px solid var(--border); }
+    .story:last-child { border-bottom: none; }
+
+    .story-title {
+      font-size: 15px; font-weight: 700; color: var(--text);
+      line-height: 1.45; margin-bottom: 6px;
+    }
+    .story-index { color: var(--muted); font-weight: 400; margin-right: 6px; }
+
+    .story-body { font-size: 14px; color: var(--muted); line-height: 1.7; margin-bottom: 10px; }
+    .story-body strong, .story-body b { color: var(--text); font-weight: 700; }
+
+    .persp-toggle {
+      display: inline-flex; align-items: center; gap: 5px;
+      background: var(--pill-bg); color: var(--pill-text);
+      border: 1px solid var(--pill-text);
+      border-radius: 20px; padding: 2px 10px 2px 8px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: background .15s; user-select: none;
+    }
+    .persp-toggle:hover { background: rgba(79,140,255,.25); }
+    .persp-toggle .arrow { font-size: 9px; transition: transform .2s; }
+    .persp-toggle.open .arrow { transform: rotate(180deg); }
+
+    .persp-drawer {
+      display: none;
+      background: var(--persp-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 10px; overflow: hidden;
+    }
+    .persp-drawer.open { display: block; }
+
+    .persp-row {
+      display: flex; gap: 12px; align-items: flex-start;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .persp-row:last-child { border-bottom: none; }
+    .persp-source { flex-shrink: 0; min-width: 90px; }
+    .persp-source a { color: var(--accent); font-weight: 600; text-decoration: none; font-size: 12px; }
+    .persp-source a:hover { text-decoration: underline; }
+    .persp-text { color: var(--text); line-height: 1.6; }
+
+    footer {
+      max-width: 780px; margin: 48px auto 0;
+      border-top: 1px solid var(--border);
+      padding-top: 16px; color: var(--muted); font-size: 12px; text-align: center;
+    }
+
+    @media (max-width: 600px) {
+      .persp-row { flex-direction: column; gap: 4px; }
+      .persp-source { min-width: unset; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">NewsPrism</div>
+  <h1>{{ report_date_display }} {{ day_name }} · 每日简报</h1>
+  <div class="meta">{{ cluster_count }} 条要闻 · 自动聚合</div>
+</header>
+
+<main>
+  {% for sec in sections %}
+  <section class="section">
+    <div class="section-header">
+      <span class="section-label">{{ sec.emoji }} {{ sec.label }}</span>
+      <div class="section-line"></div>
+    </div>
+
+    {% for c in sec.clusters %}
+    <div class="story" id="topic-{{ c.index }}">
+      <div class="story-title">
+        <span class="story-index">{{ c.seq_index }}.</span>{{ c.headline }}
+      </div>
+      <div class="story-body">{{ c.summary }}</div>
+
+      {% if c.perspectives_list %}
+      <button class="persp-toggle" onclick="togglePersp(this)">
+        <span>👁 {{ c.perspectives_list | length }} 个视角</span><span class="arrow">▾</span>
+      </button>
+      <div class="persp-drawer">
+        {% for p in c.perspectives_list %}
+        <div class="persp-row">
+          <span class="persp-source"><a href="{{ p.url }}" target="_blank" rel="noopener">{% if p.is_searched %}🔍{% endif %}{% if p.flag %}{{ p.flag }} {% endif %}{{ p.source }}{% if p.provenance_label %} · {{ p.provenance_label }}{% endif %}</a></span>
+          <span class="persp-text">{{ p.text }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+</main>
+
+<footer>
+  NewsPrism · {{ report_date_display }} · 由 AI 自动聚合，内容来自各公开媒体
+</footer>
+
+<script>
+function togglePersp(btn) {
+  const drawer = btn.nextElementSibling;
+  const open = drawer.classList.toggle('open');
+  btn.classList.toggle('open', open);
+}
+</script>
+</body>
+</html>

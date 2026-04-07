@@ -1,0 +1,426 @@
+# TrendRadar Keywords
+# Format: One keyword per line
+# Blank lines separate groups (grouped keywords match together)
+# Lines starting with # are comments
+
+# AI & LLM
+DeepSeek
+ChatGPT
+OpenAI
+Sora
+Claude
+Anthropic
+Gemini
+DeepMind
+人工智能
+大模型
+LLM
+AGI
+
+# Smartphones & Electronics
+iPhone
+iPad
+Apple
+苹果
+华为
+鸿蒙
+HarmonyOS
+小米
+雷军
+三星
+Samsung
+Galaxy
+Android
+安卓
+OPPO
+vivo
+
+# Smart Home
+智能家居
+HomeAssistant
+米家
+智能音箱
+小爱同学
+Alexa
+物联网
+IoT
+
+# Film - Chinese
+哪吒
+三体
+流浪地球
+刘慈欣
+张艺谋
+封神
+
+# Film - International
+诺兰
+Nolan
+漫威
+Marvel
+皮克斯
+Pixar
+迪士尼
+Disney
+宫崎骏
+新海诚
+沙丘
+Dune
+
+# Film - General
+电影
+票房
+奥斯卡
+Oscar
+Netflix
+
+# Music
+音乐
+专辑
+演唱会
+音乐节
+Spotify
+格莱美
+Grammy
+
+# Games - Chinese
+黑神话
+悟空
+原神
+崩坏
+米哈游
+
+# Games - Platform
+Steam
+任天堂
+Nintendo
+Switch
+PlayStation
+PS5
+Xbox
+GTA
+
+# Games - General
+游戏
+电竞
+英雄联盟
+LOL
+
+# Robotics
+机器人
+人形机器人
+宇树
+智元
+稀晖君
+波士顿动力
+自动驾驶
+Waymo
+
+# Energy
+核能
+核电
+核聚变
+新能源
+光伏
+储能
+氢能
+
+# Chips & Hardware
+英伟达
+NVIDIA
+黄仁勋
+AMD
+芯片
+光刻机
+ASML
+台积电
+高通
+Qualcomm
+Intel
+英特尔
+显卡
+GPU
+
+# Tech Companies - China
+字节
+TikTok
+张一鸣
+比亚迪
+王传福
+大疆
+DJI
+京东
+刘强东
+胖东来
+阿里
+淘宝
+马云
+腾讯
+微信
+马化腾
+
+# Tech Companies - International
+特斯拉
+马斯克
+Tesla
+Musk
+SpaceX
+星链
+Starlink
+微软
+Microsoft
+Copilot
+亚马逊
+Amazon
+AWS
+Meta
+Facebook
+扎克伯格
+
+# Space
+月球
+登月
+火星
+航天
+空间站
+天宫
+嫦娥
+NASA
+星舰
+Starship
+
+# Regions
+深圳
+粤港澳
+大湾区
+云南
+昆明
+波兰
+Poland
+华沙
+Warsaw
+欧洲
+欧盟
+
+# Geopolitics
+中国
+国产
+美国
+日本
+韩国
+俄罗斯
+乌克兰
+中东
+以色列
+
+# Tech General
+科技
+开源
+GitHub
+程序员
+量子计算
+脑机接口
+Neuralink
+
+# Geopolitics - Extended (English for international sources)
+China
+US-China
+tariff
+sanction
+export control
+ban
+trade war
+Taiwan
+Huawei
+TikTok ban
+semiconductor
+supply chain
+
+# AI Policy & Regulation (English)
+AI Act
+regulation
+copyright
+antitrust
+monopoly
+data privacy
+GDPR
+cyber
+
+# Energy & Climate (English)
+nuclear
+solar
+battery
+EV
+electric vehicle
+renewable
+carbon
+climate
+
+# Chips (English — for Dutch/German chip coverage)
+ASML
+lithography
+fab
+wafer
+node
+transistor
+foundry
+TSMC
+
+# Finance
+金融
+银行
+股票
+股市
+IPO
+美股
+A股
+港股
+纳斯达克
+标普
+通胀
+CPI
+美联储
+利率
+经济
+衰退
+财报
+市值
+投资
+基金
+区块链
+Bitcoin
+央行
+货币政策
+并购
+上市
+财报季
+债务
+信贷
+汇率
+贸易
+关税
+bankruptcy
+recession
+earnings
+revenue
+profit
+hedge fund
+venture capital
+
+# Society
+教育
+学校
+大学
+高考
+留学
+教材
+医疗
+医院
+医生
+疫苗
+医保
+公共卫生
+药品
+住房
+房价
+房地产
+租房
+买房
+犯罪
+警察
+法院
+判决
+律师
+诉讼
+人口
+婚姻
+生育
+老龄化
+社会保障
+就业
+失业
+social security
+education
+healthcare
+housing
+employment
+unemployment
+immigration
+poverty
+inequality
+
+# Sports
+奥运
+奥运会
+世界杯
+亚运会
+NBA
+CBA
+中超
+英超
+足球
+篮球
+网球
+乒乓球
+羽毛球
+游泳
+田径
+拳击
+电子竞技
+英雄联盟
+Dota
+CS:GO
+Valorant
+Messi
+Ronaldo
+LeBron
+詹姆斯
+谷爱凌
+全红婵
+苏炳添
+转会
+季后赛
+总决赛
+世锦赛
+冠军赛
+Olympics
+FIFA
+Super Bowl
+marathon
+tournament
+championship
+World Cup
+
+# Science & Health
+疫苗研发
+诺贝尔奖
+气候变化
+基因
+生物技术
+脑科学
+心理健康
+癌症
+抗生素
+临床试验
+地震
+洪水
+台风
+自然灾害
+Nobel Prize
+climate change
+pandemic
+epidemic
+mental health
+cancer
+gene editing
+CRISPR
+vaccine
+biodiversity
+extinction
+ecology
+astrophysics
+black hole
+gravitational wave
+quantum
+fusion energy
+nuclear fusion

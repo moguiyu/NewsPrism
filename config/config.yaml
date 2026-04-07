@@ -1,0 +1,876 @@
+# NewsPrism Configuration
+
+# ─── SCHEDULE ──────────────────────────────────────────────────────────────────
+schedule:
+  # Collect every 4 hours — catches morning/lunch/evening news peaks in CST
+  # and keeps up with US/EU news cycles without excessive dedup overhead
+  collect_cron: "0 */4 * * *"   # every 4 hours: 00, 04, 08, 12, 16, 20
+  publish_cron: "0 8 * * *"     # publish once daily at 08:00 (Europe/Warsaw = CET/CEST)
+  timezone: "Europe/Warsaw"     # overridable via SCHEDULE_TIMEZONE env var
+
+# ─── COLLECTION ────────────────────────────────────────────────────────────────
+collection:
+  max_age_hours: 6           # per-run: only fetch articles from last 6h
+                             # (slightly over 4h interval to avoid gaps)
+  request_timeout: 45        # increased: RSSHub routes (cankaoxiaoxi/caixin) need ~8-15s
+  rate_limit_delay: 2.0      # seconds between requests to same domain
+  retry_attempts: 3
+  retry_backoff: 2.0
+
+# ─── FILTERING ─────────────────────────────────────────────────────────────────
+filter:
+  keywords_file: "config/keywords.txt"
+  min_topic_score: 0.1
+  max_topics_per_article: 3
+
+# ─── CLUSTERING ────────────────────────────────────────────────────────────────
+clustering:
+  semantic_threshold: 0.72
+  strong_similarity_threshold: 0.86   # bypass title-overlap gate for very strong semantic matches
+  coherence_title_ngram_threshold: 0.12
+  time_window_hours: 48      # group articles within 48h window
+  min_sources_for_multi: 2
+  max_clusters_per_report: 20
+
+  # Topic equivalence: treat these topic categories as semantically equivalent
+  # for clustering purposes. Keys are canonical topics, values are topics that
+  # should be treated as equivalent. Bidirectional and transitive.
+  topic_equivalence:
+    "World News": ["Geopolitics", "Regions", "Society"]
+    "Geopolitics": ["World News", "Regions", "Energy & Climate (English)", "Geopolitics - Extended (English for international sources)"]
+    "Tech-General": ["Tech Companies - International", "Tech Companies - China", "AI & LLM", "Smartphones & Electronics"]
+    "Energy & Climate (English)": ["Geopolitics", "Society"]
+
+# ─── DEDUPLICATION ─────────────────────────────────────────────────────────────
+dedup:
+  fuzzy_threshold: 85
+  semantic_threshold: 0.82
+  window_days: 3             # dedup window: don't repeat stories published 3+ days ago
+
+# ─── AI SUMMARIZATION ──────────────────────────────────────────────────────────
+summarizer:
+  temperature: 0.3
+  max_tokens: 1200
+  language: "zh"
+  style_guide_file: "config/style-guide.md"
+
+# ─── OUTPUT ────────────────────────────────────────────────────────────────────
+output:
+  html_dir: "output"
+  latest_symlink: true
+  template: "design-premium"   # options: design-a | design-b | design-c | design-premium
+  hot_topics:
+    enabled: true
+    max_topic_tabs: 3
+    min_items_per_topic: 5
+    candidate_window: 40
+    history_window_days: 5
+    storyline_relation_batch_size: 8
+    max_pair_candidates: 200
+    storyline_blocker_similarity: 0.54
+    storyline_blocker_title_overlap: 0.06
+    storyline_edge_confidence_threshold: 0.50
+    storyline_history_similarity_threshold: 0.48
+    storyline_admission_similarity: 0.64
+    storyline_admission_title_overlap: 0.06
+    cluster_validation_pair_similarity: 0.50
+    cluster_validation_pair_title_overlap: 0.03
+    cluster_validation_outlier_similarity: 0.58
+    cluster_validation_outlier_title_overlap: 0.05
+    tab_name_max_chars: 10
+    icon_allowlist: ["globe", "war", "trade", "chip", "ai", "energy"]
+
+# ─── ACTIVE SEARCH ────────────────────────────────────────────────────────────
+active_search:
+  telemetry_enabled: true
+  result_max_age_hours: 72
+  min_content_chars: 150
+  max_results_per_region: 1
+  min_query_token_overlap: 0.34
+  min_cluster_title_overlap: 0.08
+  max_existing_title_overlap: 0.82
+  allow_unknown_freshness_for_official: false
+  cost_tracking:
+    billing:
+      brightdata_serp:
+        pricing_mode: per_result
+        unit_cost_usd: 0.0015          # Bright Data SERP API pay-as-you-go: $1.5 / 1K results
+        estimated_results_per_request: 4
+      tavily_search:
+        pricing_mode: per_request
+        unit_cost_usd: 0.008           # Update to your live Tavily plan if it differs
+      x_recent_search:
+        pricing_mode: per_request
+        unit_cost_usd: null            # Fill from the active X developer billing view
+      x_user_lookup:
+        pricing_mode: per_request
+        unit_cost_usd: null            # Fill from the active X developer billing view
+      x_user_timeline:
+        pricing_mode: per_request
+        unit_cost_usd: null            # Fill from the active X developer billing view
+  search_profiles:
+    # Major powers
+    us:
+      language: en
+    gb:
+      language: en
+    cn:
+      language: zh
+    jp:
+      language: ja
+    kr:
+      language: ko
+    ru:
+      language: ru
+      x_final_fallback: true
+    de:
+      language: de
+    fr:
+      language: fr
+    # Middle East / conflict regions
+    ir:
+      language: fa
+      x_final_fallback: true
+    il:
+      language: he
+      x_final_fallback: true
+    iq:
+      language: ar
+    sa:
+      language: ar
+    ae:
+      language: ar
+    jo:
+      language: ar
+    lb:
+      language: ar
+    sy:
+      language: ar
+    ye:
+      language: ar
+    qa:
+      language: ar
+    # Europe
+    ch:
+      language: de
+    ua:
+      language: uk
+      x_final_fallback: true
+    pl:
+      language: pl
+    # Asia-Pacific
+    in:
+      language: en
+    pk:
+      language: ur
+    id:
+      language: id
+    th:
+      language: th
+    vn:
+      language: vi
+    ph:
+      language: en
+    my:
+      language: ms
+    tr:
+      language: tr
+    # Americas
+    br:
+      language: pt
+    mx:
+      language: es
+    ar:
+      language: es
+    cl:
+      language: es
+    co:
+      language: es
+    # Africa
+    ng:
+      language: en
+    eg:
+      language: ar
+    za:
+      language: en
+  official_web_sources:
+    cn:
+      - platform: static_html
+        source_name: Chinese MFA News
+        region: cn
+        url: https://www.mfa.gov.cn/eng/xw/wjbxw/index.html
+        item_selector: ".news_list > div"
+        title_selector: "a"
+        link_selector: "a"
+        date_selector: "div:last-child"
+        max_results: 6
+      - platform: static_html
+        source_name: Xinhua World
+        region: cn
+        url: https://english.news.cn/world/index.htm
+        item_selector: "#list .item"
+        title_selector: ".tit a"
+        link_selector: ".tit a"
+        date_selector: ".time"
+        max_results: 6
+    ir:
+      - platform: static_html
+        source_name: PressTV Iran
+        region: ir
+        url: https://www.presstv.ir/Section/101
+        item_selector: ".section-latest-news-link"
+        title_selector: ".topnews-title"
+        link_selector: ":self"
+        date_selector: ".section-latest-news-publish"
+        max_results: 6
+  official_social_sources:
+    ir:
+      - platform: x
+        source_name: Iran MFA (EN)
+        user_id: "1051066584100429824"
+        username: IRIMFA_EN
+        region: ir
+      - platform: x
+        source_name: PressTV
+        user_id: "192547775"
+        username: PressTV
+        region: ir
+    ru:
+      - platform: x
+        source_name: Russian MFA
+        user_id: "255471924"
+        username: mfa_russia
+        region: ru
+    cn:
+      - platform: x
+        source_name: Chinese MFA
+        user_id: "1183694592433983489"
+        username: MFA_China
+        region: cn
+      - platform: x
+        source_name: CGTN
+        user_id: "1115874631"
+        username: CGTNOfficial
+        region: cn
+    il:
+      - platform: x
+        source_name: Israel MFA
+        user_id: "85796380"
+        username: IsraelMFA
+        region: il
+    ua:
+      - platform: x
+        source_name: Ukraine MFA
+        user_id: "143427448"
+        username: MFA_Ukraine
+        region: ua
+    us:
+      - platform: x
+        source_name: US State Dept
+        user_id: "9624742"
+        username: StateDept
+        region: us
+
+# ─── SOURCES ───────────────────────────────────────────────────────────────────
+# Status legend:
+#   ✓ verified    — feed confirmed working
+#   ~ estimated   — URL likely correct, needs first-run validation
+#   ! needs-proxy — behind anti-bot / IP restrictions; use RSSHub self-hosted
+#   ✗ no-rss     — no feed available; scrape fallback
+#
+# region: ISO 3166-1 alpha-2 (cn, us, gb, de, nl, jp, kr, ru, in, sg) — editorial origin, NOT language
+# tier:    editorial — world news editorial (all articles pass, "World News" fallback)
+#          tech      — tech-focused (all articles pass, "Tech-General" fallback) [DEFAULT]
+#          portal    — mixed-content portal (keyword filter still gates inclusion)
+# perspective: what angle this source typically brings
+
+sources:
+  # Set `enabled: false` on a source to keep its config/history but skip collection.
+
+  # ════════════════════════════════════════════════════
+  # 🇨🇳 CHINA — 11 sources (zh)
+  # Mainland tech media + official state perspective
+  # ════════════════════════════════════════════════════
+
+  - name: IT之家
+    name_en: ITHome
+    url: https://www.ithome.com
+    rss_url: https://www.ithome.com/rss/                      # ✓ verified
+    type: rss
+    weight: 1.0
+    language: zh
+    region: cn
+    perspective: "主流中文科技媒体，硬件/手机/AI资讯丰富"
+
+  - name: Solidot
+    name_en: Solidot
+    url: https://www.solidot.org
+    rss_url: https://www.solidot.org/index.rss                # ✓ verified
+    type: rss
+    enabled: false
+    weight: 0.95
+    language: zh
+    region: cn
+    perspective: "技术社区视角，开源/安全/科学，较理性客观"
+
+  - name: 澎湃新闻
+    name_en: ThePaper
+    url: https://www.thepaper.cn
+    newsnow_id: thepaper                                      # ✓ newsnow: JSON API (cache.thepaper.cn)
+    rss_url: null                                             # no public RSS; JS-rendered SPA
+    type: rss
+    weight: 0.95
+    language: zh
+    region: cn
+    tier: editorial
+    perspective: "上海官方媒体，深度报道，政策/科技/社会"
+
+  - name: 凤凰网
+    name_en: iFeng
+    url: https://www.ifeng.com
+    newsnow_id: ifeng                                         # ✓ newsnow: regex JSON from homepage
+    rss_url: https://rss.ifeng.com/tech.xml                  # fallback
+    type: rss
+    weight: 0.85
+    language: zh
+    region: cn
+    tier: portal
+    perspective: "香港背景媒体，科技商业，相对多元视角"
+
+  - name: 华尔街见闻
+    name_en: WallStreetCN
+    url: https://wallstreetcn.com
+    newsnow_id: wallstreetcn-news                             # ✓ newsnow: api-one.wallstcn.com JSON API
+    rss_url: null                                             # ✗ no RSS; JS-rendered SPA
+    type: scrape
+    weight: 0.9
+    language: zh
+    region: cn
+    perspective: "中文金融媒体，科技公司财经/投资视角"
+
+  - name: 靠谱新闻
+    name_en: Kaopu News
+    url: https://www.kaopu.news
+    rss_url: https://www.kaopu.news/feed                     # ~ estimated; static site, likely works
+    type: rss
+    enabled: false
+    weight: 0.8
+    language: zh
+    region: cn
+    perspective: "独立科技新闻聚合，多来源摘要"
+
+  - name: 36氪
+    name_en: 36Kr
+    url: https://36kr.com
+    newsnow_id: 36kr-quick                                    # ✓ newsnow: scrapes /newsflashes (Cheerio)
+    rss_url: https://36kr.com/feed                           # fallback
+    type: rss
+    weight: 0.9
+    language: zh
+    region: cn
+    perspective: "创投/科技创业，独角兽公司报道"
+
+  - name: 参考消息
+    name_en: Cankaoxiaoxi
+    url: https://www.cankaoxiaoxi.com
+    rsshub_url: http://rsshub:1200/cankaoxiaoxi/column/gj    # RSSHub 国际栏目 (452-3222 chars)
+    type: rss
+    enabled: false
+    weight: 0.9
+    language: zh
+    region: cn
+    tier: editorial
+    perspective: "官方参考消息，国际新闻中文转载，官方视角"
+
+  - name: 财新网
+    name_en: Caixin
+    url: https://www.caixin.com
+    rsshub_url: http://rsshub:1200/caixin/latest            # RSSHub 最新文章
+    type: rss
+    enabled: false
+    weight: 1.0
+    language: zh
+    region: cn
+    tier: editorial
+    perspective: "最独立财经媒体，调查报道，金融/政策分析"
+
+  - name: 人民日报
+    name_en: People's Daily
+    url: https://www.people.com.cn
+    rss_url: https://www.people.com.cn/rss/world.xml         # ✓ verified (100 items)
+    type: rss
+    enabled: false
+    weight: 0.95
+    language: zh
+    region: cn
+    tier: editorial
+    perspective: "中共中央机关报，官方立场，政策风向标"
+
+  - name: 中国新闻网
+    name_en: China News Service
+    url: https://www.chinanews.com.cn
+    rss_url: https://www.chinanews.com.cn/rss/scroll-news.xml  # ✓ verified
+    type: rss
+    weight: 0.85
+    language: zh
+    region: cn
+    tier: editorial
+    perspective: "中国新闻社，半官方通讯社，政治/社会/经济综合报道，为海外华人媒体主要供稿方"
+
+  # ════════════════════════════════════════════════════
+  # 🇩🇪 GERMANY — 4 sources (de:3, en:1)
+  # Europe's strongest tech media ecosystem
+  # ════════════════════════════════════════════════════
+
+  - name: Heise Online
+    name_en: Heise
+    url: https://www.heise.de
+    rss_url: https://www.heise.de/rss/heise-atom.xml          # ✓ verified
+    type: rss
+    weight: 1.0
+    language: de
+    region: de
+    perspective: "德国最权威科技媒体，硬件/开源/欧盟监管深度"
+
+  - name: Golem.de
+    name_en: Golem
+    url: https://www.golem.de
+    rss_url: https://www.golem.de/rss.php                     # ✓ verified
+    type: rss
+    weight: 0.9
+    language: de
+    region: de
+    perspective: "德国IT专业媒体，企业科技/芯片/云计算"
+
+  - name: Deutsche Welle Tech
+    name_en: DW Tech
+    url: https://www.dw.com
+    rss_url: https://rss.dw.com/xml/rss_en_science            # ✓ verified (English)
+    type: rss
+    weight: 0.85
+    language: en
+    region: de
+    tier: editorial
+    perspective: "德国之声英文版，欧洲视角科技政策/地缘"
+
+  - name: tagesschau
+    name_en: Tagesschau
+    url: https://www.tagesschau.de
+    rss_url: https://www.tagesschau.de/wirtschaft/technologie/index~rss2.xml
+    type: rss
+    weight: 0.95
+    language: de
+    region: de
+    tier: editorial
+    perspective: "德国公共广播ARD新闻品牌，本地德语主流编辑部，科技政策/产业数字化/欧洲监管"
+
+  # ════════════════════════════════════════════════════
+  # 🇬🇧 UNITED KINGDOM — 3 sources (en)
+  # Major British editorial outlets
+  # ════════════════════════════════════════════════════
+
+  - name: BBC News
+    name_en: BBC News
+    url: https://www.bbc.com
+    rss_url: https://feeds.bbci.co.uk/news/world/rss.xml
+    type: rss
+    weight: 1.0
+    language: en
+    region: gb
+    tier: editorial
+    perspective: "全球最大公共广播机构，中立国际视角，广泛覆盖地缘政治"
+
+  - name: The Guardian
+    name_en: The Guardian
+    url: https://www.theguardian.com
+    rss_url: https://www.theguardian.com/world/rss
+    type: rss
+    weight: 0.95
+    language: en
+    region: gb
+    tier: editorial
+    perspective: "英国自由派媒体，AI伦理/科技监管/数字权利深度报道"
+
+  - name: Financial Times
+    name_en: Financial Times
+    url: https://www.ft.com
+    rss_url: https://www.ft.com/rss/home/uk
+    type: rss
+    weight: 0.9
+    language: en
+    region: gb
+    tier: editorial
+    perspective: "精英商业/科技媒体，全球贸易/AI/企业战略深度"
+
+  # ════════════════════════════════════════════════════
+  # 🇮🇳 INDIA — 2 sources (en)
+  # Major English-language editorial outlets
+  # ════════════════════════════════════════════════════
+
+  - name: The Hindu
+    name_en: The Hindu
+    url: https://www.thehindu.com
+    rss_url: https://www.thehindu.com/news/international/feeder/default.rss
+    type: rss
+    weight: 1.0
+    language: en
+    region: in
+    tier: editorial
+    perspective: "印度最高质量报纸，中立编辑方针，国际/科技/政策深度报道"
+
+  - name: NDTV
+    name_en: NDTV
+    url: https://www.ndtv.com
+    rss_url: https://feeds.feedburner.com/ndtvnews-top-stories
+    type: rss
+    weight: 0.9
+    language: en
+    region: in
+    tier: editorial
+    perspective: "印度主流电视媒体，国内/国际新闻，数字平台强大"
+
+  # ════════════════════════════════════════════════════
+  # 🇯🇵 JAPAN — 4 sources (ja)
+  # 2 general news + 2 tech/news editorial products
+  # ════════════════════════════════════════════════════
+
+  - name: NHKニュース
+    name_en: NHK News
+    url: https://www3.nhk.or.jp/news
+    rss_url: https://www3.nhk.or.jp/rss/news/cat0.xml         # ✓ verified
+    type: rss
+    weight: 0.95
+    language: ja
+    region: jp
+    tier: editorial
+    perspective: "日本公共广播综合新闻，宪法独立编辑方针，政治/外交/社会"
+
+  - name: 朝日新聞
+    name_en: Asahi Shimbun
+    url: https://www.asahi.com
+    rss_url: https://rss.asahi.com/rss/asahi/newsheadlines.rdf # ✓ verified
+    type: rss
+    weight: 0.9
+    language: ja
+    region: jp
+    tier: editorial
+    perspective: "日本最大报纸之一，中间偏左，政治/外交/社会深度，独立媒体"
+
+  - name: TechnoEdge
+    name_en: TechnoEdge
+    url: https://www.techno-edge.net
+    rss_url: https://www.techno-edge.net/rss20/index.rdf      # ✓ verified
+    type: rss
+    weight: 0.85
+    language: ja
+    region: jp
+    perspective: "前Engadget日本版编辑团队，消费科技/AI产品/智能设备/EV，非企业IT"
+
+  - name: ITmedia NEWS
+    name_en: ITmedia NEWS
+    url: https://www.itmedia.co.jp/news/
+    rss_url: https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml
+    type: rss
+    weight: 0.9
+    language: ja
+    region: jp
+    perspective: "日本本土主流科技新闻品牌，编辑部采编，AI/安全/企业动向/社会与IT交叉话题"
+
+  # ════════════════════════════════════════════════════
+  # 🇰🇷 KOREA — 3 sources (ko:2, en:1)
+  # 2 general news (KR + EN wire) + 1 consumer/startup tech
+  # ════════════════════════════════════════════════════
+
+  - name: 연합뉴스
+    name_en: Yonhap News KR
+    url: https://www.yna.co.kr
+    rss_url: https://www.yna.co.kr/rss/news.xml               # ✓ verified
+    type: rss
+    weight: 0.9
+    language: ko
+    region: kr
+    tier: editorial
+    perspective: "韩联社韩文版，韩国主要通讯社，三星/SK/现代等财阀及地缘政治第一手"
+
+  - name: Yonhap News EN
+    name_en: Yonhap News EN
+    url: https://en.yna.co.kr
+    rss_url: https://en.yna.co.kr/RSS/news.xml                # ✓ verified
+    type: rss
+    weight: 0.85
+    language: en
+    region: kr
+    tier: editorial
+    perspective: "韩联社英文版，韩国对外视角，供与中英文媒体跨语言对比"
+
+  - name: Platum
+    name_en: Platum
+    url: https://www.platum.kr
+    rss_url: https://www.platum.kr/feed                       # ✓ verified
+    type: rss
+    weight: 0.8
+    language: ko
+    region: kr
+    perspective: "韩国独立创业/科技媒体，AI产品/机器人/消费科技/韩国初创生态，非企业IT"
+
+  # ════════════════════════════════════════════════════
+  # 🇳🇱 NETHERLANDS — 4 sources (nl)
+  # Strong semiconductor + EU tech hub
+  # ════════════════════════════════════════════════════
+
+  - name: Tweakers
+    name_en: Tweakers
+    url: https://tweakers.net
+    rss_url: https://tweakers.net/feeds/nieuws.xml            # ~ estimated
+    type: rss
+    weight: 0.9
+    language: nl
+    region: nl
+    perspective: "荷兰最大科技社区，ASML/芯片/半导体重要视角"
+
+  - name: Techzine
+    name_en: Techzine
+    url: https://www.techzine.nl
+    rss_url: https://www.techzine.nl/feed/                    # ✓ verified
+    type: rss
+    weight: 0.8
+    language: nl
+    region: nl
+    perspective: "荷兰IT专业媒体，企业/云/安全"
+
+  - name: Nu.nl Tech
+    name_en: Nu.nl
+    url: https://www.nu.nl
+    rss_url: https://www.nu.nl/rss/tech                       # ~ estimated
+    type: rss
+    weight: 0.75
+    language: nl
+    region: nl
+    tier: portal
+    perspective: "荷兰最大新闻站点科技版，大众科技报道"
+
+  - name: NOS Nieuws
+    name_en: NOS News
+    url: https://nos.nl
+    rss_url: https://feeds.nos.nl/nosnieuwsalgemeen
+    type: rss
+    weight: 0.95
+    language: nl
+    region: nl
+    tier: editorial
+    perspective: "荷兰国家公共新闻机构，本地荷兰语主流报道，科技政策/社会/国际新闻覆盖广"
+
+  # ════════════════════════════════════════════════════
+  # 🇵🇱 POLAND — 3 sources (pl)
+  # EU perspective, tech + geopolitics
+  # ════════════════════════════════════════════════════
+
+  - name: Niebezpiecznik
+    name_en: Niebezpiecznik
+    url: https://niebezpiecznik.pl
+    rss_url: https://niebezpiecznik.pl/feed/                  # ✓ verified
+    type: rss
+    weight: 0.85
+    language: pl
+    region: pl
+    perspective: "波兰最大网络安全媒体，安全/隐私/数据保护"
+
+  - name: Spider's Web
+    name_en: Spidersweb
+    url: https://spidersweb.pl
+    rss_url: https://spidersweb.pl/feed                       # ~ estimated
+    type: rss
+    weight: 0.8
+    language: pl
+    region: pl
+    perspective: "波兰科技生活方式媒体，消费科技/AI/手机"
+
+  - name: Antyweb
+    name_en: Antyweb
+    url: https://antyweb.pl
+    rss_url: https://antyweb.pl/feed/                         # ~ estimated
+    type: rss
+    weight: 0.75
+    language: pl
+    region: pl
+    perspective: "波兰科技博客，欧盟数字政策/AI监管视角"
+
+  # ════════════════════════════════════════════════════
+  # 🇷🇺 RUSSIA — 5 sources (ru:3, en:1, zh:1)
+  # 3 general news + 1 consumer tech + 1 state media (Chinese)
+  # ════════════════════════════════════════════════════
+
+  - name: 卫星通讯社
+    name_en: Sputnik CN
+    url: https://sputniknews.cn
+    rss_url: https://sputniknews.cn/export/rss2/archive/index.xml  # ~ estimated
+    type: rss
+    weight: 0.8
+    language: zh
+    region: ru
+    tier: editorial
+    perspective: "俄罗斯视角，地缘政治，反西方叙事对比参考"
+
+  - name: The Moscow Times
+    name_en: The Moscow Times
+    url: https://www.themoscowtimes.com
+    rss_url: https://www.themoscowtimes.com/rss/news          # ✓ verified
+    type: rss
+    weight: 0.85
+    language: en
+    region: ru
+    tier: editorial
+    perspective: "独立英文俄罗斯媒体（流亡阿姆斯特丹），批评性视角，与Sputnik官方叙事形成对照"
+
+  - name: Медуза
+    name_en: Meduza
+    url: https://meduza.io
+    rss_url: https://meduza.io/rss/all                        # ✓ verified
+    type: rss
+    weight: 0.9
+    language: ru
+    region: ru
+    tier: editorial
+    perspective: "俄语独立新闻（拉脱维亚），前Lenta.ru调查团队，被俄当局列为不受欢迎组织"
+
+  - name: РБК
+    name_en: RBC
+    url: https://www.rbc.ru
+    rss_url: https://rssexport.rbc.ru/rbcnews/news/30/full.rss
+    type: rss
+    weight: 0.95
+    language: ru
+    region: ru
+    tier: editorial
+    perspective: "俄罗斯本土主流商业与综合新闻编辑部，经济/政策/企业科技视角，国内影响力高"
+
+  - name: 3DNews
+    name_en: 3DNews
+    url: https://3dnews.ru
+    rss_url: https://3dnews.ru/news/rss/                      # ✓ verified
+    type: rss
+    weight: 0.8
+    language: ru
+    region: ru
+    perspective: "俄罗斯独立消费科技媒体（1997），GPU/手机/AI产品/航天，企业IT已剥离至独立站"
+
+  # ════════════════════════════════════════════════════
+  # 🇸🇬 SINGAPORE — 1 source (zh)
+  # Independent Chinese-language perspective
+  # ════════════════════════════════════════════════════
+
+  - name: 联合早报
+    name_en: Zaobao
+    url: https://www.zaobao.com.sg
+    newsnow_id: zaobao                                        # ✓ newsnow: scrapes zaochenbao.com (GB2312)
+    rss_url: https://www.zaobao.com.sg/rss/china             # fallback if newsnow unavailable
+    rss_fallback: https://feedx.net/rss/zaobao.xml
+    type: rss
+    weight: 1.0
+    language: zh
+    region: sg
+    tier: editorial
+    perspective: "新加坡中文媒体，独立视角，东南亚/中国关系"
+
+  # ════════════════════════════════════════════════════
+  # 🇺🇸 UNITED STATES — 9 sources (en:8, zh:1)
+  # Tech + geopolitics + US public-service news
+  # ════════════════════════════════════════════════════
+
+  - name: VOA中文
+    name_en: VOA Chinese
+    url: https://www.voachinese.com
+    rss_url: https://www.voachinese.com/api/zm_yql-vomx-tpeybti   # ✓ verified (新闻 feed, 20 items)
+    type: rss
+    weight: 0.85
+    language: zh
+    region: us
+    tier: editorial
+    perspective: "美国官方之音中文版——同一新闻的美方立场，与大陆媒体形成对比"
+
+  - name: Reuters
+    name_en: Reuters
+    url: https://www.reuters.com
+    rss_url: null                                              # ✗ feeds.reuters.com DNS-dead (deprecated 2020)
+    rsshub_url: http://rsshub:1200/reuters/world               # optional local RSSHub fallback
+    # Deployment: docker run -d --name rsshub -p 1200:1200 diygod/rssfeed
+    type: rss
+    weight: 1.0
+    language: en
+    region: us
+    tier: editorial
+    perspective: "国际权威通讯社，事实导向，科技/地缘政治"
+
+  - name: AP News
+    name_en: AP News
+    url: https://apnews.com
+    rss_url: null                                              # ✗ AP removed public RSS; rsshub.app rate-limited
+    rsshub_url: http://rsshub:1200/apnews/topics/technology    # optional local RSSHub fallback
+    # Deployment: docker run -d --name rsshub -p 1200:1200 diygod/rssfeed
+    type: rss
+    weight: 0.95
+    language: en
+    region: us
+    tier: editorial
+    perspective: "美联社，中立事实报道，重大事件权威来源"
+
+  - name: NPR
+    name_en: NPR
+    url: https://www.npr.org
+    rss_url: https://feeds.npr.org/1001/rss.xml
+    type: rss
+    weight: 0.9
+    language: en
+    region: us
+    tier: editorial
+    perspective: "美国全国公共广播新闻品牌，本地英语主流编辑报道，政治/社会/科技/国际议题覆盖全面"
+
+  - name: The Verge
+    name_en: The Verge
+    url: https://www.theverge.com
+    rss_url: https://www.theverge.com/rss/index.xml           # ✓ verified
+    type: rss
+    weight: 0.9
+    language: en
+    region: us
+    perspective: "科技消费品/平台，科技文化视角"
+
+  - name: Ars Technica
+    name_en: Ars Technica
+    url: https://arstechnica.com
+    rss_url: https://arstechnica.com/feed/                    # ✓ verified
+    type: rss
+    weight: 0.95
+    language: en
+    region: us
+    perspective: "深度技术分析，芯片/AI/安全，理工背景读者"
+
+  - name: TechCrunch
+    name_en: TechCrunch
+    url: https://techcrunch.com
+    rss_url: https://techcrunch.com/feed/                     # ✓ verified
+    type: rss
+    weight: 0.85
+    language: en
+    region: us
+    perspective: "硅谷创投/初创公司，商业化科技"
+
+  - name: Wired
+    name_en: Wired
+    url: https://www.wired.com
+    rss_url: https://www.wired.com/feed/rss                   # ✓ verified
+    type: rss
+    weight: 0.85
+    language: en
+    region: us
+    perspective: "科技社会影响，AI伦理/监管，未来主义视角"
+
+  - name: MIT Technology Review
+    name_en: MIT Tech Review
+    url: https://www.technologyreview.com
+    rss_url: https://www.technologyreview.com/feed/           # ✓ verified
+    type: rss
+    weight: 0.9
+    language: en
+    region: us
+    perspective: "学术/研究视角，AI/生物/能源前沿技术"
