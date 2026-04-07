@@ -1,0 +1,1418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NewsPrism · {{ report_date_display }}</title>
+  <link rel="icon" href="/favicon.ico" sizes="16x16" />
+
+  <!-- Add modern typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+    rel="stylesheet">
+
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      /* Premium Dark Theme */
+      --bg: #0a0b10;
+      --surface: rgba(20, 22, 31, 0.7);
+      --surface-hover: rgba(28, 32, 46, 0.9);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(82, 128, 255, 0.3);
+      --accent: #6e9cff;
+      --accent-glow: rgba(110, 156, 255, 0.2);
+      --text: #f0f2f8;
+      --muted: #8b95a8;
+
+      --chip-bg: rgba(255, 255, 255, 0.05);
+      --chip-active: rgba(110, 156, 255, 0.15);
+      --chip-text: #8b95a8;
+      --chip-text-active: #6e9cff;
+
+      --cat-active-bg: rgba(110, 156, 255, 0.15);
+      --hot-tab-bg: rgba(255, 123, 76, 0.16);
+      --hot-tab-bg-hover: rgba(255, 123, 76, 0.24);
+      --hot-tab-border: rgba(255, 123, 76, 0.42);
+      --hot-tab-text: #ffb08f;
+      --hot-tab-glow: rgba(255, 123, 76, 0.22);
+      --persp-bg: rgba(16, 18, 26, 0.5);
+      --radius: 16px;
+      --blur: blur(20px);
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        /* Premium Light Theme */
+        --bg: #f4f6fa;
+        --surface: rgba(255, 255, 255, 0.8);
+        --surface-hover: rgba(255, 255, 255, 1);
+        --border: rgba(0, 0, 0, 0.06);
+        --border-hover: rgba(59, 110, 245, 0.2);
+        --accent: #3b6ef5;
+        --accent-glow: rgba(59, 110, 245, 0.15);
+        --text: #1c202b;
+        --muted: #5a6477;
+
+        --chip-bg: rgba(0, 0, 0, 0.04);
+        --chip-active: rgba(59, 110, 245, 0.1);
+        --chip-text: #485264;
+        --chip-text-active: #3b6ef5;
+
+        --cat-active-bg: rgba(59, 110, 245, 0.1);
+        --hot-tab-bg: rgba(233, 102, 42, 0.12);
+        --hot-tab-bg-hover: rgba(233, 102, 42, 0.18);
+        --hot-tab-border: rgba(233, 102, 42, 0.38);
+        --hot-tab-text: #c65221;
+        --hot-tab-glow: rgba(233, 102, 42, 0.14);
+        --persp-bg: rgba(240, 244, 250, 0.6);
+        --radius: 16px;
+        --blur: blur(20px);
+      }
+    }
+
+    html {
+      color-scheme: dark light;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Background subtle gradient */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -20vh;
+      left: -10vw;
+      width: 60vw;
+      height: 60vh;
+      background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+      z-index: -1;
+      pointer-events: none;
+    }
+
+    .site-header {
+      background: var(--surface);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      transition: background 0.3s;
+    }
+
+    .mobile-brand-bar {
+      display: none;
+    }
+
+    .header-inner {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px 20px 0;
+    }
+
+    .header-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 16px;
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      min-width: 0;
+    }
+
+    .logo {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -0.5px;
+      text-shadow: 0 2px 10px var(--accent-glow);
+    }
+
+    .header-date {
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .header-stats {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .header-stat {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: var(--chip-bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 12.5px;
+      font-weight: 600;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+
+    .header-stat strong {
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .header-stat-accent {
+      color: var(--accent);
+      border-color: rgba(110, 156, 255, 0.22);
+    }
+
+    .header-stat-hot {
+      color: var(--hot-tab-text);
+      border-color: var(--hot-tab-border);
+    }
+
+    .cat-tabs {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 16px;
+    }
+
+    .cat-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .cat-tab {
+      flex-shrink: 0;
+      background: var(--chip-bg);
+      border: 1px solid transparent;
+      border-radius: 24px;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+      padding: 6px 18px;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+      white-space: nowrap;
+      font-family: inherit;
+    }
+
+    .cat-tab:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+      transform: translateY(-1px);
+    }
+
+    .cat-tab.active {
+      background: var(--cat-active-bg);
+      border-color: var(--accent);
+      color: var(--accent);
+      box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .hot-tab {
+      background: linear-gradient(135deg, var(--hot-tab-bg) 0%, rgba(255, 255, 255, 0.02) 100%);
+      border-color: var(--hot-tab-border);
+      color: var(--hot-tab-text);
+      box-shadow: 0 4px 16px var(--hot-tab-glow);
+    }
+
+    .hot-tab:hover {
+      background: linear-gradient(135deg, var(--hot-tab-bg-hover) 0%, rgba(255, 255, 255, 0.04) 100%);
+      color: var(--text);
+      border-color: rgba(255, 123, 76, 0.55);
+    }
+
+    .hot-tab.active {
+      background: linear-gradient(135deg, var(--hot-tab-bg-hover) 0%, rgba(255, 255, 255, 0.08) 100%);
+      border-color: rgba(255, 123, 76, 0.7);
+      color: var(--text);
+      box-shadow: 0 8px 22px var(--hot-tab-glow);
+    }
+
+    .hot-tab .hot-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+      font-size: 12px;
+      margin-right: 8px;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 32px auto;
+      padding: 0 20px 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 40px;
+    }
+
+    .all-feed {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .hot-topic-stage {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .cat-label {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .cat-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+    }
+
+    .hot-topic-block .cat-label {
+      color: var(--hot-tab-text);
+    }
+
+    .all-overview {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 18px 20px;
+      border: 1px solid var(--hot-tab-border);
+      border-radius: calc(var(--radius) + 4px);
+      background: linear-gradient(135deg, var(--hot-tab-bg) 0%, rgba(255, 255, 255, 0.02) 100%);
+      box-shadow: 0 10px 30px var(--hot-tab-glow);
+    }
+
+    .all-overview-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .overview-kicker {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
+      color: var(--hot-tab-text);
+    }
+
+    .overview-copy {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .overview-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .overview-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .overview-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+
+    .overview-title .hot-icon {
+      width: 24px;
+      height: 24px;
+      margin-right: 0;
+    }
+
+    .overview-meta {
+      color: var(--hot-tab-text);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      margin-bottom: 6px;
+    }
+
+    .overview-summary {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .overview-anchors {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .overview-anchor {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .overview-cta {
+      align-self: center;
+      border: 1px solid var(--hot-tab-border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--hot-tab-text);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .overview-cta:hover {
+      color: var(--text);
+      border-color: rgba(255, 123, 76, 0.55);
+      transform: translateY(-1px);
+    }
+
+    .focus-storyline-block .cat-label {
+      color: var(--accent);
+    }
+
+    .focus-storyline-block {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 16px 18px 0;
+      border: 1px solid rgba(110, 156, 255, 0.16);
+      border-radius: calc(var(--radius) + 2px);
+      background: linear-gradient(180deg, rgba(110, 156, 255, 0.08) 0%, rgba(255, 255, 255, 0.01) 68%);
+      box-shadow: 0 8px 24px rgba(110, 156, 255, 0.08);
+    }
+
+    .focus-storyline-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 2px;
+    }
+
+    .focus-storyline-counter {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      opacity: 0.9;
+    }
+
+    .focus-storyline-block .cards {
+      gap: 12px;
+    }
+
+    .focus-storyline-block .card {
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(110, 156, 255, 0.12);
+      box-shadow: none;
+    }
+
+    .focus-storyline-block .card:hover {
+      transform: none;
+      box-shadow: none;
+      border-color: rgba(110, 156, 255, 0.2);
+    }
+
+    .focus-storyline-block .card-body {
+      padding: 16px 20px 12px;
+    }
+
+    .focus-storyline-block .card-title {
+      font-size: 17px;
+    }
+
+    .focus-storyline-block .card-summary {
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .focus-storyline-block .card-preview {
+      font-size: 12.5px;
+      opacity: 0.82;
+    }
+
+    .focus-storyline-block .source-chips .src-chip:nth-child(n+4) {
+      display: none;
+    }
+
+    .hot-topic-block .card {
+      border-color: var(--hot-tab-border);
+      box-shadow: 0 10px 30px var(--hot-tab-glow);
+    }
+
+    .hot-topic-block .card:hover {
+      border-color: rgba(255, 123, 76, 0.6);
+    }
+
+    .hot-topic-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .hot-topic-counter {
+      color: var(--hot-tab-text);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+
+    .cards {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Glassmorphism Card */
+    .card {
+      background: var(--surface);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
+    }
+
+    .card:hover {
+      border-color: var(--border-hover);
+      background: var(--surface-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
+    }
+
+    .card-body {
+      padding: 20px 24px 16px;
+    }
+
+    .card-title {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 10px 8px;
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.4;
+      margin-bottom: 10px;
+      color: var(--text);
+    }
+
+    .card-title-text {
+      flex: 1 1 280px;
+      min-width: 0;
+    }
+
+    .card-index {
+      color: var(--accent);
+      opacity: 0.8;
+      font-weight: 800;
+      margin-right: 8px;
+      font-size: 15px;
+    }
+
+    .card-badges {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    /* Freshness badge for developing stories */
+    .freshness-badge {
+      display: inline-block;
+      background: linear-gradient(135deg, rgba(255, 170, 50, 0.2) 0%, rgba(255, 120, 30, 0.15) 100%);
+      border: 1px solid rgba(255, 150, 50, 0.4);
+      color: #ffaa50;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .card-summary {
+      font-size: 15px;
+      color: var(--muted);
+      line-height: 1.8;
+    }
+
+    .card-summary strong,
+    .card-summary b {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .card-preview {
+      margin-top: 12px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      padding-left: 12px;
+      border-left: 2px solid var(--accent);
+      opacity: 0.88;
+    }
+
+    .card-footer {
+      padding: 12px 24px 16px;
+      border-top: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.02);
+      transition: background 0.2s;
+    }
+
+    .card-footer.is-expandable .source-chips::after {
+      content: "";
+      flex: 1 0 100%;
+    }
+
+    .source-row {
+      display: flex;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: space-between;
+    }
+
+    .source-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .src-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--chip-bg);
+      color: var(--chip-text);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .src-chip .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: .4;
+    }
+
+    .src-chip-link {
+      pointer-events: auto;
+      text-decoration: none;
+    }
+
+    .src-chip-link:hover {
+      border-color: var(--border-hover);
+      color: var(--text);
+    }
+
+    .footer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .card.is-expanded .source-row {
+      justify-content: flex-end;
+    }
+
+    .card.is-expanded .source-chips {
+      display: none;
+    }
+
+    .expand-link {
+      flex-shrink: 0;
+      color: var(--accent);
+      background: transparent;
+      border: 0;
+      padding: 0;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .expand-link:hover {
+      color: var(--text);
+    }
+
+    .role-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+
+    .role-core {
+      background: rgba(255, 123, 76, 0.16);
+      border: 1px solid rgba(255, 123, 76, 0.34);
+      color: var(--hot-tab-text);
+    }
+
+    .role-spillover {
+      background: rgba(110, 156, 255, 0.14);
+      border: 1px solid rgba(110, 156, 255, 0.24);
+      color: var(--accent);
+    }
+
+    .persp-panel {
+      display: none;
+      background: var(--persp-bg);
+      border-top: 1px solid var(--border);
+      animation: slideDown 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+    }
+
+    .persp-panel.open {
+      display: block;
+    }
+
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-5px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .persp-item {
+      display: block;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      font-size: 14.5px;
+      line-height: 1.7;
+    }
+
+    .persp-item:last-child {
+      border-bottom: none;
+    }
+
+    .persp-line {
+      display: grid;
+      grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
+      align-items: start;
+      column-gap: 10px;
+      row-gap: 6px;
+      min-width: 0;
+    }
+
+    .persp-src {
+      font-weight: 700;
+      display: block;
+      min-width: 0;
+      line-height: 1.55;
+    }
+
+    .persp-src a {
+      color: var(--accent);
+      text-decoration: none;
+      display: inline;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .persp-src a + a::before {
+      content: " / ";
+      color: var(--muted);
+    }
+
+    .persp-src a:hover {
+      text-decoration: underline;
+      text-underline-offset: 4px;
+    }
+
+    .persp-angle {
+      color: var(--text);
+      font-weight: 400;
+      min-width: 0;
+      max-width: 62ch;
+      line-height: 1.75;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    footer {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 20px 40px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    @media (max-width: 640px) {
+      .mobile-brand-bar {
+        position: sticky;
+        top: 0;
+        z-index: 120;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 16px 10px;
+        background: var(--surface);
+        backdrop-filter: var(--blur);
+        -webkit-backdrop-filter: var(--blur);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .site-header {
+        background: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        border-bottom: none;
+        position: static;
+      }
+
+      .header-inner {
+        padding: 0 16px 0;
+      }
+
+      .header-top {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .header-brand {
+        display: none;
+      }
+
+      .header-date {
+        display: inline-block;
+        width: auto;
+        flex-shrink: 0;
+        text-align: right;
+      }
+
+      .header-stats {
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        gap: 6px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 2px;
+      }
+
+      .header-stats::-webkit-scrollbar {
+        display: none;
+      }
+
+      .header-stat {
+        flex: 0 0 auto;
+        font-size: 11.5px;
+        padding: 4px 8px;
+      }
+
+      .cat-tabs {
+        gap: 6px;
+        padding-top: 0;
+        padding-bottom: 10px;
+      }
+
+      .cat-tab {
+        padding: 5px 12px;
+        font-size: 12.5px;
+      }
+
+      main {
+        padding: 0 16px 80px;
+        gap: 24px;
+      }
+
+      .card-body {
+        padding: 16px 20px 12px;
+      }
+
+      .card-footer {
+        padding: 12px 20px;
+      }
+
+      .all-overview {
+        gap: 10px;
+        padding: 14px 14px 12px;
+      }
+
+      .all-overview-header {
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .overview-kicker {
+        font-size: 11px;
+        letter-spacing: 1.1px;
+      }
+
+      .overview-copy {
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .overview-list {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(240px, 82vw);
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        scroll-snap-type: x proximity;
+        padding-bottom: 2px;
+      }
+
+      .overview-list::-webkit-scrollbar {
+        display: none;
+      }
+
+      .focus-storyline-block {
+        padding: 14px 14px 0;
+        gap: 12px;
+      }
+
+      .overview-item {
+        grid-template-columns: 1fr auto;
+        align-items: start;
+        gap: 10px;
+        padding: 12px 12px 10px;
+        scroll-snap-align: start;
+      }
+
+      .overview-title {
+        font-size: 14px;
+        gap: 8px;
+        margin-bottom: 2px;
+      }
+
+      .overview-title .hot-icon {
+        width: 20px;
+        height: 20px;
+      }
+
+      .overview-meta {
+        margin-bottom: 0;
+      }
+
+      .overview-summary {
+        display: -webkit-box;
+        margin-bottom: 0;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+      }
+
+      .overview-anchors {
+        display: none;
+      }
+
+      .overview-cta {
+        align-self: start;
+        padding: 7px 11px;
+        font-size: 12px;
+      }
+
+      .focus-storyline-header,
+      .hot-topic-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .source-row {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+
+      .footer-actions {
+        justify-content: flex-start;
+      }
+
+      .persp-item {
+        padding: 16px 20px;
+      }
+
+      .persp-line {
+        grid-template-columns: 1fr;
+        row-gap: 4px;
+      }
+
+      .persp-angle {
+        max-width: none;
+      }
+
+      .card-summary {
+        display: block;
+        overflow: visible;
+      }
+
+      .card-preview {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .card-title {
+        gap: 8px;
+      }
+
+      .card-title-text {
+        flex-basis: 100%;
+      }
+
+      .card-badges {
+        width: 100%;
+        gap: 6px;
+      }
+
+      .focus-storyline-block .card-summary {
+        display: block;
+        overflow: visible;
+      }
+
+      .card-footer.is-expandable .source-chips .src-chip:nth-child(n+3) {
+        display: none;
+      }
+
+      .focus-storyline-block .source-chips .src-chip:nth-child(n+3) {
+        display: none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="mobile-brand-bar" aria-hidden="true">
+    <span class="logo">NewsPrism</span>
+    <span class="header-date">{{ report_date_display }} {{ day_name }}</span>
+  </div>
+
+  <div class="site-header">
+    <div class="header-inner">
+      <div class="header-top">
+        <div class="header-brand">
+          <span class="logo">NewsPrism</span>
+          <span class="header-date">{{ report_date_display }} {{ day_name }}</span>
+        </div>
+        <div class="header-stats" aria-label="report stats">
+          <span class="header-stat"><strong>{{ cluster_count }}</strong> 条常规追踪</span>
+          {% if focus_storyline_count %}
+          <span class="header-stat header-stat-accent"><strong>{{ focus_storyline_count }}</strong> 组主线 / {{ focus_storyline_story_count }} 条故事</span>
+          {% endif %}
+          {% if hot_topic_count %}
+          <span class="header-stat header-stat-hot"><strong>{{ hot_topic_count }}</strong> 个热点 / {{ hot_topic_story_count }} 条专题</span>
+          {% endif %}
+        </div>
+      </div>
+      <nav class="cat-tabs">
+        <button class="cat-tab active" onclick="filterView(this,'all','all')">全部速览</button>
+        {% for hot in hot_topics %}
+        <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon">{{ hot.topic_icon }}</span>{{ hot.macro_topic_name }}</button>
+        {% endfor %}
+        {% for sec in main_sections %}
+        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.css_key }}')">{{ sec.emoji }} {{ sec.label }}</button>
+        {% endfor %}
+      </nav>
+    </div>
+  </div>
+
+  <main>
+    {% if hot_topics %}
+    <section class="all-overview" data-all-overview="true">
+      <div class="all-overview-header">
+        <div>
+          <div class="overview-kicker">今日焦点结构</div>
+          <div class="overview-copy">先看常规追踪，再从下列热点主线进入专题展开。</div>
+        </div>
+      </div>
+      <div class="overview-list">
+        {% for hot in hot_topics %}
+        <article class="overview-item">
+          <div>
+            <div class="overview-title"><span class="hot-icon">{{ hot.topic_icon }}</span>{{ hot.macro_topic_name }}</div>
+            <div class="overview-meta">{{ hot.member_count }} 条专题追踪</div>
+            <div class="overview-summary">{{ hot.scope_summary }}</div>
+            <div class="overview-anchors">
+              {% for preview in hot.preview_clusters %}
+              <span class="overview-anchor">{{ preview.hot_seq_index }}. {{ preview.headline }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          <button class="overview-cta" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')">进入专题</button>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <div class="all-feed" data-all-feed="true">
+    {% for line in focus_storylines %}
+    <section class="focus-storyline-block" data-focus-storyline="true">
+      <div class="focus-storyline-header">
+        <div class="cat-label">{{ line.topic_icon }} 主线追踪 · {{ line.storyline_name }}</div>
+        <div class="focus-storyline-counter">{{ line.member_count }} 条关联追踪</div>
+      </div>
+      <div class="cards">
+        {% for c in line.clusters %}
+        <div class="feed-card card" data-cat="{{ c.broad_category }}" id="{{ line.dom_id }}-{{ c.focus_seq_index }}">
+          <div class="card-body">
+            <div class="card-title">
+              <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ c.headline }}</span>
+              {% if c.storyline_role == "core" or c.storyline_role == "spillover" or c.is_developing %}
+              <span class="card-badges">
+                {% if c.storyline_role == "core" %}<span class="role-badge role-core">核心主线</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">相关外溢</span>{% endif %}
+                {% if c.is_developing %}<span class="freshness-badge">续报</span>{% endif %}
+              </span>
+              {% endif %}
+            </div>
+            <div class="card-summary">{{ c.summary }}</div>
+            {% if c.perspective_preview %}
+            <div class="card-preview">视角差异：{{ c.perspective_preview }}</div>
+            {% endif %}
+          </div>
+
+          {% if c.footer_sources %}
+          <div class="card-footer{% if c.has_expandable_perspectives %} is-expandable{% endif %}">
+            <div class="source-row">
+              <div class="source-chips">
+                {% for src in c.footer_sources %}
+                <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
+                  <span class="dot"></span>{% if src.flag %}{{ src.flag }} {% endif %}{{ src.compact_label }}
+                </a>
+                {% endfor %}
+              </div>
+              {% if c.has_expandable_perspectives %}
+              <div class="footer-actions">
+                <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-focus-{{ line.dom_id }}-{{ c.focus_seq_index }}')">
+                  查看 {{ c.distinct_perspective_count }} 个视角
+                </button>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if c.grouped_perspectives %}
+          <div class="persp-panel" id="panel-container-focus-{{ line.dom_id }}-{{ c.focus_seq_index }}">
+            {% for group in c.grouped_perspectives %}
+            <div class="persp-item">
+              <div class="persp-line">
+                <span class="persp-src">
+                  {% for src in group.sources %}
+                  <a href="{{ src.url }}" target="_blank" rel="noopener">
+                    {% if src.is_searched %}<span>🔍</span>{% endif %}{% if src.flag %}<span>{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                  </a>
+                  {% endfor %}
+                </span>
+                <span class="persp-angle" title="{{ group.perspective }}">{{ group.perspective }}</span>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+
+    <div class="cards">
+      {% for c in clusters %}
+      <div class="feed-card card" data-main-feed-card="true" data-cat="{{ c.broad_category }}" id="topic-{{ c.index }}">
+          <div class="card-body">
+            <div class="card-title">
+              <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ c.headline }}</span>
+              {% if c.is_developing %}
+              <span class="card-badges">
+                <span class="freshness-badge">续报</span>
+              </span>
+              {% endif %}
+            </div>
+            <div class="card-summary">{{ c.summary }}</div>
+            {% if c.perspective_preview %}
+            <div class="card-preview">视角差异：{{ c.perspective_preview }}</div>
+            {% endif %}
+          </div>
+
+          {% if c.footer_sources %}
+          <div class="card-footer{% if c.has_expandable_perspectives %} is-expandable{% endif %}">
+            <div class="source-row">
+              <div class="source-chips">
+                {% for src in c.footer_sources %}
+                <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
+                  <span class="dot"></span>{% if src.flag %}{{ src.flag }} {% endif %}{{ src.compact_label }}
+                </a>
+                {% endfor %}
+              </div>
+              {% if c.has_expandable_perspectives %}
+              <div class="footer-actions">
+                <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-{{ c.index }}')">
+                  查看 {{ c.distinct_perspective_count }} 个视角
+                </button>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if c.grouped_perspectives %}
+          <div class="persp-panel" id="panel-container-{{ c.index }}">
+            {% for group in c.grouped_perspectives %}
+            <div class="persp-item">
+              <div class="persp-line">
+                <span class="persp-src">
+                  {% for src in group.sources %}
+                  <a href="{{ src.url }}" target="_blank" rel="noopener">
+                    {% if src.is_searched %}<span>🔍</span>{% endif %}{% if src.flag %}<span>{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                  </a>
+                  {% endfor %}
+                </span>
+                <span class="persp-angle" title="{{ group.perspective }}">{{ group.perspective }}</span>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    </div>
+
+    {% if hot_topics %}
+    <section class="hot-topic-stage" data-hot-stage="true" style="display:none;">
+      {% for hot in hot_topics %}
+      <div class="hot-topic-block" data-hot-id="{{ hot.dom_id }}" style="display:none;">
+        <div class="hot-topic-header">
+          <div class="cat-label">{{ hot.topic_icon }} {{ hot.macro_topic_name }}</div>
+          <div class="hot-topic-counter">{{ hot.member_count }} 条专题追踪</div>
+        </div>
+        <div class="cards">
+          {% for c in hot.clusters %}
+          <div class="card" id="{{ hot.dom_id }}-{{ c.hot_seq_index }}">
+            <div class="card-body">
+              <div class="card-title">
+                <span class="card-title-text"><span class="card-index">{{ c.hot_seq_index }}.</span>{{ c.headline }}</span>
+                {% if c.storyline_role == "core" or c.storyline_role == "spillover" or c.is_developing %}
+                <span class="card-badges">
+                  {% if c.storyline_role == "core" %}<span class="role-badge role-core">核心主线</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">相关外溢</span>{% endif %}
+                  {% if c.is_developing %}<span class="freshness-badge">续报</span>{% endif %}
+                </span>
+                {% endif %}
+              </div>
+              <div class="card-summary">{{ c.summary }}</div>
+              {% if c.perspective_preview %}
+              <div class="card-preview">视角差异：{{ c.perspective_preview }}</div>
+              {% endif %}
+            </div>
+
+            {% if c.footer_sources %}
+            <div class="card-footer{% if c.has_expandable_perspectives %} is-expandable{% endif %}">
+              <div class="source-row">
+                <div class="source-chips">
+                  {% for src in c.footer_sources %}
+                  <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
+                    <span class="dot"></span>{% if src.flag %}{{ src.flag }} {% endif %}{{ src.compact_label }}
+                  </a>
+                  {% endfor %}
+                </div>
+                {% if c.has_expandable_perspectives %}
+                <div class="footer-actions">
+                  <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-hot-{{ hot.dom_id }}-{{ c.hot_seq_index }}')">
+                    查看 {{ c.distinct_perspective_count }} 个视角
+                  </button>
+                </div>
+                {% endif %}
+              </div>
+            </div>
+
+            {% if c.grouped_perspectives %}
+            <div class="persp-panel" id="panel-container-hot-{{ hot.dom_id }}-{{ c.hot_seq_index }}">
+              {% for group in c.grouped_perspectives %}
+              <div class="persp-item">
+                <div class="persp-line">
+                  <span class="persp-src">
+                    {% for src in group.sources %}
+                    <a href="{{ src.url }}" target="_blank" rel="noopener">
+                      {% if src.is_searched %}<span>🔍</span>{% endif %}{% if src.flag %}<span>{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                    </a>
+                    {% endfor %}
+                  </span>
+                  <span class="persp-angle" title="{{ group.perspective }}">{{ group.perspective }}</span>
+                </div>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  </main>
+
+  <footer>
+    NewsPrism · {{ report_date_display }} · AI Multi-Perspective Aggregation
+  </footer>
+
+  <script>
+    function toggleAllPerspectives(button, panelId) {
+      const panel = document.getElementById(panelId);
+      const isOpen = panel.classList.contains('open');
+      const card = button.closest('.card');
+      panel.classList.toggle('open', !isOpen);
+      if (card) {
+        card.classList.toggle('is-expanded', !isOpen);
+      }
+      button.setAttribute('aria-expanded', String(!isOpen));
+    }
+
+    function animateBlock(block) {
+      block.style.animation = 'none';
+      block.offsetHeight;
+      block.style.animation = 'slideDown 0.4s ease forwards';
+    }
+
+    function setBlockVisibility(block, visible) {
+      block.style.display = visible ? '' : 'none';
+      if (visible) {
+        animateBlock(block);
+      }
+    }
+
+    function filterView(tab, mode, target) {
+      document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+
+      document.querySelectorAll('[data-all-overview]').forEach(block => {
+        setBlockVisibility(block, mode === 'all');
+      });
+
+      const allFeed = document.querySelector('[data-all-feed]');
+      if (allFeed) {
+        setBlockVisibility(allFeed, mode === 'all' || mode === 'category');
+      }
+
+      const hotStage = document.querySelector('[data-hot-stage]');
+      if (hotStage) {
+        setBlockVisibility(hotStage, mode === 'hot');
+      }
+
+      document.querySelectorAll('[data-focus-storyline]').forEach(block => {
+        const cards = Array.from(block.querySelectorAll('.feed-card'));
+        let anyVisible = false;
+        cards.forEach(card => {
+          const visible = mode === 'all' || (mode === 'category' && card.dataset.cat === target);
+          card.style.display = visible ? '' : 'none';
+          anyVisible ||= visible;
+        });
+        setBlockVisibility(block, (mode === 'all') || (mode === 'category' && anyVisible));
+      });
+
+      document.querySelectorAll('[data-main-feed-card]').forEach(card => {
+        const visible = mode === 'all' || (mode === 'category' && card.dataset.cat === target);
+        card.style.display = visible ? '' : 'none';
+      });
+
+      document.querySelectorAll('.hot-topic-block').forEach(block => {
+        const visible = mode === 'hot' && block.dataset.hotId === target;
+        setBlockVisibility(block, visible);
+      });
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function activateHotTopic(domId) {
+      const tab = document.querySelector(`.hot-tab[data-hot-target="${domId}"]`);
+      if (tab) {
+        filterView(tab, 'hot', domId);
+      }
+    }
+  </script>
+</body>
+
+</html>
