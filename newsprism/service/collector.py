@@ -147,7 +147,8 @@ class Collector:
                 return articles
 
         # 5. Wallstreetcn JSON API (no RSS; newsnow should handle this but keep as safety net)
-        if "wallstreetcn.com" in src.url:
+        _wscn_host = urlparse(src.url).hostname or ""
+        if _wscn_host == "wallstreetcn.com" or _wscn_host.endswith(".wallstreetcn.com"):
             return self._collect_wallstreetcn(src)
 
         # 6. Static HTML scrape (last resort; won't work on JS-rendered SPAs)

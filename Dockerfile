@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # This layer is only invalidated when pyproject.toml changes — not on every
 # source edit, keeping iterative rebuilds fast.
 COPY pyproject.toml .
+COPY README.md .
 # Parse deps from pyproject.toml and install them (single-line for Docker parser compatibility)
 RUN python3 -c "import tomllib,subprocess,sys; d=tomllib.load(open('pyproject.toml','rb')); subprocess.run([sys.executable,'-m','pip','install','--no-cache-dir']+d['project']['dependencies'],check=True)"
 
