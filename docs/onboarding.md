@@ -40,8 +40,8 @@ python -m newsprism replay --date 2026-03-14 --dry-run
 Optional local services:
 
 ```bash
-docker compose up -d newsnow
-docker compose up -d web
+docker compose -f docker-compose.dev.yml up -d newsnow
+docker compose -f docker-compose.dev.yml up -d web
 ```
 
 `newsnow` helps with hard-to-fetch Chinese sources. The `web` service serves generated output from `http://localhost:8080`.

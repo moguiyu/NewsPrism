@@ -4,7 +4,7 @@ This guide documents the supported public deployment model for NewsPrism:
 
 - one Linux server
 - Docker Engine + Docker Compose plugin
-- source-based install from this repository
+- image-based install with published GHCR images
 
 NewsPrism is designed for a single-host deployment with local persistent volumes. It is not intended for clustered multi-writer operation.
 
@@ -12,8 +12,8 @@ NewsPrism is designed for a single-host deployment with local persistent volumes
 
 The default `docker-compose.yml` defines three services:
 
-- `newsprism`: the scheduler and pipeline worker
-- `web`: nginx serving generated HTML from `output/`
+- `newsprism`: the scheduler and pipeline worker from `ghcr.io/moguiyu/newsprism:latest`
+- `web`: nginx serving generated HTML from `output/` from `ghcr.io/moguiyu/newsprism-web:latest`
 - `newsnow`: optional but strongly recommended helper service for difficult Chinese sources
 
 Persistent state:
@@ -39,10 +39,9 @@ Recommended for public access:
 
 ## Install
 
-```bash
-git clone https://github.com/moguiyu/NewsPrism.git
-cd NewsPrism
+Create an empty deployment directory and download `docker-compose.yml` and `.env.example` from this repository into it.
 
+```bash
 cp .env.example .env
 ```
 
@@ -59,15 +58,10 @@ For a public deployment behind HTTPS, `REPORT_BASE_URL` should be your final pub
 REPORT_BASE_URL=https://news.example.com
 ```
 
-Then review these files before first start:
-
-- `config/config.yaml`
-- `config/keywords.txt`
-
 Start the stack:
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 docker compose ps
 docker compose logs -f newsprism web newsnow
 ```
@@ -83,13 +77,15 @@ The report server is available at:
 - `http://SERVER_IP:8080/` directly
 - or your reverse-proxied public domain if you expose it that way
 
+The default image-based install uses the config and templates baked into the application image. If you want editable host-side `config/`, `templates/`, or nginx config files, use the contributor/source-build workflow in `docker-compose.dev.yml`.
+
 ## Day-2 Operations
 
 Update to a newer version:
 
 ```bash
-git pull
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Check service state:
@@ -118,9 +114,29 @@ Back up the important state:
 
 These two paths are sufficient for preserving the database and generated reports for a single-host install.
 
+## Contributor / Source Build
+
+If you want to hack on NewsPrism itself or keep `config/`, `templates/`, and `config/nginx.conf` editable on the host, use the source-build stack from a repo checkout:
+
+```bash
+git clone https://github.com/moguiyu/NewsPrism.git
+cd NewsPrism
+
+cp .env.example .env
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+This contributor stack preserves the original bind mounts for:
+
+- `./config:/app/config`
+- `./templates:/app/templates`
+- `./config/nginx.conf:/etc/nginx/conf.d/default.conf`
+
 ## Safe Customization Surface
 
 Normal self-hosting changes should be done through files, not Python code.
+
+For the default image-based install, these files live inside the image. Use the source-build compose file if you need direct host-side editing.
 
 ### `.env`
 
@@ -293,6 +309,20 @@ If you disable it:
 - set `NEWSNOW_BASE_URL` only if you run `newsnow` somewhere else
 
 This is acceptable for English-only or reduced-source deployments, but not recommended for the full default source catalog.
+
+## Troubleshooting
+
+### `unable to evaluate symlinks in Dockerfile path`
+
+This error happens when a stack UI or NAS tries to run a compose service with `build: .`, but the compose project directory does not actually contain the NewsPrism repository and its `Dockerfile`.
+
+The default `docker-compose.yml` in this repo no longer requires a local Docker build. If you still see this error, you are likely using an older compose file or a custom stack definition. Use the published-image install path:
+
+```bash
+docker compose up -d
+```
+
+Only use `docker-compose.dev.yml` when you intentionally cloned the full repository and want a source build.
 
 ## Limitations
 
