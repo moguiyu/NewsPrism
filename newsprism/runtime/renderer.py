@@ -223,6 +223,67 @@ def _truncate_preview(text: str, max_chars: int = 54) -> str:
     return compact[: max_chars - 1].rstrip("，,、；;：: ") + "…"
 
 
+_MANIFEST_JSON = json.dumps(
+    {
+        "name": "NewsPrism - 多源新闻聚合",
+        "short_name": "NewsPrism",
+        "description": "全球多源新闻聚合与多视角分析",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0a0b10",
+        "theme_color": "#0a0b10",
+        "orientation": "any",
+        "icons": [
+            {"src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    },
+    ensure_ascii=False,
+    indent=2,
+)
+
+_SW_JS = """\
+const CACHE = 'newsprism-v1';
+const PRECACHE = ['/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
+
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(
+      keys.filter(k => k !== CACHE).map(k => caches.delete(k))
+    )).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', e => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  // HTML: network-first (always fresh reports)
+  if (req.headers.get('accept')?.includes('text/html')) {
+    e.respondWith(
+      fetch(req).then(res => {
+        const clone = res.clone();
+        caches.open(CACHE).then(c => c.put(req, clone));
+        return res;
+      }).catch(() => caches.match(req))
+    );
+    return;
+  }
+  // Other assets: cache-first
+  e.respondWith(
+    caches.match(req).then(cached => cached || fetch(req).then(res => {
+      const clone = res.clone();
+      caches.open(CACHE).then(c => c.put(req, clone));
+      return res;
+    }))
+  );
+});
+"""
+
+
 def _favicon_ico_bytes() -> bytes:
     width = 16
     height = 16
@@ -277,6 +338,27 @@ class HtmlRenderer:
             loader=FileSystemLoader(template_dir),
             autoescape=select_autoescape(["html"]),
         )
+
+    def _write_pwa_assets(self) -> None:
+        """Write manifest.json, sw.js, and icon PNGs to the output root."""
+        manifest_path = self.output_dir / "manifest.json"
+        manifest_path.write_text(_MANIFEST_JSON, encoding="utf-8")
+        manifest_path.chmod(0o644)
+
+        sw_path = self.output_dir / "sw.js"
+        sw_path.write_text(_SW_JS, encoding="utf-8")
+        sw_path.chmod(0o644)
+
+        icons_dir = self.output_dir / "icons"
+        icons_dir.mkdir(parents=True, exist_ok=True)
+        static_icons = Path(__file__).resolve().parent.parent / "static" / "icons"
+        for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
+            dest = icons_dir / name
+            src = static_icons / name
+            if not dest.exists() and src.exists():
+                import shutil
+                shutil.copy2(src, dest)
+                dest.chmod(0o644)
 
     def _write_static_favicon(self, report_dir: Path) -> None:
         favicon_bytes = _favicon_ico_bytes()
@@ -532,6 +614,7 @@ class HtmlRenderer:
         report_dir.mkdir(parents=True, exist_ok=True)
         report_dir.chmod(0o755)
         self._write_static_favicon(report_dir)
+        self._write_pwa_assets()
 
         hot_topics = hot_topics or []
         focus_storylines = focus_storylines or []
