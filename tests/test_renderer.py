@@ -546,7 +546,100 @@ class TestPremiumHotTopics:
 
         assert "全球贸易紧张升级" in html
         assert "热点专题-全球贸易紧张升级" not in html
-        assert '<span class="hot-icon">🌍</span>' in html
+        assert '<span class="hot-icon"><span class="emoji" aria-hidden="true">🌍</span></span>' in html
+
+    def test_premium_template_wraps_emoji_with_fallback_spans(self, premium_renderer, tmp_path):
+        premium_renderer.output_dir = tmp_path
+
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/organic",
+                        title="US policy response",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="US organic angle.",
+                    ),
+                    Article(
+                        url="https://example.com/searched",
+                        title="Japan policy response",
+                        source_name="Unknown Source",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Japanese searched angle.",
+                        is_searched=True,
+                        search_region="jp",
+                        origin_region="jp",
+                    )
+                ],
+            ),
+            summary="**日本政策回应升级**\n\n日本方面继续评估地区影响。",
+            perspectives={
+                "Reuters": "US organic angle",
+                "Unknown Source": "Japanese searched angle",
+            },
+            grouped_perspectives=[
+                PerspectiveGroup(
+                    sources=["Reuters"],
+                    perspective="US organic angle",
+                ),
+                PerspectiveGroup(
+                    sources=["Unknown Source"],
+                    perspective="Japanese searched angle",
+                )
+            ],
+        )
+
+        hot_summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/hot-emoji",
+                        title="Hormuz risk rises",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Conflict coverage",
+                    )
+                ],
+            ),
+            summary="**霍尔木兹风险上升**\n\n英国持续关注中东紧张局势。",
+            perspectives={"Reuters": "UK angle"},
+            macro_topic_key="middle-east",
+            macro_topic_name="中东局势",
+            macro_topic_icon_key="war",
+        )
+
+        html_path = premium_renderer.render(
+            [summary],
+            datetime.now(tz=timezone.utc).date(),
+            hot_topics=[
+                {
+                    "dom_id": "hot-topic-1",
+                    "macro_topic_key": "middle-east",
+                    "macro_topic_name": "中东局势",
+                    "topic_icon_key": "war",
+                    "summaries": [hot_summary],
+                }
+            ],
+        )
+        html = html_path.read_text(encoding="utf-8")
+        tree = lxml_html.fromstring(html)
+
+        assert "--font-sans: 'Outfit', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;" in html
+        assert "--font-emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;" in html
+        assert "body {\n      font-family: var(--font-sans);" in html
+        assert ".emoji {\n      display: inline-block;" in html
+        assert "font-variant-emoji: emoji;" in html
+        assert tree.xpath('//button[contains(@class, "cat-tab") and not(contains(@class, "hot-tab"))]//span[@class="emoji" and text()="🌍"]')
+        assert tree.xpath('//button[contains(@class, "hot-tab")]//span[@class="emoji" and text()="⚠️"]')
+        assert tree.xpath('//div[contains(@class, "overview-title")]//span[@class="emoji" and text()="⚠️"]')
+        assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="emoji" and text()="🇯🇵"]')
+        assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="emoji" and text()="🔍"]')
+        assert tree.xpath('//*[contains(@class, "persp-src")]//span[@class="emoji" and text()="🇯🇵"]')
+        assert tree.xpath('//*[contains(@class, "persp-src")]//span[@class="emoji" and text()="🔍"]')
+        assert not tree.xpath('//span[@class="emoji" and contains(text(), "搜索补充")]')
 
     def test_premium_template_renders_focus_storyline_without_hotspot_tab(self, premium_renderer, tmp_path):
         premium_renderer.output_dir = tmp_path
