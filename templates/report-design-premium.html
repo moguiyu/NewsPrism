@@ -33,6 +33,8 @@
 
     :root {
       /* Premium Dark Theme */
+      --font-sans: 'Outfit', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
+      --font-emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
       --bg: #0a0b10;
       --surface: rgba(20, 22, 31, 0.7);
       --surface-hover: rgba(28, 32, 46, 0.9);
@@ -95,12 +97,20 @@
     }
 
     body {
-      font-family: 'Outfit', 'Noto Sans SC', sans-serif;
+      font-family: var(--font-sans);
       background: var(--bg);
       color: var(--text);
       line-height: 1.7;
       font-size: 15px;
       -webkit-font-smoothing: antialiased;
+    }
+
+    .emoji {
+      display: inline-block;
+      font-family: var(--font-emoji);
+      font-variant-emoji: emoji;
+      line-height: 1;
+      vertical-align: -0.08em;
     }
 
     /* Background subtle gradient */
@@ -274,6 +284,8 @@
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.1);
       font-size: 12px;
+      font-family: var(--font-emoji);
+      line-height: 1;
       margin-right: 8px;
     }
 
@@ -1097,10 +1109,10 @@
       <nav class="cat-tabs">
         <button class="cat-tab active" onclick="filterView(this,'all','all')">全部速览</button>
         {% for hot in hot_topics %}
-        <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon">{{ hot.topic_icon }}</span>{{ hot.macro_topic_name }}</button>
+        <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ hot.macro_topic_name }}</button>
         {% endfor %}
         {% for sec in main_sections %}
-        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')">{{ sec.emoji }} {{ sec.label }}</button>
+        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')"><span class="emoji" aria-hidden="true">{{ sec.emoji }}</span> {{ sec.label }}</button>
         {% endfor %}
       </nav>
     </div>
@@ -1119,7 +1131,7 @@
         {% for hot in hot_topics %}
         <article class="overview-item">
           <div>
-            <div class="overview-title"><span class="hot-icon">{{ hot.topic_icon }}</span>{{ hot.macro_topic_name }}</div>
+            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ hot.macro_topic_name }}</div>
             <div class="overview-meta">{{ hot.member_count }} 条专题追踪</div>
             <div class="overview-summary">{{ hot.scope_summary }}</div>
             <div class="overview-anchors">
@@ -1139,7 +1151,7 @@
     {% for line in focus_storylines %}
     <section class="focus-storyline-block" data-focus-storyline="true">
       <div class="focus-storyline-header">
-        <div class="cat-label">{{ line.topic_icon }} 主线追踪 · {{ line.storyline_name }}</div>
+        <div class="cat-label"><span class="emoji" aria-hidden="true">{{ line.topic_icon }}</span> 主线追踪 · {{ line.storyline_name }}</div>
         <div class="focus-storyline-counter">{{ line.member_count }} 条关联追踪</div>
       </div>
       <div class="cards">
@@ -1167,7 +1179,7 @@
               <div class="source-chips">
                 {% for src in c.footer_sources %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}{{ src.flag }} {% endif %}{{ src.compact_label }}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
                 </a>
                 {% endfor %}
               </div>
@@ -1189,7 +1201,7 @@
                 <span class="persp-src">
                   {% for src in group.sources %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span>🔍</span>{% endif %}{% if src.flag %}<span>{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
                   </a>
                   {% endfor %}
                 </span>
@@ -1230,7 +1242,7 @@
               <div class="source-chips">
                 {% for src in c.footer_sources %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}{{ src.flag }} {% endif %}{{ src.compact_label }}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
                 </a>
                 {% endfor %}
               </div>
@@ -1252,7 +1264,7 @@
                 <span class="persp-src">
                   {% for src in group.sources %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span>🔍</span>{% endif %}{% if src.flag %}<span>{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
                   </a>
                   {% endfor %}
                 </span>
@@ -1273,7 +1285,7 @@
       {% for hot in hot_topics %}
       <div class="hot-topic-block" data-hot-id="{{ hot.dom_id }}" style="display:none;">
         <div class="hot-topic-header">
-          <div class="cat-label">{{ hot.topic_icon }} {{ hot.macro_topic_name }}</div>
+          <div class="cat-label"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span> {{ hot.macro_topic_name }}</div>
           <div class="hot-topic-counter">{{ hot.member_count }} 条专题追踪</div>
         </div>
         <div class="cards">
@@ -1301,7 +1313,7 @@
                 <div class="source-chips">
                   {% for src in c.footer_sources %}
                   <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                    <span class="dot"></span>{% if src.flag %}{{ src.flag }} {% endif %}{{ src.compact_label }}
+                    <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
                   </a>
                   {% endfor %}
                 </div>
@@ -1323,7 +1335,7 @@
                   <span class="persp-src">
                     {% for src in group.sources %}
                     <a href="{{ src.url }}" target="_blank" rel="noopener">
-                      {% if src.is_searched %}<span>🔍</span>{% endif %}{% if src.flag %}<span>{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                      {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
                     </a>
                     {% endfor %}
                   </span>

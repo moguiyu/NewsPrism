@@ -79,6 +79,25 @@ The report server is available at:
 
 The default image-based install uses the config and templates baked into the application image. If you want editable host-side `config/`, `templates/`, or nginx config files, use the contributor/source-build workflow in `docker-compose.dev.yml`. For Chinese-source coverage, NewsPrism works best with the self-hosted [`NewsNow`](https://github.com/ourongxing/newsnow) proxy enabled.
 
+## Browser Font Troubleshooting
+
+If emoji appear as blank boxes or monochrome fallback in Chrome on Ubuntu 24.04, the missing font is usually on the browser host, not inside the `web` container. NewsPrism serves static HTML through nginx; emoji rendering still depends on the fonts installed on the machine running Chrome.
+
+Recommended fix on Ubuntu 24.04:
+
+```bash
+sudo apt update
+sudo apt install -y fonts-noto-color-emoji
+```
+
+Verify the font is available:
+
+```bash
+fc-match "Noto Color Emoji"
+```
+
+After installing the font, fully quit and reopen Chrome so the browser reloads the system font list.
+
 ## Day-2 Operations
 
 Update to a newer version:
