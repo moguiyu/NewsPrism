@@ -32,3 +32,4 @@ openspec/
 AGENTS.md
 CLAUDE.md
 *.code-workspace
+.worktrees/
