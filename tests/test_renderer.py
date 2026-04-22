@@ -377,6 +377,38 @@ class TestPerspectivesContext:
 
         assert os.readlink(tmp_path / "latest") == "2026-03-27"
 
+    def test_staged_render_skips_latest_symlink_update(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        previous_date = "2026-03-26"
+        (tmp_path / previous_date).mkdir()
+        (tmp_path / "latest").symlink_to(previous_date)
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/staged",
+                        title="Staged story",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Staged body.",
+                    )
+                ],
+            ),
+            summary="**Staged story**\n\nBody text here.",
+            perspectives={},
+        )
+
+        html_path = renderer.render(
+            [summary],
+            datetime(2026, 3, 27, tzinfo=timezone.utc).date(),
+            report_subdir="staging",
+            update_latest=False,
+        )
+
+        assert html_path == tmp_path / "staging" / "2026-03-27" / "index.html"
+        assert os.readlink(tmp_path / "latest") == previous_date
+
 
 class TestRegionFlagMapping:
     def test_common_regions_have_flags(self):

@@ -161,9 +161,10 @@ def test_scheduler_replay_resets_target_articles_and_republishes(monkeypatch):
     monkeypatch.setattr("newsprism.runtime.scheduler.reset_articles_clustered", lambda ids: len(ids))
     monkeypatch.setattr("newsprism.runtime.scheduler.get_articles_by_ids", lambda ids: target_articles if ids == [11, 22] else [])
 
-    async def capture_publish(report_date=None, articles_override=None):
+    async def capture_publish(report_date=None, articles_override=None, push_after_render=True):
         calls["report_date"] = report_date
         calls["articles_override"] = articles_override
+        calls["push_after_render"] = push_after_render
 
     scheduler.publish = capture_publish
 
@@ -174,3 +175,4 @@ def test_scheduler_replay_resets_target_articles_and_republishes(monkeypatch):
 
     assert calls["report_date"] == replay_date
     assert calls["articles_override"] == target_articles
+    assert calls["push_after_render"] is True

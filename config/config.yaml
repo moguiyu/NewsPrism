@@ -2,20 +2,63 @@
 
 # ─── SCHEDULE ──────────────────────────────────────────────────────────────────
 schedule:
-  # Collect every 4 hours — catches morning/lunch/evening news peaks in CST
-  # and keeps up with US/EU news cycles without excessive dedup overhead
-  collect_cron: "0 */4 * * *"   # every 4 hours: 00, 04, 08, 12, 16, 20
-  publish_cron: "0 8 * * *"     # publish once daily at 08:00 (Europe/Warsaw = CET/CEST)
+  # Full collection runs 4/day. A smaller pre-publish delta run catches
+  # important morning updates without racing the 08:00 publish.
+  full_collect_cron: "15 0,4,16,20 * * *"
+  prepublish_collect_cron: "20 7 * * *"
+  publish_cron: "30 7 * * *"    # build staged report before the 08:00 push
+  push_cron: "0 8 * * *"        # deliver final page + Telegram at 08:00 sharp
+  push_retry:
+    enabled: true
+    max_attempts: 3
+    retry_interval_minutes: 5
   timezone: "Europe/Warsaw"     # overridable via SCHEDULE_TIMEZONE env var
 
 # ─── COLLECTION ────────────────────────────────────────────────────────────────
 collection:
-  max_age_hours: 6           # per-run: only fetch articles from last 6h
-                             # (slightly over 4h interval to avoid gaps)
+  full_max_age_hours: 8      # wider window for 4/day full runs
+  delta_max_age_hours: 3     # tight morning catch-up window before publish
   request_timeout: 45        # increased: RSSHub routes (cankaoxiaoxi/caixin) need ~8-15s
   rate_limit_delay: 2.0      # seconds between requests to same domain
   retry_attempts: 3
   retry_backoff: 2.0
+  delta_source_names:
+    - IT之家
+    - 澎湃新闻
+    - 凤凰网
+    - 华尔街见闻
+    - 36氪
+    - 中国新闻网
+    - AP News
+    - Reuters
+    - BBC News
+    - The Guardian
+    - The Hindu
+    - 联合早报
+    - 연합뉴스
+    - Yonhap News EN
+    - 朝日新聞
+    - ITmedia NEWS
+    - 卫星通讯社
+  backoff:
+    enabled: true
+    failure_threshold: 9
+    rolling_window_runs: 18
+    restore_success_streak: 3
+    daily_retry_hours_local: [18]
+    seed_daily_retry_source_names:
+      - tagesschau
+      - Tweakers
+      - Platum
+      - Nu.nl Tech
+      - Niebezpiecznik
+      - NHKニュース
+      - NDTV
+      - Financial Times
+      - Deutsche Welle Tech
+      - РБК
+      - VOA中文
+      - MIT Technology Review
 
 # ─── FILTERING ─────────────────────────────────────────────────────────────────
 filter:
@@ -57,6 +100,8 @@ summarizer:
 # ─── OUTPUT ────────────────────────────────────────────────────────────────────
 output:
   html_dir: "output"
+  staging_dir: "output/staging"
+  publish_complete_flag: ".publish_complete"
   latest_symlink: true
   template: "design-premium"   # options: design-a | design-b | design-c | design-premium
   hot_topics:
