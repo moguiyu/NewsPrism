@@ -608,9 +608,12 @@ class HtmlRenderer:
         report_date: date,
         hot_topics: list[dict[str, object]] | None = None,
         focus_storylines: list[dict[str, object]] | None = None,
+        report_subdir: str | Path | None = None,
+        update_latest: bool = True,
     ) -> Path:
         date_str = report_date.isoformat()
-        report_dir = self.output_dir / date_str
+        report_base = self.output_dir / Path(report_subdir) if report_subdir else self.output_dir
+        report_dir = report_base / date_str
         report_dir.mkdir(parents=True, exist_ok=True)
         report_dir.chmod(0o755)
         self._write_static_favicon(report_dir)
@@ -826,14 +829,14 @@ class HtmlRenderer:
             + common["hot_topic_story_count"]
         )
         latest = self.output_dir / "latest"
-        if total_story_count > 0:
+        if update_latest and total_story_count > 0:
             if latest.is_symlink():
                 latest.unlink()
             try:
                 latest.symlink_to(date_str)
             except OSError:
                 pass
-        else:
+        elif update_latest:
             logger.info(
                 "HTML report has zero stories for %s — preserving existing latest symlink",
                 date_str,

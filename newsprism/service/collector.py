@@ -24,8 +24,12 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import urljoin, urlparse
+from zoneinfo import ZoneInfo
 
 import feedparser
 import httpx
@@ -39,6 +43,8 @@ from newsprism.types import RawArticle
 logger = logging.getLogger(__name__)
 
 _domain_last: dict[str, float] = {}
+
+CollectionMode = Literal["full", "delta"]
 
 
 def _rate_limit(url: str, delay: float) -> None:
@@ -85,90 +91,247 @@ WALLSTREETCN_API = (
 )
 
 
+@dataclass
+class SourceCollectionState:
+    outcomes: deque[bool]
+    success_streak: int = 0
+    in_daily_retry: bool = False
+
+
+@dataclass
+class SourceCollectionResult:
+    source: SourceConfig
+    articles: list[RawArticle] = field(default_factory=list)
+    duration_ms: int = 0
+    attempted: bool = True
+    status: str = "success"
+    skip_reason: str | None = None
+
+
 class Collector:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.rate_delay = cfg.collection.get("rate_limit_delay", 2.0)
         self.timeout = cfg.collection.get("request_timeout", 20)
-        self.max_age_hours = cfg.collection.get("max_age_hours", 6)
+        self.full_max_age_hours = int(
+            cfg.collection.get("full_max_age_hours", cfg.collection.get("max_age_hours", 6))
+        )
+        self.delta_max_age_hours = int(cfg.collection.get("delta_max_age_hours", 3))
+        self.delta_source_names = set(cfg.collection.get("delta_source_names", []))
+        backoff_cfg = cfg.collection.get("backoff", {}) if isinstance(cfg.collection, dict) else {}
+        self.backoff_enabled = bool(backoff_cfg.get("enabled", False))
+        self.backoff_failure_threshold = int(backoff_cfg.get("failure_threshold", 9))
+        self.backoff_window_runs = int(backoff_cfg.get("rolling_window_runs", 18))
+        self.backoff_restore_success_streak = int(backoff_cfg.get("restore_success_streak", 3))
+        self.daily_retry_hours_local = {
+            int(hour)
+            for hour in backoff_cfg.get("daily_retry_hours_local", [18])
+        }
+        self.seed_daily_retry_source_names = set(backoff_cfg.get("seed_daily_retry_source_names", []))
+        timezone_name = cfg.schedule.get("timezone", "UTC")
+        try:
+            self.schedule_timezone = ZoneInfo(timezone_name)
+        except Exception:
+            logger.warning("Invalid schedule timezone %r; falling back to UTC", timezone_name)
+            self.schedule_timezone = ZoneInfo("UTC")
+        self._source_state: dict[str, SourceCollectionState] = {
+            source.name: SourceCollectionState(
+                outcomes=deque(maxlen=self.backoff_window_runs),
+                in_daily_retry=source.name in self.seed_daily_retry_source_names,
+            )
+            for source in self.cfg.sources
+        }
         # newsnow base URL from env; fall back to public instance
         self.newsnow_base = (
             os.environ.get("NEWSNOW_BASE_URL", "").rstrip("/")
             or "https://newsnow.busiyi.world"
         )
 
-    async def collect_all(self) -> list[RawArticle]:
+    async def collect_all(self, mode: CollectionMode = "full") -> list[RawArticle]:
         import asyncio
         sem = asyncio.Semaphore(4)
+        now_local = self._local_now()
+        max_age_hours = self._max_age_hours_for_mode(mode)
+        selected_sources = self._selected_sources(mode, now_local)
 
-        async def _one(src: SourceConfig) -> list[RawArticle]:
+        logger.info(
+            "Collect plan: mode=%s local_time=%s sources=%d max_age_hours=%d",
+            mode,
+            now_local.isoformat(timespec="seconds"),
+            len(selected_sources),
+            max_age_hours,
+        )
+
+        async def _one(src: SourceConfig) -> SourceCollectionResult:
             async with sem:
                 loop = asyncio.get_running_loop()
+                started = time.perf_counter()
                 try:
-                    return await loop.run_in_executor(None, self._collect_source, src)
+                    articles = await loop.run_in_executor(
+                        None,
+                        self._collect_source,
+                        src,
+                        max_age_hours,
+                    )
+                    return SourceCollectionResult(
+                        source=src,
+                        articles=articles,
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                        status="success" if articles else "empty",
+                    )
                 except Exception as exc:
                     logger.error("Failed collecting %s: %s", src.name, exc)
-                    return []
+                    return SourceCollectionResult(
+                        source=src,
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                        status="error",
+                    )
 
-        results = await asyncio.gather(*[_one(s) for s in self.cfg.sources])
-        articles = [a for batch in results for a in batch]
+        results = await asyncio.gather(*[_one(source) for source in selected_sources])
+        self._log_results(mode, results, now_local)
+        articles = [article for result in results for article in result.articles]
         logger.info("Collected %d raw articles total", len(articles))
         return articles
 
+    def _local_now(self) -> datetime:
+        return datetime.now(tz=self.schedule_timezone)
+
+    def _max_age_hours_for_mode(self, mode: CollectionMode) -> int:
+        if mode == "delta":
+            return self.delta_max_age_hours
+        return self.full_max_age_hours
+
+    def _selected_sources(self, mode: CollectionMode, now_local: datetime) -> list[SourceConfig]:
+        if mode == "delta":
+            if self.delta_source_names:
+                return [source for source in self.cfg.sources if source.name in self.delta_source_names]
+            return [source for source in self.cfg.sources if source.tier != "portal"]
+
+        is_daily_retry_window = now_local.hour in self.daily_retry_hours_local
+        selected: list[SourceConfig] = []
+        for source in self.cfg.sources:
+            state = self._source_state.setdefault(
+                source.name,
+                SourceCollectionState(outcomes=deque(maxlen=self.backoff_window_runs)),
+            )
+            if self.backoff_enabled and state.in_daily_retry and not is_daily_retry_window:
+                logger.info(
+                    "Collect source skip: source=%s mode=%s reason=daily_retry waiting_for_local_hours=%s",
+                    source.name,
+                    mode,
+                    sorted(self.daily_retry_hours_local),
+                )
+                continue
+            selected.append(source)
+        return selected
+
+    def _record_result(self, result: SourceCollectionResult) -> None:
+        if not self.backoff_enabled or not result.attempted:
+            return
+
+        state = self._source_state.setdefault(
+            result.source.name,
+            SourceCollectionState(outcomes=deque(maxlen=self.backoff_window_runs)),
+        )
+        success = bool(result.articles)
+        state.outcomes.append(success)
+
+        if success:
+            state.success_streak += 1
+            if state.in_daily_retry and state.success_streak >= self.backoff_restore_success_streak:
+                state.in_daily_retry = False
+                logger.info(
+                    "Collect source backoff cleared: source=%s success_streak=%d",
+                    result.source.name,
+                    state.success_streak,
+                )
+            return
+
+        state.success_streak = 0
+        failure_count = sum(not outcome for outcome in state.outcomes)
+        if not state.in_daily_retry and failure_count >= self.backoff_failure_threshold:
+            state.in_daily_retry = True
+            logger.warning(
+                "Collect source backoff enabled: source=%s failures_in_window=%d window=%d",
+                result.source.name,
+                failure_count,
+                state.outcomes.maxlen or self.backoff_window_runs,
+            )
+
+    def _log_results(
+        self,
+        mode: CollectionMode,
+        results: list[SourceCollectionResult],
+        now_local: datetime,
+    ) -> None:
+        for result in results:
+            self._record_result(result)
+            state = self._source_state.get(result.source.name)
+            logger.info(
+                "Collect source result: source=%s mode=%s status=%s articles=%d duration_ms=%d local_hour=%02d daily_retry=%s",
+                result.source.name,
+                mode,
+                result.status,
+                len(result.articles),
+                result.duration_ms,
+                now_local.hour,
+                bool(state.in_daily_retry) if state else False,
+            )
+
     # ─── DISPATCH ────────────────────────────────────────────────────────────
 
-    def _collect_source(self, src: SourceConfig) -> list[RawArticle]:
+    def _collect_source(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
         """Try each collection method in order, return first success."""
 
         # 1. newsnow API — best option for Chinese sources
         if src.newsnow_id:
-            articles = self._try_newsnow(src)
+            articles = self._try_newsnow(src, max_age_hours)
             if articles:
                 return articles
             logger.warning("[%s] newsnow failed, falling back", src.name)
 
         # 2. Primary RSS
         if src.rss_url:
-            articles = self._try_rss(src, src.rss_url)
+            articles = self._try_rss(src, src.rss_url, max_age_hours)
             if articles:
                 return articles
             logger.warning("[%s] Primary RSS failed", src.name)
 
         # 3. RSS fallback (FeedX mirror etc.)
         if src.rss_fallback:
-            articles = self._try_rss(src, src.rss_fallback)
+            articles = self._try_rss(src, src.rss_fallback, max_age_hours)
             if articles:
                 return articles
 
         # 4. RSSHub (self-hosted preferred)
         if src.rsshub_url:
-            articles = self._try_rss(src, src.rsshub_url)
+            articles = self._try_rss(src, src.rsshub_url, max_age_hours)
             if articles:
                 return articles
 
         # 5. Wallstreetcn JSON API (no RSS; newsnow should handle this but keep as safety net)
         _wscn_host = urlparse(src.url).hostname or ""
         if _wscn_host == "wallstreetcn.com" or _wscn_host.endswith(".wallstreetcn.com"):
-            return self._collect_wallstreetcn(src)
+            return self._collect_wallstreetcn(src, max_age_hours)
 
         # 6. Static HTML scrape (last resort; won't work on JS-rendered SPAs)
         if src.type == "scrape" or src.scrape_index_url:
-            return self._collect_scrape(src)
+            return self._collect_scrape(src, max_age_hours)
 
         logger.warning("[%s] All collection methods failed", src.name)
         return []
 
     # ─── NEWSNOW ─────────────────────────────────────────────────────────────
 
-    def _try_newsnow(self, src: SourceConfig) -> list[RawArticle]:
+    def _try_newsnow(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
         try:
-            return self._fetch_newsnow(src)
+            return self._fetch_newsnow(src, max_age_hours)
         except Exception as exc:
             logger.debug("[%s] newsnow error: %s", src.name, exc)
             return []
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=15))
-    def _fetch_newsnow(self, src: SourceConfig) -> list[RawArticle]:
+    def _fetch_newsnow(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
         """
         Query newsnow /api/s?id={newsnow_id} — returns article title + URL list.
         Then fetch full content for each article via trafilatura.
@@ -199,6 +362,7 @@ class Collector:
             datetime.fromtimestamp(batch_ts_ms / 1000, tz=timezone.utc)
             if batch_ts_ms else datetime.now(tz=timezone.utc)
         )
+        cutoff = datetime.now(tz=timezone.utc).timestamp() - max_age_hours * 3600
 
         articles: list[RawArticle] = []
         for item in items[:25]:
@@ -220,6 +384,8 @@ class Collector:
                     pub_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
                 except (ValueError, TypeError, OSError):
                     pass
+            if pub_dt.timestamp() < cutoff:
+                continue
 
             # Content strategy — newsnow only returns title+URL.
             # We try to get the article body, with source-aware fallbacks:
@@ -258,15 +424,15 @@ class Collector:
 
     # ─── RSS ─────────────────────────────────────────────────────────────────
 
-    def _try_rss(self, src: SourceConfig, feed_url: str) -> list[RawArticle]:
+    def _try_rss(self, src: SourceConfig, feed_url: str, max_age_hours: int) -> list[RawArticle]:
         try:
-            return self._fetch_rss(src, feed_url)
+            return self._fetch_rss(src, feed_url, max_age_hours)
         except Exception as exc:
             logger.debug("[%s] RSS %s failed: %s", src.name, feed_url, exc)
             return []
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
-    def _fetch_rss(self, src: SourceConfig, feed_url: str) -> list[RawArticle]:
+    def _fetch_rss(self, src: SourceConfig, feed_url: str, max_age_hours: int) -> list[RawArticle]:
         _rate_limit(feed_url, self.rate_delay)
         logger.info("RSS: %s → %s", src.name, feed_url)
 
@@ -278,7 +444,7 @@ class Collector:
         if not feed.entries:
             raise ValueError(f"Empty feed: {feed_url}")
 
-        cutoff = datetime.now(tz=timezone.utc).timestamp() - self.max_age_hours * 3600
+        cutoff = datetime.now(tz=timezone.utc).timestamp() - max_age_hours * 3600
         articles: list[RawArticle] = []
 
         for entry in feed.entries:
@@ -306,7 +472,7 @@ class Collector:
 
     # ─── WALLSTREETCN JSON API ───────────────────────────────────────────────
 
-    def _collect_wallstreetcn(self, src: SourceConfig) -> list[RawArticle]:
+    def _collect_wallstreetcn(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
         """Safety-net API for wallstreetcn (newsnow should handle this first)."""
         _rate_limit(WALLSTREETCN_API, self.rate_delay)
         logger.info("API: %s (wallstreetcn)", src.name)
@@ -319,7 +485,7 @@ class Collector:
             logger.warning("[%s] wallstreetcn API failed: %s", src.name, exc)
             return []
 
-        cutoff = datetime.now(tz=timezone.utc).timestamp() - self.max_age_hours * 3600
+        cutoff = datetime.now(tz=timezone.utc).timestamp() - max_age_hours * 3600
         articles: list[RawArticle] = []
 
         for item in (data.get("data", {}).get("items") or []):
@@ -346,9 +512,10 @@ class Collector:
     # ─── HTML SCRAPE ─────────────────────────────────────────────────────────
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=3, max=20))
-    def _collect_scrape(self, src: SourceConfig) -> list[RawArticle]:
+    def _collect_scrape(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
         """Static HTML scraper. Warns if page appears JS-rendered."""
         index_url = src.scrape_index_url or src.url
+        cutoff = datetime.now(tz=timezone.utc).timestamp() - max_age_hours * 3600
         _rate_limit(index_url, self.rate_delay)
         logger.info("Scrape: %s (%s)", src.name, index_url)
 
@@ -386,6 +553,8 @@ class Collector:
                 if not title:
                     continue
                 pub_dt = _parse_meta_date(meta) or datetime.now(tz=timezone.utc)
+                if pub_dt.timestamp() < cutoff:
+                    continue
                 articles.append(RawArticle(
                     url=url, title=title.strip()[:200], source_name=src.name,
                     published_at=pub_dt, content=content,

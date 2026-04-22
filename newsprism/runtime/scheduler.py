@@ -8,13 +8,20 @@ Layer: runtime — the only layer that imports from all others.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import shutil
+import time
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta
+from functools import partial
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
 from newsprism.config import Config
 from newsprism.repo import (
@@ -693,6 +700,16 @@ class Scheduler:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         init_db()
+        self._pipeline_lock = asyncio.Lock()
+        self.schedule_timezone = ZoneInfo(cfg.schedule.get("timezone", "Europe/Warsaw"))
+        self.output_dir = Path(cfg.output.get("html_dir", "output"))
+        self.staging_dir = self._resolve_output_path(cfg.output.get("staging_dir"), default="staging")
+        self.publish_complete_flag = self.staging_dir / cfg.output.get("publish_complete_flag", ".publish_complete")
+        self.push_retry_cfg = cfg.schedule.get("push_retry", {})
+        self.push_retry_enabled = bool(self.push_retry_cfg.get("enabled", True))
+        self.push_retry_max_attempts = int(self.push_retry_cfg.get("max_attempts", 3))
+        self.push_retry_interval_minutes = int(self.push_retry_cfg.get("retry_interval_minutes", 5))
+        self._apscheduler: AsyncIOScheduler | None = None
 
         self.collector = Collector(cfg)
         self.tagger = TopicTagger(cfg)
@@ -714,238 +731,433 @@ class Scheduler:
             source_regions={s.name: s.region for s in cfg.sources},
         )
 
+    def _resolve_output_path(self, configured: str | None, default: str) -> Path:
+        path = Path(configured or default)
+        if path.is_absolute():
+            return path
+        root_parts = self.output_dir.parts
+        if root_parts and path.parts[: len(root_parts)] == root_parts:
+            return path
+        return self.output_dir / path
+
+    @property
+    def _staging_subdir(self) -> Path:
+        try:
+            return self.staging_dir.relative_to(self.output_dir)
+        except ValueError as exc:
+            raise ValueError("output.staging_dir must be inside output.html_dir") from exc
+
+    def _staging_report_dir(self, report_date: date) -> Path:
+        return self.staging_dir / report_date.isoformat()
+
+    def _write_publish_complete(self, report_date: date, total_story_count: int) -> None:
+        self.staging_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "report_date": report_date.isoformat(),
+            "total_story_count": total_story_count,
+            "created_at": datetime.now(tz=self.schedule_timezone).isoformat(),
+        }
+        self.publish_complete_flag.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        self.publish_complete_flag.chmod(0o644)
+
+    def _read_publish_complete(self) -> dict[str, object] | None:
+        if not self.publish_complete_flag.exists():
+            return None
+        raw = self.publish_complete_flag.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            payload = {"report_date": raw}
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def _clear_publish_complete(self) -> None:
+        if self.publish_complete_flag.exists():
+            self.publish_complete_flag.unlink()
+
+    def _is_publish_complete(self, report_date: date) -> bool:
+        payload = self._read_publish_complete()
+        if not payload:
+            return False
+        return payload.get("report_date") == report_date.isoformat()
+
+    def _load_staged_render_payload(self, report_date: date) -> dict[str, object]:
+        data_path = self._staging_report_dir(report_date) / "data.json"
+        return json.loads(data_path.read_text(encoding="utf-8"))
+
+    def _promote_staged_report(self, report_date: date) -> Path:
+        staged_dir = self._staging_report_dir(report_date)
+        final_dir = self.output_dir / report_date.isoformat()
+        if not staged_dir.exists():
+            raise FileNotFoundError(f"staged report directory missing: {staged_dir}")
+        if final_dir.exists() or final_dir.is_symlink():
+            if final_dir.is_symlink() or final_dir.is_file():
+                final_dir.unlink()
+            else:
+                shutil.rmtree(final_dir)
+        final_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staged_dir), str(final_dir))
+        return final_dir
+
+    def _promote_latest_symlink(self, report_date: date, total_story_count: int) -> None:
+        if total_story_count <= 0:
+            logger.info(
+                "Push promotion: staged report has zero stories for %s — preserving existing latest symlink",
+                report_date.isoformat(),
+            )
+            return
+        latest = self.output_dir / "latest"
+        if latest.is_symlink() or latest.is_file():
+            latest.unlink()
+        elif latest.exists():
+            shutil.rmtree(latest)
+        try:
+            latest.symlink_to(report_date.isoformat())
+        except OSError:
+            logger.warning("Push promotion: failed to update latest symlink", exc_info=True)
+
+    def _schedule_push_retry(self, report_date: date, attempt: int) -> bool:
+        if not self.push_retry_enabled or self._apscheduler is None:
+            return False
+        if attempt >= self.push_retry_max_attempts:
+            return False
+        retry_attempt = attempt + 1
+        run_at = datetime.now(tz=self.schedule_timezone) + timedelta(minutes=self.push_retry_interval_minutes)
+        job_id = f"push_retry_{report_date.isoformat()}_{retry_attempt}"
+        self._apscheduler.add_job(
+            partial(self.push, report_date=report_date, attempt=retry_attempt),
+            DateTrigger(run_date=run_at, timezone=self.schedule_timezone),
+            id=job_id,
+            replace_existing=True,
+        )
+        logger.warning(
+            "Push retry scheduled: report_date=%s attempt=%d run_at=%s",
+            report_date.isoformat(),
+            retry_attempt,
+            run_at.isoformat(),
+        )
+        return True
+
+    def _cleanup_old_staging(self) -> None:
+        if not self.staging_dir.exists():
+            return
+        today_str = date.today().isoformat()
+        for child in self.staging_dir.iterdir():
+            if child == self.publish_complete_flag:
+                continue
+            if child.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", child.name) and child.name != today_str:
+                shutil.rmtree(child, ignore_errors=True)
+        payload = self._read_publish_complete()
+        if payload and payload.get("report_date") != today_str:
+            self._clear_publish_complete()
+
     # ─── PHASES ──────────────────────────────────────────────────────────────
 
-    async def collect(self) -> None:
+    async def collect(self, mode: str = "full") -> None:
         """Phase 1: Collect → tag → dedup → persist."""
-        logger.info("=== COLLECT phase started ===")
+        phase_name = "COLLECT_DELTA" if mode == "delta" else "COLLECT"
+        async with self._pipeline_lock:
+            started = time.perf_counter()
+            logger.info("=== %s phase started ===", phase_name)
 
-        raw_articles = await self.collector.collect_all()
-        db_articles = raw_to_articles(raw_articles)
+            raw_articles = await self.collector.collect_all(mode=mode)
+            db_articles = raw_to_articles(raw_articles)
 
-        tagged = self.tagger.tag_all(db_articles)
-        deduped = self.deduplicator.deduplicate(tagged)
+            tagged = self.tagger.tag_all(db_articles)
+            deduped = self.deduplicator.deduplicate(tagged)
 
-        saved = 0
-        for article in deduped:
-            article_id = insert_article(article)
-            if article_id is not None:
-                article.id = article_id
-                if article.embedding:
-                    update_article_embedding(article_id, article.embedding)
-                saved += 1
+            saved = 0
+            for article in deduped:
+                article_id = insert_article(article)
+                if article_id is not None:
+                    article.id = article_id
+                    if article.embedding:
+                        update_article_embedding(article_id, article.embedding)
+                    saved += 1
 
-        logger.info("=== COLLECT done: %d new articles saved ===", saved)
+            logger.info(
+                "=== %s done: %d new articles saved (raw=%d deduped=%d duration_s=%.2f) ===",
+                phase_name,
+                saved,
+                len(raw_articles),
+                len(deduped),
+                time.perf_counter() - started,
+            )
 
     async def publish(
         self,
         report_date: date | None = None,
         articles_override: list | None = None,
+        push_after_render: bool = True,
     ) -> None:
-        """Phase 2: Cluster → summarize → evaluate freshness → render HTML → Telegram."""
-        logger.info("=== PUBLISH phase started ===")
-        today = report_date or date.today()
+        """Phase 2: Cluster → summarize → render report, then optionally push Telegram."""
+        async with self._pipeline_lock:
+            started = time.perf_counter()
+            phase_name = "PUBLISH_STAGE" if not push_after_render else "PUBLISH"
+            logger.info("=== %s phase started ===", phase_name)
+            today = report_date or date.today()
 
-        if articles_override is None:
-            max_age_hours = self.cfg.clustering.get("time_window_hours", 48)
-            articles = get_unclustered_articles(max_age_hours=max_age_hours)
+            if articles_override is None:
+                max_age_hours = self.cfg.clustering.get("time_window_hours", 48)
+                articles = get_unclustered_articles(max_age_hours=max_age_hours)
+                logger.info(
+                    "Publish input: %d unclustered articles found within %d hours",
+                    len(articles),
+                    max_age_hours,
+                )
+            else:
+                articles = sorted(
+                    articles_override,
+                    key=lambda article: article.published_at,
+                    reverse=True,
+                )
+                logger.info(
+                    "Publish input override: %d replay articles for report_date=%s",
+                    len(articles),
+                    today.isoformat(),
+                )
+            if not articles:
+                logger.warning("No unclustered articles found — skipping %s", phase_name.lower())
+                return
+
+            clusters = self.clusterer.cluster(articles)
+            if not clusters:
+                logger.warning("No clusters formed — skipping %s", phase_name.lower())
+                return
+            logger.info("Event cluster stage: %d clusters formed", len(clusters))
+
+            clusters = self.cluster_validator.validate(clusters)
+            logger.info("Event cluster validation stage: %d clusters after validation", len(clusters))
+
+            hot_cfg = self.cfg.output.get("hot_topics", {}) if isinstance(self.cfg.output, dict) else {}
+            candidate_window = hot_cfg.get(
+                "candidate_window",
+                self.cfg.clustering.get("max_clusters_per_report", 20) * 2,
+            )
+            candidate_window = max(candidate_window, self.cfg.clustering.get("max_clusters_per_report", 20))
+            candidate_clusters = clusters[:candidate_window]
             logger.info(
-                "Publish input: %d unclustered articles found within %d hours",
-                len(articles),
-                max_age_hours,
+                "Hot topic candidate window: %d of %d clusters retained before enrichment",
+                len(candidate_clusters),
+                len(clusters),
             )
-        else:
-            articles = sorted(
-                articles_override,
-                key=lambda article: article.published_at,
-                reverse=True,
-            )
+            for index, cluster in enumerate(candidate_clusters):
+                cluster._storyline_candidate_index = index  # type: ignore[attr-defined]
+
+            if hot_cfg.get("enabled", False):
+                history_window_days = hot_cfg.get("history_window_days", 5)
+                historical_hot_topic_memory = get_recent_clusters(
+                    days=history_window_days,
+                    anchor_date=today.isoformat(),
+                )
+                logger.info(
+                    "Storyline history stage: %d prior clusters from %d day window",
+                    len(historical_hot_topic_memory),
+                    history_window_days,
+                )
+                self.storyline_resolver.resolve(
+                    candidate_clusters,
+                    historical_hot_topic_memory,
+                    today,
+                )
+                _log_storyline_stage("Storyline stage: resolved candidate families", candidate_clusters)
+            else:
+                _reset_hot_topic_metadata(candidate_clusters)
+
+            hot_clusters, main_clusters = select_report_clusters(candidate_clusters, self.cfg)
+            selected_clusters = hot_clusters + main_clusters
+            hot_storyline_keys = {cluster.storyline_key or "" for cluster in hot_clusters}
+            _warn_on_storyline_near_miss(candidate_clusters, hot_storyline_keys, "Storyline stage")
+            _log_storyline_stage("Storyline stage: final candidate families before enrichment", selected_clusters)
+
             logger.info(
-                "Publish input override: %d replay articles for report_date=%s",
-                len(articles),
-                today.isoformat(),
+                "Selected %d hotspot candidate items and %d main candidates for enrichment/summarization (from %d total clusters; candidate window=%d)",
+                len(hot_clusters),
+                len(main_clusters),
+                len(clusters),
+                len(candidate_clusters),
             )
-        if not articles:
-            logger.warning("No unclustered articles found — skipping publish")
-            return
 
-        clusters = self.clusterer.cluster(articles)
-        if not clusters:
-            logger.warning("No clusters formed — skipping publish")
-            return
-        logger.info("Event cluster stage: %d clusters formed", len(clusters))
+            # Phase 2.5: Actively seek missing perspectives using Tavily
+            selected_clusters = self.seeker.enhance_clusters(selected_clusters)
+            for cluster in selected_clusters:
+                for article in cluster.articles:
+                    if article.id is not None:
+                        continue
+                    article.id = insert_article(article)
+                    if article.id is None and callable(get_article_id_by_url):
+                        article.id = get_article_id_by_url(article.url)
 
-        clusters = self.cluster_validator.validate(clusters)
-        logger.info("Event cluster validation stage: %d clusters after validation", len(clusters))
+            summaries = self.summarizer.summarize_all(selected_clusters)
 
-        hot_cfg = self.cfg.output.get("hot_topics", {}) if isinstance(self.cfg.output, dict) else {}
-        candidate_window = hot_cfg.get(
-            "candidate_window",
-            self.cfg.clustering.get("max_clusters_per_report", 20) * 2,
-        )
-        candidate_window = max(candidate_window, self.cfg.clustering.get("max_clusters_per_report", 20))
-        candidate_clusters = clusters[:candidate_window]
-        logger.info(
-            "Hot topic candidate window: %d of %d clusters retained before enrichment",
-            len(candidate_clusters),
-            len(clusters),
-        )
-        for index, cluster in enumerate(candidate_clusters):
-            cluster._storyline_candidate_index = index  # type: ignore[attr-defined]
-
-        if hot_cfg.get("enabled", False):
-            history_window_days = hot_cfg.get("history_window_days", 5)
-            historical_hot_topic_memory = get_recent_clusters(
-                days=history_window_days,
+            # Phase 2.6: Evaluate freshness against historical clusters
+            historical = get_recent_clusters(
+                days=self.cfg.dedup.get("window_days", 3),
                 anchor_date=today.isoformat(),
             )
-            logger.info(
-                "Storyline history stage: %d prior clusters from %d day window",
-                len(historical_hot_topic_memory),
-                history_window_days,
+            logger.info("Freshness check: %d historical clusters from past %d days",
+                        len(historical), self.cfg.dedup.get("window_days", 3))
+
+            # Evaluate each cluster's freshness
+            freshness_results = self.freshness_evaluator.classify_all(
+                [(cs.cluster, cs.summary) for cs in summaries],
+                historical,
             )
-            self.storyline_resolver.resolve(
-                candidate_clusters,
-                historical_hot_topic_memory,
-                today,
-            )
-            _log_storyline_stage("Storyline stage: resolved candidate families", candidate_clusters)
-        else:
-            _reset_hot_topic_metadata(candidate_clusters)
 
-        hot_clusters, main_clusters = select_report_clusters(candidate_clusters, self.cfg)
-        selected_clusters = hot_clusters + main_clusters
-        hot_storyline_keys = {cluster.storyline_key or "" for cluster in hot_clusters}
-        _warn_on_storyline_near_miss(candidate_clusters, hot_storyline_keys, "Storyline stage")
-        _log_storyline_stage("Storyline stage: final candidate families before enrichment", selected_clusters)
+            # Filter out stale clusters and store freshness metadata
+            kept_summaries: list[ClusterSummary] = []
+            stats = {"new": 0, "developing": 0, "stale": 0}
 
-        logger.info(
-            "Selected %d hotspot candidate items and %d main candidates for enrichment/summarization (from %d total clusters; candidate window=%d)",
-            len(hot_clusters),
-            len(main_clusters),
-            len(clusters),
-            len(candidate_clusters),
-        )
+            for cs, (cluster, summary, freshness) in zip(summaries, freshness_results):
+                stats[freshness.state] += 1
 
-        # Phase 2.5: Actively seek missing perspectives using Tavily
-        selected_clusters = self.seeker.enhance_clusters(selected_clusters)
-        for cluster in selected_clusters:
-            for article in cluster.articles:
-                if article.id is not None:
+                if freshness.state == "stale":
+                    logger.info("Skipping stale cluster: %s", cs.summary[:60])
                     continue
-                article.id = insert_article(article)
-                if article.id is None and callable(get_article_id_by_url):
-                    article.id = get_article_id_by_url(article.url)
 
-        summaries = self.summarizer.summarize_all(selected_clusters)
+                # Attach freshness metadata to the ClusterSummary for rendering
+                cs.freshness_state = freshness.state
+                cs.continues_cluster_id = freshness.continues_cluster_id
 
-        # Phase 2.6: Evaluate freshness against historical clusters
-        historical = get_recent_clusters(
-            days=self.cfg.dedup.get("window_days", 3),
-            anchor_date=today.isoformat(),
-        )
-        logger.info("Freshness check: %d historical clusters from past %d days",
-                    len(historical), self.cfg.dedup.get("window_days", 3))
+                # Store cluster with freshness metadata
+                cluster_record = Cluster(
+                    topic_category=cs.cluster.topic_category,
+                    article_ids=[a.id for a in cs.cluster.articles if a.id],
+                    summary=cs.summary,
+                    perspectives=cs.perspectives,
+                    report_date=today.isoformat(),
+                    freshness_state=freshness.state,
+                    continues_cluster_id=freshness.continues_cluster_id,
+                    storyline_key=cs.cluster.storyline_key,
+                    storyline_name=cs.cluster.storyline_name,
+                    storyline_role=cs.cluster.storyline_role,
+                    storyline_confidence=cs.cluster.storyline_confidence,
+                )
+                insert_cluster(cluster_record)
+                mark_articles_clustered([a.id for a in cs.cluster.articles if a.id])
 
-        # Evaluate each cluster's freshness
-        freshness_results = self.freshness_evaluator.classify_all(
-            [(cs.cluster, cs.summary) for cs in summaries],
-            historical,
-        )
+                kept_summaries.append(cs)
 
-        # Filter out stale clusters and store freshness metadata
-        kept_summaries: list[ClusterSummary] = []
-        stats = {"new": 0, "developing": 0, "stale": 0}
-
-        for cs, (cluster, summary, freshness) in zip(summaries, freshness_results):
-            stats[freshness.state] += 1
-
-            if freshness.state == "stale":
-                logger.info("Skipping stale cluster: %s", cs.summary[:60])
-                continue
-
-            # Attach freshness metadata to the ClusterSummary for rendering
-            cs.freshness_state = freshness.state
-            cs.continues_cluster_id = freshness.continues_cluster_id
-
-            # Store cluster with freshness metadata
-            cluster_record = Cluster(
-                topic_category=cs.cluster.topic_category,
-                article_ids=[a.id for a in cs.cluster.articles if a.id],
-                summary=cs.summary,
-                perspectives=cs.perspectives,
-                report_date=today.isoformat(),
-                freshness_state=freshness.state,
-                continues_cluster_id=freshness.continues_cluster_id,
-                storyline_key=cs.cluster.storyline_key,
-                storyline_name=cs.cluster.storyline_name,
-                storyline_role=cs.cluster.storyline_role,
-                storyline_confidence=cs.cluster.storyline_confidence,
+            logger.info(
+                "Freshness results: %d new, %d developing, %d stale (filtered)",
+                stats["new"], stats["developing"], stats["stale"],
             )
-            insert_cluster(cluster_record)
-            mark_articles_clustered([a.id for a in cs.cluster.articles if a.id])
 
-            kept_summaries.append(cs)
+            hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
+            focus_storyline_story_count = sum(
+                len(family.get("summaries", []))
+                for family in focus_storylines
+                if isinstance(family.get("summaries"), list)
+            )
+            hot_topic_story_count = sum(
+                len(family.get("summaries", []))
+                for family in hot_topics
+                if isinstance(family.get("summaries"), list)
+            )
+            total_story_count = len(main_summaries) + focus_storyline_story_count + hot_topic_story_count
+            hot_storyline_keys = {
+                str(family.get("macro_topic_key", ""))
+                for family in hot_topics
+                if isinstance(family.get("macro_topic_key"), str)
+            }
+            _warn_on_summary_storyline_near_miss(kept_summaries, hot_storyline_keys, "Storyline stage after freshness")
+            _log_storyline_stage(
+                "Storyline stage: final families after freshness",
+                [summary.cluster for summary in kept_summaries],
+            )
 
-        logger.info(
-            "Freshness results: %d new, %d developing, %d stale (filtered)",
-            stats["new"], stats["developing"], stats["stale"],
-        )
+            logger.info(
+                "Story display groups: %d hot topics, %d focus storylines, %d remaining for main report (cap=%d)",
+                len(hot_topics),
+                len(focus_storylines),
+                len(main_summaries),
+                self.cfg.clustering.get("max_clusters_per_report", 20),
+            )
+            logger.info(
+                "Render input: %d kept stories after freshness (%d main report, %d focus storyline stories, %d hot topic stories)",
+                total_story_count,
+                len(main_summaries),
+                focus_storyline_story_count,
+                hot_topic_story_count,
+            )
 
-        hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
-        focus_storyline_story_count = sum(
-            len(family.get("summaries", []))
-            for family in focus_storylines
-            if isinstance(family.get("summaries"), list)
-        )
-        hot_topic_story_count = sum(
-            len(family.get("summaries", []))
-            for family in hot_topics
-            if isinstance(family.get("summaries"), list)
-        )
-        total_story_count = len(main_summaries) + focus_storyline_story_count + hot_topic_story_count
-        hot_storyline_keys = {
-            str(family.get("macro_topic_key", ""))
-            for family in hot_topics
-            if isinstance(family.get("macro_topic_key"), str)
-        }
-        _warn_on_summary_storyline_near_miss(kept_summaries, hot_storyline_keys, "Storyline stage after freshness")
-        _log_storyline_stage(
-            "Storyline stage: final families after freshness",
-            [summary.cluster for summary in kept_summaries],
-        )
+            html_path = self.renderer.render(
+                main_summaries,
+                today,
+                hot_topics=hot_topics,
+                focus_storylines=focus_storylines,
+                report_subdir=self._staging_subdir if not push_after_render else None,
+                update_latest=push_after_render,
+            )
+            if push_after_render:
+                await self.publisher.publish(main_summaries, today)
+                logger.info(
+                    "Report latest promotion: %s",
+                    "updated latest symlink" if total_story_count > 0 else "kept dated-only output; latest unchanged",
+                )
+            else:
+                self._write_publish_complete(today, total_story_count)
+                logger.info(
+                    "Report staged for push: report=%s flag=%s latest=unchanged",
+                    html_path,
+                    self.publish_complete_flag,
+                )
 
-        logger.info(
-            "Story display groups: %d hot topics, %d focus storylines, %d remaining for main report (cap=%d)",
-            len(hot_topics),
-            len(focus_storylines),
-            len(main_summaries),
-            self.cfg.clustering.get("max_clusters_per_report", 20),
-        )
-        logger.info(
-            "Render input: %d kept stories after freshness (%d main report, %d focus storyline stories, %d hot topic stories)",
-            total_story_count,
-            len(main_summaries),
-            focus_storyline_story_count,
-            hot_topic_story_count,
-        )
+            logger.info(
+                "=== %s done: %d clusters (%d stale filtered, %d hotspot tabs), report at %s (duration_s=%.2f) ===",
+                phase_name,
+                len(summaries),
+                stats["stale"],
+                len(hot_topics),
+                html_path,
+                time.perf_counter() - started,
+            )
 
-        html_path = self.renderer.render(
-            main_summaries,
-            today,
-            hot_topics=hot_topics,
-            focus_storylines=focus_storylines,
-        )
-        await self.publisher.publish(main_summaries, today)
-        logger.info(
-            "Report latest promotion: %s",
-            "updated latest symlink" if total_story_count > 0 else "kept dated-only output; latest unchanged",
-        )
+    async def push(self, report_date: date | None = None, attempt: int = 0) -> None:
+        """Promote staged report output and send the Telegram digest."""
+        started = time.perf_counter()
+        today = report_date or date.today()
+        staged_dir = self._staging_report_dir(today)
 
-        logger.info(
-            "=== PUBLISH done: %d clusters (%d stale filtered, %d hotspot tabs), report at %s ===",
-            len(summaries), stats["stale"], len(hot_topics), html_path,
-        )
+        if not self._is_publish_complete(today):
+            logger.warning(
+                "Push skipped: staged report not ready for %s (attempt=%d)",
+                today.isoformat(),
+                attempt,
+            )
+            if not self._schedule_push_retry(today, attempt):
+                logger.error("Push failed: no completed staged report for %s", today.isoformat())
+            return
+
+        async with self._pipeline_lock:
+            if not self._is_publish_complete(today):
+                logger.warning(
+                    "Push re-check failed: staged report no longer ready for %s (attempt=%d)",
+                    today.isoformat(),
+                    attempt,
+                )
+                if not self._schedule_push_retry(today, attempt):
+                    logger.error("Push failed after re-check: staged report missing for %s", today.isoformat())
+                return
+
+            logger.info("=== PUSH phase started: report_date=%s attempt=%d ===", today.isoformat(), attempt)
+            payload = self._load_staged_render_payload(today)
+            total_story_count = int(payload.get("total_cluster_count", 0) or 0)
+            data_path = staged_dir / "data.json"
+            final_dir = self._promote_staged_report(today)
+            self._promote_latest_symlink(today, total_story_count)
+            await self.publisher.publish_rendered(final_dir / "data.json", today)
+            self._clear_publish_complete()
+            logger.info(
+                "=== PUSH done: report=%s source=%s total_story_count=%d duration_s=%.2f ===",
+                final_dir / "index.html",
+                data_path,
+                total_story_count,
+                time.perf_counter() - started,
+            )
 
     async def replay(self, report_date: date | None = None, dry_run: bool = False) -> None:
         """Reset one report date's article set and rerun publish from that exact set."""
@@ -983,7 +1195,7 @@ class Scheduler:
             target_date_str,
             len(replay_articles),
         )
-        await self.publish(report_date=target_date, articles_override=replay_articles)
+        await self.publish(report_date=target_date, articles_override=replay_articles, push_after_render=True)
         logger.info("=== REPLAY done for report_date=%s ===", target_date_str)
 
     async def run_once(self) -> None:
@@ -991,10 +1203,10 @@ class Scheduler:
         logger.info("=== RUN_ONCE started ===")
         try:
             logger.info("RUN_ONCE boundary: before collect")
-            await self.collect()
+            await self.collect(mode="full")
             logger.info("RUN_ONCE boundary: after collect")
             logger.info("RUN_ONCE boundary: before publish")
-            await self.publish()
+            await self.publish(push_after_render=True)
             logger.info("RUN_ONCE boundary: after publish")
             logger.info("=== RUN_ONCE done ===")
         except Exception:
@@ -1014,23 +1226,45 @@ class Scheduler:
         """Async scheduler loop — runs inside asyncio.run()."""
         tz = self.cfg.schedule.get("timezone", "Asia/Shanghai")
         sched = AsyncIOScheduler(timezone=tz)
+        self._apscheduler = sched
+        self._cleanup_old_staging()
+        full_collect_cron = self.cfg.schedule.get(
+            "full_collect_cron",
+            self.cfg.schedule.get("collect_cron", "0 */4 * * *"),
+        )
+        delta_collect_cron = self.cfg.schedule.get("prepublish_collect_cron")
+        publish_cron = self.cfg.schedule.get("publish_cron", "30 7 * * *")
+        push_cron = self.cfg.schedule.get("push_cron", "0 8 * * *")
 
         sched.add_job(
-            self.collect,
-            CronTrigger.from_crontab(self.cfg.schedule.get("collect_cron", "0 */4 * * *"), timezone=tz),
-            id="collect",
+            partial(self.collect, mode="full"),
+            CronTrigger.from_crontab(full_collect_cron, timezone=tz),
+            id="collect_full",
+        )
+        if delta_collect_cron:
+            sched.add_job(
+                partial(self.collect, mode="delta"),
+                CronTrigger.from_crontab(delta_collect_cron, timezone=tz),
+                id="collect_delta",
+            )
+        sched.add_job(
+            partial(self.publish, push_after_render=False),
+            CronTrigger.from_crontab(publish_cron, timezone=tz),
+            id="publish_stage",
         )
         sched.add_job(
-            self.publish,
-            CronTrigger.from_crontab(self.cfg.schedule.get("publish_cron", "0 8 * * *"), timezone=tz),
-            id="publish",
+            self.push,
+            CronTrigger.from_crontab(push_cron, timezone=tz),
+            id="push_daily",
         )
 
         sched.start()
         logger.info(
-            "Scheduler started. collect=%s publish=%s tz=%s",
-            self.cfg.schedule.get("collect_cron"),
-            self.cfg.schedule.get("publish_cron"),
+            "Scheduler started. full_collect=%s delta_collect=%s publish_stage=%s push=%s tz=%s",
+            full_collect_cron,
+            delta_collect_cron,
+            publish_cron,
+            push_cron,
             tz,
         )
 
