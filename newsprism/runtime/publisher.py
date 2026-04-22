@@ -14,9 +14,11 @@ Layer: runtime (can import types, config, repo, service)
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 from datetime import date
+from pathlib import Path
 
 from telegram import Bot
 from telegram.constants import ParseMode
@@ -57,6 +59,29 @@ class TelegramPublisher:
         self.report_base_url = cfg.report_base_url
 
     async def publish(self, summaries: list[ClusterSummary], report_date: date) -> None:
+        items = [
+            {
+                "topic_category": summary.cluster.topic_category,
+                "summary": summary.summary,
+            }
+            for summary in summaries
+        ]
+        await self._publish_items(items, report_date)
+
+    async def publish_rendered(self, data_json_path: str | Path, report_date: date) -> None:
+        payload = json.loads(Path(data_json_path).read_text(encoding="utf-8"))
+        clusters = payload.get("clusters", [])
+        items = [
+            {
+                "topic_category": str(cluster.get("topic", "")),
+                "summary": str(cluster.get("summary", "")),
+            }
+            for cluster in clusters
+            if cluster.get("summary")
+        ]
+        await self._publish_items(items, report_date)
+
+    async def _publish_items(self, items: list[dict[str, str]], report_date: date) -> None:
         if not self.token or not self.chat_id:
             logger.warning("Telegram not configured — skipping publish")
             return
@@ -67,7 +92,7 @@ class TelegramPublisher:
 
         header = (
             f"📰 <b>NewsPrism 每日科技速览</b>\n"
-            f"{date_str} {day_name} | 共 {len(summaries)} 个话题\n"
+            f"{date_str} {day_name} | 共 {len(items)} 个话题\n"
             f"{'─' * 20}"
         )
 
@@ -81,15 +106,15 @@ class TelegramPublisher:
         messages: list[str] = [header]
 
         current_broad = ""
-        for i, cs in enumerate(summaries, 1):
-            broad = _broad(cs.cluster.topic_category)
+        for i, item in enumerate(items, 1):
+            broad = _broad(item["topic_category"])
             if broad != current_broad:
                 emoji = _CAT_EMOJI.get(broad, "")
                 messages.append(f"\n<b>{emoji} {broad}</b>")
                 current_broad = broad
 
-            headline = _extract_headline(cs.summary) or html.escape(cs.cluster.topic_category)
-            body = _body_to_tg_html(_body_only(cs.summary))
+            headline = _extract_headline(item["summary"]) or item["topic_category"]
+            body = _body_to_tg_html(_body_only(item["summary"]))
             block = f"\n<b>{i}. {html.escape(headline)}</b>\n{body}\n"
             messages.append(block)
 
@@ -109,7 +134,7 @@ class TelegramPublisher:
                 except Exception as exc:
                     logger.error("Telegram send failed: %s", exc)
 
-        logger.info("Published %d clusters to Telegram", len(summaries))
+        logger.info("Published %d clusters to Telegram", len(items))
 
     def _batch_messages(self, messages: list[str]) -> list[str]:
         """Merge message blocks into Telegram-sized batches."""

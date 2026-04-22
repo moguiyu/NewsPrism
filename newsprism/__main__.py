@@ -35,7 +35,8 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("collect", help="Collect and store articles now")
-    sub.add_parser("publish", help="Summarize and publish today's report now")
+    sub.add_parser("publish", help="Build and publish today's report immediately")
+    sub.add_parser("push", help="Push today's staged report now")
     sub.add_parser("once", help="Run full pipeline once (collect + publish)")
     replay = sub.add_parser("replay", help="Replay one report date from the exact article set used in that report")
     replay.add_argument("--date", dest="report_date", help="Target report date in YYYY-MM-DD format (default: today)")
@@ -56,7 +57,9 @@ def main() -> None:
         if args.cmd == "collect":
             _run_async_command("collect", sched.collect())
         elif args.cmd == "publish":
-            _run_async_command("publish", sched.publish())
+            _run_async_command("publish", sched.publish(push_after_render=True))
+        elif args.cmd == "push":
+            _run_async_command("push", sched.push())
         elif args.cmd == "once":
             _run_async_command("once", sched.run_once())
         elif args.cmd == "replay":
