@@ -103,7 +103,8 @@ output:
   staging_dir: "output/staging"
   publish_complete_flag: ".publish_complete"
   latest_symlink: true
-  template: "design-premium"   # options: design-a | design-b | design-c | design-premium
+  english:
+    enabled: true
   hot_topics:
     enabled: true
     max_topic_tabs: 3

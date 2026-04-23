@@ -118,9 +118,12 @@ class ClusterSummary:
     """Output of the Summarizer service — cluster + LLM-generated text."""
     cluster: ArticleCluster
     summary: str                    # full formatted text (headline + factual body)
-    perspectives: dict[str, str]    # legacy shim: source_name → perspective text
+    perspectives: dict[str, str] = field(default_factory=dict)   # legacy shim: source_name → perspective text
+    summary_en: str | None = None
     grouped_perspectives: list["PerspectiveGroup"] = field(default_factory=list)
+    grouped_perspectives_en: list["PerspectiveGroup"] = field(default_factory=list)
     short_topic_name: str | None = None
+    short_topic_name_en: str | None = None
     topic_icon_key: str | None = None
     # Freshness metadata (set after freshness evaluation)
     freshness_state: str = "new"    # "new" | "developing" | "stale"
@@ -130,10 +133,12 @@ class ClusterSummary:
     organic_unique_sources: int = 0
     macro_topic_key: str | None = None
     macro_topic_name: str | None = None
+    macro_topic_name_en: str | None = None
     macro_topic_icon_key: str | None = None
     macro_topic_member_count: int = 0
     storyline_key: str | None = None
     storyline_name: str | None = None
+    storyline_name_en: str | None = None
     storyline_role: str = "none"
     storyline_confidence: float = 0.0
     storyline_membership_status: str = "none"

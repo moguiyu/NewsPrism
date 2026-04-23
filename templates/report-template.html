@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-lang="{{ default_language }}">
 
 <head>
   <meta charset="UTF-8" />
@@ -32,7 +32,7 @@
     }
 
     :root {
-      /* Premium Dark Theme */
+      /* Report Dark Theme */
       --font-sans: 'Outfit', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
       --font-emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
       --bg: #0a0b10;
@@ -63,7 +63,7 @@
 
     @media (prefers-color-scheme: light) {
       :root {
-        /* Premium Light Theme */
+        /* Report Light Theme */
         --bg: #f4f6fa;
         --surface: rgba(255, 255, 255, 0.8);
         --surface-hover: rgba(255, 255, 255, 1);
@@ -94,6 +94,14 @@
     html {
       color-scheme: dark light;
       scroll-behavior: smooth;
+    }
+
+    html[data-lang="zh"] [data-lang-en] {
+      display: none !important;
+    }
+
+    html[data-lang="en"] [data-lang-zh] {
+      display: none !important;
     }
 
     body {
@@ -182,6 +190,45 @@
       flex-wrap: wrap;
       justify-content: flex-end;
       gap: 8px;
+    }
+
+    .header-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+    }
+
+    .language-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--chip-bg);
+      backdrop-filter: var(--blur);
+      -webkit-backdrop-filter: var(--blur);
+    }
+
+    .language-toggle button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      border-radius: 999px;
+      padding: 6px 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .language-toggle button.active {
+      background: var(--cat-active-bg);
+      color: var(--text);
+      box-shadow: 0 4px 12px var(--accent-glow);
     }
 
     .header-stat {
@@ -881,6 +928,15 @@
         display: none;
       }
 
+      .header-actions {
+        align-items: stretch;
+        gap: 8px;
+      }
+
+      .language-toggle {
+        align-self: flex-start;
+      }
+
       .header-date {
         display: inline-block;
         width: auto;
@@ -1082,11 +1138,19 @@
   </style>
 </head>
 
+{% macro bilingual_text(zh, en=None) -%}
+<span data-lang-zh>{{ zh }}</span><span data-lang-en>{{ en if en is not none else zh }}</span>
+{%- endmacro %}
+
+{% macro bilingual_markup(zh, en=None) -%}
+<span data-lang-zh>{{ zh|safe }}</span><span data-lang-en>{{ (en if en is not none else zh)|safe }}</span>
+{%- endmacro %}
+
 <body>
 
   <div class="mobile-brand-bar" aria-hidden="true">
     <span class="logo">NewsPrism</span>
-    <span class="header-date">{{ report_date_display }} {{ day_name }}</span>
+    <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
   </div>
 
   <div class="site-header">
@@ -1094,25 +1158,33 @@
       <div class="header-top">
         <div class="header-brand">
           <span class="logo">NewsPrism</span>
-          <span class="header-date">{{ report_date_display }} {{ day_name }}</span>
+          <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
         </div>
-        <div class="header-stats" aria-label="report stats">
-          <span class="header-stat"><strong>{{ cluster_count }}</strong> 条常规追踪</span>
-          {% if focus_storyline_count %}
-          <span class="header-stat header-stat-accent"><strong>{{ focus_storyline_count }}</strong> 组主线 / {{ focus_storyline_story_count }} 条故事</span>
+        <div class="header-actions">
+          {% if english_available %}
+          <div class="language-toggle" aria-label="language toggle">
+            <button type="button" class="lang-btn active" data-lang-choice="zh" onclick="setLanguage('zh')">中文</button>
+            <button type="button" class="lang-btn" data-lang-choice="en" onclick="setLanguage('en')">English</button>
+          </div>
           {% endif %}
-          {% if hot_topic_count %}
-          <span class="header-stat header-stat-hot"><strong>{{ hot_topic_count }}</strong> 个热点 / {{ hot_topic_story_count }} 条专题</span>
-          {% endif %}
+          <div class="header-stats" aria-label="report stats">
+            <span class="header-stat">{{ bilingual_markup('<strong>' ~ cluster_count ~ '</strong> 条常规追踪', '<strong>' ~ cluster_count ~ '</strong> regular stories') }}</span>
+            {% if focus_storyline_count %}
+            <span class="header-stat header-stat-accent">{{ bilingual_markup('<strong>' ~ focus_storyline_count ~ '</strong> 组主线 / ' ~ focus_storyline_story_count ~ ' 条故事', '<strong>' ~ focus_storyline_count ~ '</strong> storylines / ' ~ focus_storyline_story_count ~ ' stories') }}</span>
+            {% endif %}
+            {% if hot_topic_count %}
+            <span class="header-stat header-stat-hot">{{ bilingual_markup('<strong>' ~ hot_topic_count ~ '</strong> 个热点 / ' ~ hot_topic_story_count ~ ' 条专题', '<strong>' ~ hot_topic_count ~ '</strong> hot topics / ' ~ hot_topic_story_count ~ ' stories') }}</span>
+            {% endif %}
+          </div>
         </div>
       </div>
       <nav class="cat-tabs">
-        <button class="cat-tab active" onclick="filterView(this,'all','all')">全部速览</button>
+        <button class="cat-tab active" onclick="filterView(this,'all','all')">{{ bilingual_text('全部速览', 'All overview') }}</button>
         {% for hot in hot_topics %}
-        <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ hot.macro_topic_name }}</button>
+        <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</button>
         {% endfor %}
         {% for sec in main_sections %}
-        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')"><span class="emoji" aria-hidden="true">{{ sec.emoji }}</span> {{ sec.label }}</button>
+        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')"><span class="emoji" aria-hidden="true">{{ sec.emoji }}</span> {{ bilingual_text(sec.label, sec.label_en) }}</button>
         {% endfor %}
       </nav>
     </div>
@@ -1123,24 +1195,24 @@
     <section class="all-overview" data-all-overview="true">
       <div class="all-overview-header">
         <div>
-          <div class="overview-kicker">今日焦点结构</div>
-          <div class="overview-copy">先看常规追踪，再从下列热点主线进入专题展开。</div>
+          <div class="overview-kicker">{{ bilingual_text('今日焦点结构', 'Today\'s focus map') }}</div>
+          <div class="overview-copy">{{ bilingual_text('先看常规追踪，再从下列热点主线进入专题展开。', 'Scan the regular coverage first, then jump into the featured topic threads below.') }}</div>
         </div>
       </div>
       <div class="overview-list">
         {% for hot in hot_topics %}
         <article class="overview-item">
           <div>
-            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ hot.macro_topic_name }}</div>
-            <div class="overview-meta">{{ hot.member_count }} 条专题追踪</div>
-            <div class="overview-summary">{{ hot.scope_summary }}</div>
+            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
+            <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
+            <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
             <div class="overview-anchors">
               {% for preview in hot.preview_clusters %}
-              <span class="overview-anchor">{{ preview.hot_seq_index }}. {{ preview.headline }}</span>
+              <span class="overview-anchor"><span class="card-index">{{ preview.hot_seq_index }}.</span>{{ bilingual_text(preview.headline, preview.headline_en or preview.headline) }}</span>
               {% endfor %}
             </div>
           </div>
-          <button class="overview-cta" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')">进入专题</button>
+          <button class="overview-cta" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')">{{ bilingual_text('进入专题', 'Open topic') }}</button>
         </article>
         {% endfor %}
       </div>
@@ -1151,25 +1223,25 @@
     {% for line in focus_storylines %}
     <section class="focus-storyline-block" data-focus-storyline="true">
       <div class="focus-storyline-header">
-        <div class="cat-label"><span class="emoji" aria-hidden="true">{{ line.topic_icon }}</span> 主线追踪 · {{ line.storyline_name }}</div>
-        <div class="focus-storyline-counter">{{ line.member_count }} 条关联追踪</div>
+        <div class="cat-label"><span class="emoji" aria-hidden="true">{{ line.topic_icon }}</span> {{ bilingual_text('主线追踪 · ' ~ line.storyline_name, 'Storyline · ' ~ (line.storyline_name_en or line.storyline_name)) }}</div>
+        <div class="focus-storyline-counter">{{ bilingual_text(line.member_count ~ ' 条关联追踪', line.member_count ~ ' related stories') }}</div>
       </div>
       <div class="cards">
         {% for c in line.clusters %}
         <div class="feed-card card" data-cat="{{ c.broad_category }}" id="{{ line.dom_id }}-{{ c.focus_seq_index }}">
           <div class="card-body">
             <div class="card-title">
-              <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ c.headline }}</span>
+              <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
               {% if c.storyline_role == "core" or c.storyline_role == "spillover" or c.is_developing %}
               <span class="card-badges">
-                {% if c.storyline_role == "core" %}<span class="role-badge role-core">核心主线</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">相关外溢</span>{% endif %}
-                {% if c.is_developing %}<span class="freshness-badge">续报</span>{% endif %}
+                {% if c.storyline_role == "core" %}<span class="role-badge role-core">{{ bilingual_text('核心主线', 'Core storyline') }}</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">{{ bilingual_text('相关外溢', 'Direct spillover') }}</span>{% endif %}
+                {% if c.is_developing %}<span class="freshness-badge">{{ bilingual_text('续报', 'Developing') }}</span>{% endif %}
               </span>
               {% endif %}
             </div>
-            <div class="card-summary">{{ c.summary }}</div>
+            <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
             {% if c.perspective_preview %}
-            <div class="card-preview">视角差异：{{ c.perspective_preview }}</div>
+            <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
             {% endif %}
           </div>
 
@@ -1179,14 +1251,14 @@
               <div class="source-chips">
                 {% for src in c.footer_sources %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
                 {% endfor %}
               </div>
               {% if c.has_expandable_perspectives %}
               <div class="footer-actions">
                 <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-focus-{{ line.dom_id }}-{{ c.focus_seq_index }}')">
-                  查看 {{ c.distinct_perspective_count }} 个视角
+                  {{ bilingual_text('查看 ' ~ c.distinct_perspective_count ~ ' 个视角', 'View ' ~ c.distinct_perspective_count ~ ' angles') }}
                 </button>
               </div>
               {% endif %}
@@ -1201,11 +1273,11 @@
                 <span class="persp-src">
                   {% for src in group.sources %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
                   {% endfor %}
                 </span>
-                <span class="persp-angle" title="{{ group.perspective }}">{{ group.perspective }}</span>
+                <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
               </div>
             </div>
             {% endfor %}
@@ -1223,16 +1295,16 @@
       <div class="feed-card card" data-main-feed-card="true" data-cat="{{ c.broad_category }}" id="topic-{{ c.index }}">
           <div class="card-body">
             <div class="card-title">
-              <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ c.headline }}</span>
+              <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
               {% if c.is_developing %}
               <span class="card-badges">
-                <span class="freshness-badge">续报</span>
+                <span class="freshness-badge">{{ bilingual_text('续报', 'Developing') }}</span>
               </span>
               {% endif %}
             </div>
-            <div class="card-summary">{{ c.summary }}</div>
+            <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
             {% if c.perspective_preview %}
-            <div class="card-preview">视角差异：{{ c.perspective_preview }}</div>
+            <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
             {% endif %}
           </div>
 
@@ -1242,14 +1314,14 @@
               <div class="source-chips">
                 {% for src in c.footer_sources %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
                 {% endfor %}
               </div>
               {% if c.has_expandable_perspectives %}
               <div class="footer-actions">
                 <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-{{ c.index }}')">
-                  查看 {{ c.distinct_perspective_count }} 个视角
+                  {{ bilingual_text('查看 ' ~ c.distinct_perspective_count ~ ' 个视角', 'View ' ~ c.distinct_perspective_count ~ ' angles') }}
                 </button>
               </div>
               {% endif %}
@@ -1264,11 +1336,11 @@
                 <span class="persp-src">
                   {% for src in group.sources %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
                   {% endfor %}
                 </span>
-                <span class="persp-angle" title="{{ group.perspective }}">{{ group.perspective }}</span>
+                <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
               </div>
             </div>
             {% endfor %}
@@ -1285,25 +1357,25 @@
       {% for hot in hot_topics %}
       <div class="hot-topic-block" data-hot-id="{{ hot.dom_id }}" style="display:none;">
         <div class="hot-topic-header">
-          <div class="cat-label"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span> {{ hot.macro_topic_name }}</div>
-          <div class="hot-topic-counter">{{ hot.member_count }} 条专题追踪</div>
+          <div class="cat-label"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span> {{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
+          <div class="hot-topic-counter">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
         </div>
         <div class="cards">
           {% for c in hot.clusters %}
           <div class="card" id="{{ hot.dom_id }}-{{ c.hot_seq_index }}">
             <div class="card-body">
               <div class="card-title">
-                <span class="card-title-text"><span class="card-index">{{ c.hot_seq_index }}.</span>{{ c.headline }}</span>
+                <span class="card-title-text"><span class="card-index">{{ c.hot_seq_index }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
                 {% if c.storyline_role == "core" or c.storyline_role == "spillover" or c.is_developing %}
                 <span class="card-badges">
-                  {% if c.storyline_role == "core" %}<span class="role-badge role-core">核心主线</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">相关外溢</span>{% endif %}
-                  {% if c.is_developing %}<span class="freshness-badge">续报</span>{% endif %}
+                  {% if c.storyline_role == "core" %}<span class="role-badge role-core">{{ bilingual_text('核心主线', 'Core storyline') }}</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">{{ bilingual_text('相关外溢', 'Direct spillover') }}</span>{% endif %}
+                  {% if c.is_developing %}<span class="freshness-badge">{{ bilingual_text('续报', 'Developing') }}</span>{% endif %}
                 </span>
                 {% endif %}
               </div>
-              <div class="card-summary">{{ c.summary }}</div>
+              <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
               {% if c.perspective_preview %}
-              <div class="card-preview">视角差异：{{ c.perspective_preview }}</div>
+              <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
               {% endif %}
             </div>
 
@@ -1313,14 +1385,14 @@
                 <div class="source-chips">
                   {% for src in c.footer_sources %}
                   <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                    <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                    <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
                   {% endfor %}
                 </div>
                 {% if c.has_expandable_perspectives %}
                 <div class="footer-actions">
                   <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-hot-{{ hot.dom_id }}-{{ c.hot_seq_index }}')">
-                    查看 {{ c.distinct_perspective_count }} 个视角
+                    {{ bilingual_text('查看 ' ~ c.distinct_perspective_count ~ ' 个视角', 'View ' ~ c.distinct_perspective_count ~ ' angles') }}
                   </button>
                 </div>
                 {% endif %}
@@ -1335,11 +1407,11 @@
                   <span class="persp-src">
                     {% for src in group.sources %}
                     <a href="{{ src.url }}" target="_blank" rel="noopener">
-                      {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ src.provenance_label }}{% endif %}
+                      {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                     </a>
                     {% endfor %}
                   </span>
-                  <span class="persp-angle" title="{{ group.perspective }}">{{ group.perspective }}</span>
+                  <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
                 </div>
               </div>
               {% endfor %}
@@ -1356,10 +1428,20 @@
   </main>
 
   <footer>
-    NewsPrism · {{ report_date_display }} · AI Multi-Perspective Aggregation
+    {{ bilingual_text('NewsPrism · ' ~ report_date_display ~ ' · AI 多视角聚合', 'NewsPrism · ' ~ report_date_display_en ~ ' · AI Multi-Perspective Aggregation') }}
   </footer>
 
   <script>
+    function setLanguage(lang) {
+      document.documentElement.dataset.lang = lang;
+      document.querySelectorAll('.lang-btn').forEach(button => {
+        button.classList.toggle('active', button.dataset.langChoice === lang);
+      });
+      try {
+        localStorage.setItem('newsprism-language', lang);
+      } catch (_) {}
+    }
+
     function toggleAllPerspectives(button, panelId) {
       const panel = document.getElementById(panelId);
       const isOpen = panel.classList.contains('open');
@@ -1432,6 +1514,16 @@
         filterView(tab, 'hot', domId);
       }
     }
+
+    {% if english_available %}
+    (function restoreLanguage() {
+      let saved = null;
+      try {
+        saved = localStorage.getItem('newsprism-language');
+      } catch (_) {}
+      setLanguage(saved === 'en' ? 'en' : '{{ default_language }}');
+    })();
+    {% endif %}
   </script>
   <script>
     if ('serviceWorker' in navigator) {
