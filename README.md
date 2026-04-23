@@ -13,7 +13,7 @@ This public repository supports both self-hosting with Docker and local developm
 - Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
 - Event-level clustering with same-day and cross-day deduplication
 - Perspective-seeking for missing regional angles
-- HTML report rendering with a premium story-first layout
+- HTML report rendering with a story-first layout
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 
 ## Architecture
@@ -109,15 +109,15 @@ For the default image-based install, those files live inside the container image
 | Surface | What you can change |
 |---|---|
 | `.env` | provider keys, public report URL, scheduler timezone, optional integrations |
-| `config/config.yaml` | schedule, source list, clustering thresholds, dedup rules, output template, active-search behavior |
+| `config/config.yaml` | schedule, source list, clustering thresholds, dedup rules, English report toggle, active-search behavior |
 | `config/keywords.txt` | topic groups and keyword filters |
 | `config/style-guide.md` | editorial prompt and no-fabrication rules used by the summarizer |
-| `templates/report-*.html` | HTML branding and presentation |
+| `templates/report-template.html` | HTML branding and presentation |
 
 Common examples:
 
 - disable sources by setting `enabled: false` under `sources:`
-- switch `output.template` from `design-premium` to `design-a`, `design-b`, or `design-c`
+- enable the English report toggle under `output.english.enabled`
 - edit `schedule.collect_cron` and `schedule.publish_cron`
 - tighten or broaden topic matching in `config/keywords.txt` and `filter.min_topic_score`
 

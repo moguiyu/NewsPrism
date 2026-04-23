@@ -176,7 +176,7 @@ Use `config/config.yaml` for product behavior:
 - `filter.min_topic_score`, `filter.max_topics_per_article`
 - `clustering.*` thresholds and report size
 - `dedup.*` cross-day repetition behavior
-- `output.template`
+- `output.english.enabled`
 - `output.hot_topics.*`
 - `active_search.*`, including `search_profiles` and cost-related knobs
 - `sources:` list
@@ -199,16 +199,11 @@ Use `config/style-guide.md` for the editorial prompt enforced during summarizati
 - keep the no-fabrication rules intact
 - treat this file as runtime config, not contributor-only docs
 
-### `templates/report-*.html`
+### `templates/report-template.html`
 
-Edit the templates if you want to change branding, layout, typography, or card presentation:
+Edit the template if you want to change branding, layout, typography, or card presentation:
 
-- `report-design-a.html`
-- `report-design-b.html`
-- `report-design-c.html`
-- `report-design-premium.html`
-
-Switch the active template in `config/config.yaml` with `output.template`.
+- `report-template.html`
 
 ## Common Customizations
 
@@ -289,21 +284,15 @@ When adding a new source:
   - `tech`: tech-focused source, also bypasses keyword gate
   - `portal`: mixed-content source, still filtered by keyword matching
 
-### 4. Change the output style
+### 4. Enable English report content
 
-Switch templates in `config/config.yaml`:
+Turn on the optional English summary layer in `config/config.yaml`:
 
 ```yaml
 output:
-  template: "design-a"
+  english:
+    enabled: true
 ```
-
-Supported values:
-
-- `design-a`
-- `design-b`
-- `design-c`
-- `design-premium`
 
 ### 5. Reduce search cost or external dependencies
 

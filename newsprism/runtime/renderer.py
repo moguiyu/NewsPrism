@@ -65,6 +65,16 @@ _BROAD_CATEGORY_MAP: dict[str, str] = {
 
 _DEFAULT_BROAD = "国际时政"
 
+_BROAD_CATEGORY_EN_MAP: dict[str, str] = {
+    "商业财经": "Business & Finance",
+    "科技创新": "Technology & Innovation",
+    "国际时政": "World Affairs",
+    "社会民生": "Society",
+    "文化艺术": "Culture",
+    "体育运动": "Sports",
+    "科学健康": "Science & Health",
+}
+
 _CATEGORY_META: list[tuple[str, str, str]] = [
     # (broad_category, emoji, css_key)
     ("商业财经", "💰", "finance"),
@@ -205,6 +215,62 @@ def _normalize_hot_topic_name(name: str | None, summary: ClusterSummary | None =
     return "全球焦点"
 
 
+def _normalize_display_name(name: str | None, max_chars: int = 18) -> str:
+    compact = (name or "").strip()
+    compact = re.sub(r"^(热点专题[-:：]?|专题[-:：]?)", "", compact).strip()
+    compact = re.sub(r"\s+", "", compact)
+    compact = compact[:max_chars].strip(" -:：，,、。.；;")
+    return compact
+
+
+def _looks_like_truncated_prefix(candidate: str, raw_candidates: list[str]) -> bool:
+    if not candidate:
+        return False
+    for raw in raw_candidates:
+        normalized = _normalize_display_name(raw, max_chars=64)
+        if normalized and len(normalized) > len(candidate) and normalized.startswith(candidate):
+            return True
+    return False
+
+
+def _focus_storyline_display_name(
+    name: str | None,
+    summaries: list[ClusterSummary],
+    max_chars: int = 18,
+) -> str:
+    raw_candidates: list[str] = []
+    if isinstance(name, str) and name.strip():
+        raw_candidates.append(name)
+    for summary in summaries:
+        for candidate in (
+            summary.short_topic_name,
+            summary.storyline_name,
+            summary.macro_topic_name,
+            _extract_headline(summary.summary),
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                raw_candidates.append(candidate)
+        for article in summary.cluster.articles:
+            if article.title.strip():
+                raw_candidates.append(article.title)
+
+    normalized_candidates: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_candidates:
+        normalized = _normalize_display_name(raw, max_chars=max_chars)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_candidates.append(normalized)
+
+    for candidate in normalized_candidates:
+        if not _looks_like_truncated_prefix(candidate, raw_candidates):
+            return candidate
+    if normalized_candidates:
+        return normalized_candidates[0]
+    return "全球焦点"
+
+
 def _normalize_text_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
@@ -328,11 +394,10 @@ class HtmlRenderer:
         self,
         output_dir: str = "output",
         template_dir: str = "templates",
-        template_name: str = "design-a",
         source_regions: dict[str, str] | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
-        self.template_file = f"report-{template_name}.html"
+        self.template_file = "report-template.html"
         self.source_regions: dict[str, str] = source_regions or {}
         self.env = Environment(
             loader=FileSystemLoader(template_dir),
@@ -379,14 +444,23 @@ class HtmlRenderer:
         region = self.source_regions.get(source_name, "")
         return _REGION_FLAG.get(region, "")
 
-    def _provenance_label(self, source_kind: str, platform: str | None, is_searched: bool) -> str | None:
+    def _provenance_label(
+        self,
+        source_kind: str,
+        platform: str | None,
+        is_searched: bool,
+        lang: str = "zh",
+    ) -> str | None:
         if source_kind == "official_web":
-            return "官方网站"
+            return "官方网站" if lang == "zh" else "Official website"
         if source_kind == "official_social":
-            platform_name = {"x": "官方X", "youtube": "官方YouTube"}.get(platform or "", "官方渠道")
+            platform_name = {
+                "zh": {"x": "官方X", "youtube": "官方YouTube"},
+                "en": {"x": "Official X", "youtube": "Official YouTube"},
+            }[lang].get(platform or "", "官方渠道" if lang == "zh" else "Official channel")
             return platform_name
         if is_searched:
-            return "搜索补充"
+            return "搜索补充" if lang == "zh" else "Search supplement"
         return None
 
     def _article_meta(self, summary: ClusterSummary) -> dict[str, dict]:
@@ -410,12 +484,17 @@ class HtmlRenderer:
         search_region = meta.get("search_region")
         source_kind = meta.get("source_kind", "news")
         platform = meta.get("platform")
-        provenance_label = self._provenance_label(source_kind, platform, is_searched)
+        provenance_label = self._provenance_label(source_kind, platform, is_searched, lang="zh")
+        provenance_label_en = self._provenance_label(source_kind, platform, is_searched, lang="en")
         compact_label = source_name
+        compact_label_en = source_name
         if is_searched:
             compact_label = f"🔍{compact_label}"
+            compact_label_en = f"🔍{compact_label_en}"
         if provenance_label:
             compact_label = f"{compact_label} · {provenance_label}"
+        if provenance_label_en:
+            compact_label_en = f"{compact_label_en} · {provenance_label_en}"
         return {
             "source": source_name,
             "flag": self._source_flag(source_name, search_region),
@@ -427,22 +506,27 @@ class HtmlRenderer:
             "is_official_source": meta.get("is_official_source", False),
             "searched_provider": meta.get("searched_provider"),
             "provenance_label": provenance_label,
+            "provenance_label_en": provenance_label_en,
             "url": meta.get("url", "#"),
             "compact_label": compact_label,
+            "compact_label_en": compact_label_en,
         }
 
-    def _perspective_groups_data(self, summary: ClusterSummary) -> list[tuple[list[str], str]]:
-        if summary.grouped_perspectives:
-            return [(group.sources, group.perspective) for group in summary.grouped_perspectives]
-        if summary.perspectives:
+    def _perspective_groups_data(self, summary: ClusterSummary, english: bool = False) -> list[tuple[list[str], str]]:
+        groups = summary.grouped_perspectives_en if english else summary.grouped_perspectives
+        if groups:
+            return [(group.sources, group.perspective) for group in groups]
+        if not english and summary.perspectives:
             return [([source_name], text) for source_name, text in summary.perspectives.items()]
         return []
 
-    def _group_payload(self, source_entries: list[dict], perspective: str) -> dict:
+    def _group_payload(self, source_entries: list[dict], perspective: str, perspective_en: str = "") -> dict:
         return {
             "label": " / ".join(entry["compact_label"] for entry in source_entries),
+            "label_en": " / ".join(entry["compact_label_en"] for entry in source_entries),
             "sources": source_entries,
             "perspective": perspective,
+            "perspective_en": perspective_en,
             "url": source_entries[0]["url"] if len(source_entries) == 1 else None,
             "source_count": len(source_entries),
             "is_grouped": len(source_entries) > 1,
@@ -460,9 +544,13 @@ class HtmlRenderer:
             footer_sources.append(self._build_source_entry(source_name, article_meta))
         return footer_sources
 
-    def _build_perspective_payload(self, summary: ClusterSummary) -> dict[str, object]:
+    def _build_single_language_perspective_payload(
+        self,
+        summary: ClusterSummary,
+        english: bool = False,
+    ) -> dict[str, object]:
         article_meta = self._article_meta(summary)
-        group_definitions = self._perspective_groups_data(summary)
+        group_definitions = self._perspective_groups_data(summary, english=english)
         if not group_definitions:
             footer_sources = self._build_footer_sources(summary)
             return {
@@ -529,6 +617,47 @@ class HtmlRenderer:
             "perspective_preview": perspective_preview,
         }
 
+    def _build_perspective_payload(self, summary: ClusterSummary) -> dict[str, object]:
+        return self._build_single_language_perspective_payload(summary, english=False)
+
+    def _enrich_bilingual_perspective_payload(
+        self,
+        zh_payload: dict[str, object],
+        en_payload: dict[str, object],
+    ) -> None:
+        zh_groups = zh_payload.get("grouped_perspectives", [])
+        en_groups = en_payload.get("grouped_perspectives", [])
+        if isinstance(zh_groups, list) and isinstance(en_groups, list):
+            for zh_group, en_group in zip(zh_groups, en_groups):
+                if isinstance(zh_group, dict) and isinstance(en_group, dict):
+                    zh_group["perspective_en"] = en_group.get("perspective", "")
+
+        zh_source_groups = zh_payload.get("source_groups", [])
+        en_source_groups = en_payload.get("source_groups", [])
+        if isinstance(zh_source_groups, list) and isinstance(en_source_groups, list):
+            for zh_group, en_group in zip(zh_source_groups, en_source_groups):
+                if isinstance(zh_group, dict) and isinstance(en_group, dict):
+                    zh_group["perspective_en"] = en_group.get("perspective", "")
+                    zh_group["label_en"] = en_group.get("label_en", zh_group.get("label_en", ""))
+
+    def _english_available(
+        self,
+        summaries: list[ClusterSummary],
+        hot_topics: list[dict[str, object]],
+        focus_storylines: list[dict[str, object]],
+    ) -> bool:
+        if not summaries:
+            return False
+        if any(not summary.summary_en for summary in summaries):
+            return False
+        for family in hot_topics:
+            if not family.get("macro_topic_name_en") or not family.get("storyline_name_en"):
+                return False
+        for family in focus_storylines:
+            if not family.get("storyline_name_en"):
+                return False
+        return True
+
     def _build_grouped_perspectives(self, summary: ClusterSummary) -> list[dict]:
         if not summary.cluster.is_multi_source:
             return []
@@ -542,6 +671,7 @@ class HtmlRenderer:
         summary: ClusterSummary,
         index: int,
         storyline_display_mode: str = "main",
+        include_english: bool = False,
     ) -> tuple[dict, dict]:
         articles_data = [
             {
@@ -555,27 +685,53 @@ class HtmlRenderer:
 
         headline_raw = _extract_headline(summary.summary) or summary.cluster.topic_category
         body_text = _body_only(summary.summary)
+        headline_raw_en = _extract_headline(summary.summary_en or "") if include_english and summary.summary_en else ""
+        body_text_en = _body_only(summary.summary_en or "") if include_english and summary.summary_en else ""
         perspective_payload = self._build_perspective_payload(summary)
+        perspective_payload_en = (
+            self._build_single_language_perspective_payload(summary, english=True)
+            if include_english
+            else {
+                "grouped_perspectives": [],
+                "perspectives_list": [],
+                "source_groups": [],
+                "footer_sources": [],
+                "rendered_perspectives": {},
+                "distinct_perspective_count": 0,
+                "suppressed_group_count": 0,
+                "has_expandable_perspectives": False,
+                "perspective_preview": "",
+            }
+        )
+        self._enrich_bilingual_perspective_payload(perspective_payload, perspective_payload_en)
         source_groups = perspective_payload["source_groups"]
         footer_sources = perspective_payload["footer_sources"]
         grouped_perspectives = perspective_payload["grouped_perspectives"]
+        grouped_perspectives_en = perspective_payload_en["grouped_perspectives"]
         perspectives_list = perspective_payload["perspectives_list"]
+        perspectives_list_en = perspective_payload_en["perspectives_list"]
         broad = _broad_category(summary.cluster.topic_category)
 
         base = {
             "index": index,
             "topic": summary.cluster.topic_category,
             "broad_category": broad,
+            "broad_category_en": _BROAD_CATEGORY_EN_MAP.get(broad, broad),
             "sources": summary.cluster.sources,
             "is_multi": summary.cluster.is_multi_source,
             "perspectives": perspective_payload["rendered_perspectives"],
             "grouped_perspectives": grouped_perspectives,
+            "grouped_perspectives_en": grouped_perspectives_en,
             "perspectives_list": perspectives_list,
+            "perspectives_list_en": perspectives_list_en,
             "source_groups": source_groups,
+            "source_groups_en": perspective_payload_en["source_groups"],
             "footer_sources": footer_sources,
+            "footer_sources_en": perspective_payload_en["footer_sources"],
             "distinct_perspective_count": perspective_payload["distinct_perspective_count"],
             "suppressed_group_count": perspective_payload["suppressed_group_count"],
             "perspective_preview": perspective_payload["perspective_preview"],
+            "perspective_preview_en": perspective_payload_en["perspective_preview"],
             "has_expandable_perspectives": perspective_payload["has_expandable_perspectives"],
             "articles": articles_data,
             "article_count": len(articles_data),
@@ -583,12 +739,16 @@ class HtmlRenderer:
             "is_developing": getattr(summary, "freshness_state", "new") == "developing",
             "storyline_key": getattr(summary, "storyline_key", None),
             "storyline_name": getattr(summary, "storyline_name", None),
+            "storyline_name_en": getattr(summary, "storyline_name_en", None) if include_english else None,
             "storyline_role": getattr(summary, "storyline_role", "none"),
             "storyline_confidence": getattr(summary, "storyline_confidence", 0.0),
             "storyline_membership_status": getattr(summary, "storyline_membership_status", "none"),
             "storyline_anchor_labels": list(getattr(summary, "storyline_anchor_labels", [])),
             "storyline_display_mode": storyline_display_mode,
             "short_topic_name": getattr(summary, "short_topic_name", None),
+            "short_topic_name_en": getattr(summary, "short_topic_name_en", None) if include_english else None,
+            "macro_topic_name": getattr(summary, "macro_topic_name", None),
+            "macro_topic_name_en": getattr(summary, "macro_topic_name_en", None) if include_english else None,
             "topic_icon_key": getattr(summary, "topic_icon_key", None),
             "organic_unique_regions": getattr(summary, "organic_unique_regions", 0),
             "organic_unique_sources": getattr(summary, "organic_unique_sources", 0),
@@ -598,8 +758,16 @@ class HtmlRenderer:
                 **base,
                 "headline": Markup(html_lib.escape(headline_raw)),
                 "summary": _md_to_html(body_text),
+                "headline_en": Markup(html_lib.escape(headline_raw_en)) if headline_raw_en else None,
+                "summary_en": _md_to_html(body_text_en) if body_text_en else None,
             },
-            {**base, "headline": headline_raw, "summary": summary.summary},
+            {
+                **base,
+                "headline": headline_raw,
+                "summary": summary.summary,
+                "headline_en": headline_raw_en or None,
+                "summary_en": summary.summary_en if include_english else None,
+            },
         )
 
     def render(
@@ -621,11 +789,17 @@ class HtmlRenderer:
 
         hot_topics = hot_topics or []
         focus_storylines = focus_storylines or []
+        english_available = self._english_available(summaries, hot_topics, focus_storylines)
         clusters_ctx = []
         clusters_json: list[dict] = []
 
         for i, cs in enumerate(summaries, 1):
-            ctx_payload, json_payload = self._build_cluster_payload(cs, i, storyline_display_mode="main")
+            ctx_payload, json_payload = self._build_cluster_payload(
+                cs,
+                i,
+                storyline_display_mode="main",
+                include_english=english_available,
+            )
             clusters_ctx.append(ctx_payload)
             clusters_json.append(json_payload)
 
@@ -633,7 +807,14 @@ class HtmlRenderer:
         sections = []
         for label, emoji, css_key in _CATEGORY_META:
             if label in present_categories:
-                sections.append({"label": label, "emoji": emoji, "css_key": css_key})
+                sections.append(
+                    {
+                        "label": label,
+                        "label_en": _BROAD_CATEGORY_EN_MAP.get(label, label),
+                        "emoji": emoji,
+                        "css_key": css_key,
+                    }
+                )
 
         hot_topics_ctx: list[dict] = []
         hot_topics_json: list[dict] = []
@@ -645,6 +826,9 @@ class HtmlRenderer:
                 family.get("macro_topic_name") if isinstance(family.get("macro_topic_name"), str) else None,
                 family_summaries[0] if family_summaries else None,
             )
+            topic_name_en = None
+            if english_available:
+                topic_name_en = str(family.get("macro_topic_name_en") or "").strip() or None
             icon_key = family.get("topic_icon_key") if isinstance(family.get("topic_icon_key"), str) else "globe"
             if icon_key not in _HOT_TOPIC_ICON_MAP:
                 icon_key = "globe"
@@ -658,6 +842,7 @@ class HtmlRenderer:
                     summary,
                     member_index,
                     storyline_display_mode="hot_topic",
+                    include_english=english_available,
                 )
                 ctx_payload["hot_seq_index"] = member_index
                 json_payload["hot_seq_index"] = member_index
@@ -669,9 +854,11 @@ class HtmlRenderer:
                 member_json.append(json_payload)
 
             scope_summary = f"聚焦 {core_count} 条核心事件，延伸 {spillover_count} 条直接外溢。"
+            scope_summary_en = f"Focuses on {core_count} core events and {spillover_count} direct spillovers."
             preview_clusters = [
                 {
                     "headline": member["headline"],
+                    "headline_en": member.get("headline_en"),
                     "hot_seq_index": member["hot_seq_index"],
                 }
                 for member in member_json[:2]
@@ -682,8 +869,10 @@ class HtmlRenderer:
                     "dom_id": family.get("dom_id", f"hot-topic-{i}"),
                     "macro_topic_key": family.get("macro_topic_key", f"hot-topic-{i}"),
                     "macro_topic_name": topic_name,
+                    "macro_topic_name_en": topic_name_en,
                     "storyline_key": family.get("storyline_key", family.get("macro_topic_key", f"hot-topic-{i}")),
                     "storyline_name": family.get("storyline_name", topic_name),
+                    "storyline_name_en": str(family.get("storyline_name_en") or topic_name_en or "").strip() or None,
                     "topic_icon_key": icon_key,
                     "topic_icon": _HOT_TOPIC_ICON_MAP.get(icon_key, _HOT_TOPIC_ICON_MAP["globe"]),
                     "anchor_labels": list(family.get("anchor_labels", [])),
@@ -691,6 +880,7 @@ class HtmlRenderer:
                     "core_count": core_count,
                     "spillover_count": spillover_count,
                     "scope_summary": scope_summary,
+                    "scope_summary_en": scope_summary_en,
                     "preview_clusters": preview_clusters,
                     "clusters": member_ctx,
                 }
@@ -700,14 +890,17 @@ class HtmlRenderer:
                     "dom_id": family.get("dom_id", f"hot-topic-{i}"),
                     "macro_topic_key": family.get("macro_topic_key", f"hot-topic-{i}"),
                     "macro_topic_name": topic_name,
+                    "macro_topic_name_en": topic_name_en,
                     "storyline_key": family.get("storyline_key", family.get("macro_topic_key", f"hot-topic-{i}")),
                     "storyline_name": family.get("storyline_name", topic_name),
+                    "storyline_name_en": str(family.get("storyline_name_en") or topic_name_en or "").strip() or None,
                     "topic_icon_key": icon_key,
                     "anchor_labels": list(family.get("anchor_labels", [])),
                     "member_count": len(member_json),
                     "core_count": core_count,
                     "spillover_count": spillover_count,
                     "scope_summary": scope_summary,
+                    "scope_summary_en": scope_summary_en,
                     "preview_clusters": preview_clusters,
                     "clusters": member_json,
                 }
@@ -719,10 +912,13 @@ class HtmlRenderer:
             family_summaries = family.get("summaries", [])
             if not isinstance(family_summaries, list):
                 continue
-            storyline_name = _normalize_hot_topic_name(
+            storyline_name = _focus_storyline_display_name(
                 family.get("storyline_name") if isinstance(family.get("storyline_name"), str) else None,
-                family_summaries[0] if family_summaries else None,
+                family_summaries,
             )
+            storyline_name_en = None
+            if english_available:
+                storyline_name_en = str(family.get("storyline_name_en") or "").strip() or None
             icon_key = family.get("topic_icon_key") if isinstance(family.get("topic_icon_key"), str) else "globe"
             if icon_key not in _HOT_TOPIC_ICON_MAP:
                 icon_key = "globe"
@@ -734,6 +930,7 @@ class HtmlRenderer:
                     summary,
                     member_index,
                     storyline_display_mode="focus_storyline",
+                    include_english=english_available,
                 )
                 ctx_payload["focus_seq_index"] = member_index
                 json_payload["focus_seq_index"] = member_index
@@ -745,6 +942,7 @@ class HtmlRenderer:
                     "dom_id": family.get("dom_id", f"focus-storyline-{i}"),
                     "storyline_key": family.get("storyline_key", f"focus-storyline-{i}"),
                     "storyline_name": storyline_name,
+                    "storyline_name_en": storyline_name_en,
                     "topic_icon_key": icon_key,
                     "topic_icon": _HOT_TOPIC_ICON_MAP.get(icon_key, _HOT_TOPIC_ICON_MAP["globe"]),
                     "member_count": len(member_ctx),
@@ -756,6 +954,7 @@ class HtmlRenderer:
                     "dom_id": family.get("dom_id", f"focus-storyline-{i}"),
                     "storyline_key": family.get("storyline_key", f"focus-storyline-{i}"),
                     "storyline_name": storyline_name,
+                    "storyline_name_en": storyline_name_en,
                     "topic_icon_key": icon_key,
                     "member_count": len(member_json),
                     "clusters": member_json,
@@ -783,15 +982,20 @@ class HtmlRenderer:
         common = {
             "report_date": date_str,
             "report_date_display": report_date.strftime("%Y年%m月%d日"),
+            "report_date_display_en": report_date.strftime("%b %d, %Y"),
             "day_name": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][
                 report_date.weekday()
             ],
+            "day_name_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][report_date.weekday()],
             "cluster_count": len(summaries),
             "focus_storyline_count": len(focus_storylines_ctx),
             "focus_storyline_story_count": focus_storyline_story_count,
             "hot_topic_count": len(hot_topics_ctx),
             "hot_topic_story_count": hot_topic_story_count,
             "total_cluster_count": len(summaries) + focus_storyline_story_count + hot_topic_story_count,
+            "english_available": english_available,
+            "available_languages": ["zh", "en"] if english_available else ["zh"],
+            "default_language": "zh",
         }
 
         template = self.env.get_template(self.template_file)

@@ -15,21 +15,6 @@ def renderer():
     return HtmlRenderer(
         output_dir="output",
         template_dir="templates",
-        template_name="design-a",
-        source_regions={
-            "Reuters": "us",
-            "NHKニュース": "jp",
-            "澎湃新闻": "cn",
-        },
-    )
-
-
-@pytest.fixture
-def premium_renderer():
-    return HtmlRenderer(
-        output_dir="output",
-        template_dir="templates",
-        template_name="design-premium",
         source_regions={
             "Reuters": "us",
             "BBC": "gb",
@@ -183,11 +168,106 @@ class TestPerspectivesContext:
 
         assert payload["clusters"][0]["headline"] == "Single-source story"
         assert "Body text here." in payload["clusters"][0]["summary"]
+        assert "<strong>1</strong> 条常规追踪" in html
+        assert "&lt;strong&gt;" not in html
         assert "个视角" not in html
+        assert "data-lang-choice=\"en\"" not in html
+        assert payload["available_languages"] == ["zh"]
         assert payload["clusters"][0]["perspectives_list"] == []
 
-    def test_premium_single_source_renders_source_row_with_link(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+    def test_render_with_english_content_enables_language_toggle(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/english",
+                        title="English-ready story",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="English-ready story body.",
+                    )
+                ],
+            ),
+            summary="**中文标题**\n\n中文摘要内容。",
+            summary_en="**English Headline**\n\nEnglish summary content.",
+            short_topic_name="中文专题",
+            short_topic_name_en="English Topic",
+            perspectives={},
+        )
+
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert 'data-lang-choice="en"' in html
+        assert "English summary content." in html
+        assert "localStorage.setItem('newsprism-language', lang)" in html
+        assert payload["available_languages"] == ["zh", "en"]
+        assert payload["default_language"] == "zh"
+        assert payload["clusters"][0]["headline_en"] == "English Headline"
+        assert "English summary content." in payload["clusters"][0]["summary_en"]
+
+    def test_focus_storyline_prefers_readable_name_over_truncated_prefix(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        first = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Business & Finance",
+                articles=[
+                    Article(
+                        url="https://example.com/spacex-ipo",
+                        title="SpaceX 招股书披露：IPO 后马斯克将拥有 79% 投票控制权",
+                        source_name="IT之家",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="SpaceX IPO control story.",
+                    )
+                ],
+            ),
+            summary="**SpaceX IPO招股书披露马斯克将保留绝对控制权**\n\n摘要内容。",
+            short_topic_name="SpaceX上市控制权",
+            storyline_name="SpaceX招股书披",
+        )
+        second = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Business & Finance",
+                articles=[
+                    Article(
+                        url="https://example.com/spacex-analyst-day",
+                        title="SpaceX IPO倒计时：分析师会议本周举行，估值1.75万亿待检验",
+                        source_name="华尔街见闻",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="SpaceX analyst day story.",
+                    )
+                ],
+            ),
+            summary="**SpaceX 本周举行分析师会议，为6月底IPO冲刺**\n\n摘要内容。",
+            short_topic_name="SpaceX上市冲刺",
+            storyline_name="SpaceX招股书披",
+        )
+
+        html_path = renderer.render(
+            [],
+            datetime.now(tz=timezone.utc).date(),
+            focus_storylines=[
+                {
+                    "storyline_key": "single-33",
+                    "storyline_name": "SpaceX招股书披",
+                    "topic_icon_key": "globe",
+                    "member_count": 2,
+                    "summaries": [first, second],
+                }
+            ],
+        )
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert payload["focus_storylines"][0]["storyline_name"] == "SpaceX上市控制权"
+        assert "主线追踪 · SpaceX上市控制权" in html
+        assert "主线追踪 · SpaceX招股书披" not in html
+
+    def test_single_source_renders_source_row_with_link(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
         summary = ClusterSummary(
             cluster=ArticleCluster(
                 topic_category="World News",
@@ -205,7 +285,7 @@ class TestPerspectivesContext:
             perspectives={},
         )
 
-        html_path = premium_renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
@@ -215,8 +295,8 @@ class TestPerspectivesContext:
         assert payload["clusters"][0]["source_groups"][0]["url"] == "https://reuters.com/single"
         assert payload["clusters"][0]["has_expandable_perspectives"] is False
 
-    def test_premium_multi_source_renders_grouped_perspectives(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+    def test_multi_source_renders_grouped_perspectives(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
         summary = ClusterSummary(
             cluster=ArticleCluster(
                 topic_category="World News",
@@ -262,7 +342,7 @@ class TestPerspectivesContext:
             ],
         )
 
-        html_path = premium_renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
@@ -272,7 +352,8 @@ class TestPerspectivesContext:
         assert "联合早报" in html
         assert "视角差异：" in html
         assert "persp-sep" not in html
-        assert 'class="persp-angle" title="英美媒体共同聚焦关税对西方市场与政策预期的冲击。">英美媒体共同聚焦关税对西方市场与政策预期的冲击。</span>' in html
+        assert 'class="persp-angle" title="英美媒体共同聚焦关税对西方市场与政策预期的冲击。"' in html
+        assert "英美媒体共同聚焦关税对西方市场与政策预期的冲击。" in html
         assert ".persp-item {" in html
         assert ".persp-line {" in html
         assert ".card.is-expanded .source-chips {" in html
@@ -287,8 +368,8 @@ class TestPerspectivesContext:
         assert payload["clusters"][0]["perspective_preview"]
         assert payload["clusters"][0]["has_expandable_perspectives"] is True
 
-    def test_premium_invalid_perspective_groups_are_suppressed(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+    def test_invalid_perspective_groups_are_suppressed(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
         summary = ClusterSummary(
             cluster=ArticleCluster(
                 topic_category="Robotics",
@@ -329,7 +410,7 @@ class TestPerspectivesContext:
             ],
         )
 
-        html_path = premium_renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
@@ -421,9 +502,9 @@ class TestRegionFlagMapping:
         assert _REGION_FLAG["gb"] == "🇬🇧"
 
 
-class TestPremiumHotTopics:
-    def test_premium_template_renders_macro_topic_family_tabs_and_keeps_json_main_only(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+class TestHotTopics:
+    def test_template_renders_macro_topic_family_tabs_and_keeps_json_main_only(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
 
         hot_summary_1 = ClusterSummary(
             cluster=ArticleCluster(
@@ -488,7 +569,7 @@ class TestPremiumHotTopics:
             perspectives={},
         )
 
-        html_path = premium_renderer.render(
+        html_path = renderer.render(
             [main_summary],
             datetime.now(tz=timezone.utc).date(),
             hot_topics=[
@@ -538,8 +619,8 @@ class TestPremiumHotTopics:
         assert tree.xpath('//button[contains(@class, "hot-tab") and @data-hot-target="hot-topic-1"]')
         assert tree.xpath('//button[contains(@class, "overview-cta") and @data-hot-target="hot-topic-1"]')
 
-    def test_premium_template_sanitizes_hot_topic_name_and_icon_fallback(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+    def test_template_sanitizes_hot_topic_name_and_icon_fallback(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
 
         hot_summary = ClusterSummary(
             cluster=ArticleCluster(
@@ -561,7 +642,7 @@ class TestPremiumHotTopics:
             macro_topic_icon_key="invalid",
         )
 
-        html_path = premium_renderer.render(
+        html_path = renderer.render(
             [],
             datetime.now(tz=timezone.utc).date(),
             hot_topics=[
@@ -580,8 +661,8 @@ class TestPremiumHotTopics:
         assert "热点专题-全球贸易紧张升级" not in html
         assert '<span class="hot-icon"><span class="emoji" aria-hidden="true">🌍</span></span>' in html
 
-    def test_premium_template_wraps_emoji_with_fallback_spans(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+    def test_template_wraps_emoji_with_fallback_spans(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
 
         summary = ClusterSummary(
             cluster=ArticleCluster(
@@ -643,7 +724,7 @@ class TestPremiumHotTopics:
             macro_topic_icon_key="war",
         )
 
-        html_path = premium_renderer.render(
+        html_path = renderer.render(
             [summary],
             datetime.now(tz=timezone.utc).date(),
             hot_topics=[
@@ -673,8 +754,8 @@ class TestPremiumHotTopics:
         assert tree.xpath('//*[contains(@class, "persp-src")]//span[@class="emoji" and text()="🔍"]')
         assert not tree.xpath('//span[@class="emoji" and contains(text(), "搜索补充")]')
 
-    def test_premium_template_renders_focus_storyline_without_hotspot_tab(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+    def test_template_renders_focus_storyline_without_hotspot_tab(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
 
         focus_summary_1 = ClusterSummary(
             cluster=ArticleCluster(
@@ -731,7 +812,7 @@ class TestPremiumHotTopics:
             perspectives={},
         )
 
-        html_path = premium_renderer.render(
+        html_path = renderer.render(
             [main_summary],
             datetime.now(tz=timezone.utc).date(),
             focus_storylines=[
@@ -757,9 +838,9 @@ class TestPremiumHotTopics:
         assert ".focus-storyline-block {" in html
         assert ".focus-storyline-block .source-chips .src-chip:nth-child(n+4)" in html
         assert ".focus-storyline-block .card-summary {" in html
-        assert '<span class="card-index">1.</span>特朗普访华行程因伊朗战争推迟至5月14-15日' in html
-        assert '<span class="card-index">2.</span>特朗普将于5月中旬访华，中美领导人将举行会晤' in html
-        assert '<span class="card-index">3.</span>AI市场更新' in html
+        assert "特朗普访华行程因伊朗战争推迟至5月14-15日" in html
+        assert "特朗普将于5月中旬访华，中美领导人将举行会晤" in html
+        assert "AI市场更新" in html
         assert payload["focus_storyline_count"] == 1
         assert payload["focus_storyline_story_count"] == 2
         assert payload["focus_storylines"][0]["storyline_name"] == "特朗普访华"
@@ -769,8 +850,8 @@ class TestPremiumHotTopics:
         assert payload["clusters"][0]["storyline_display_mode"] == "main"
         assert payload["clusters"][0]["display_rank"] == 3
 
-    def test_premium_mobile_header_only_pins_logo_and_date(self, premium_renderer, tmp_path):
-        premium_renderer.output_dir = tmp_path
+    def test_mobile_header_only_pins_logo_and_date(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
 
         summary = ClusterSummary(
             cluster=ArticleCluster(
@@ -789,7 +870,7 @@ class TestPremiumHotTopics:
             perspectives={},
         )
 
-        html_path = premium_renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
         html = html_path.read_text(encoding="utf-8")
 
         assert "@media (max-width: 640px) {" in html
