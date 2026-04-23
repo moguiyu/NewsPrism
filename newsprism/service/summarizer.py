@@ -9,6 +9,7 @@ Uses LiteLLM so any OpenAI-compatible provider works (DeepSeek recommended).
 Layer: service (imports types, config; never imports repo or runtime)
 """
 from __future__ import annotations
+import json
 import logging
 import re
 from pathlib import Path
@@ -22,6 +23,33 @@ from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup
 logger = logging.getLogger(__name__)
 
 litellm.set_verbose = False
+
+
+def _extract_headline(summary_text: str) -> str:
+    for line in summary_text.splitlines():
+        match = re.match(r"\*\*(.+?)\*\*", line.strip())
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _body_only(summary_text: str) -> str:
+    lines = summary_text.splitlines()
+    body_lines: list[str] = []
+    headline_consumed = False
+    for line in lines:
+        stripped = line.strip()
+        if not headline_consumed and re.match(r"\*\*(.+?)\*\*", stripped):
+            headline_consumed = True
+            continue
+        if re.match(r"[•·\-\*]\s*【.+?】", stripped):
+            continue
+        body_lines.append(line)
+    while body_lines and not body_lines[0].strip():
+        body_lines.pop(0)
+    while body_lines and not body_lines[-1].strip():
+        body_lines.pop()
+    return "\n".join(body_lines)
 
 
 class PerspectiveItem(BaseModel):
@@ -58,6 +86,23 @@ class StructuredSummary(BaseModel):
         default_factory=list,
         description="Deprecated fallback: one perspective per source. Empty if unused."
     )
+
+
+class SummaryTranslation(BaseModel):
+    headline: str = Field(description="English headline translated from the Chinese digest headline.")
+    body: str = Field(description="English body translated from the Chinese digest body.")
+    short_topic_name: str | None = Field(
+        default=None,
+        description="A concise English topic label suitable for navigation tabs.",
+    )
+    perspective_groups: list[PerspectiveGroupItem] = Field(
+        default_factory=list,
+        description="Perspective groups translated to English while preserving the exact source grouping.",
+    )
+
+
+class LabelTranslation(BaseModel):
+    translation: str = Field(description="Concise English translation for the provided Chinese label.")
 
 
 class MacroTopicAssignment(BaseModel):
@@ -119,6 +164,56 @@ class Summarizer:
             except Exception as exc:
                 logger.error("Summarization failed for cluster '%s': %s", cluster.topic_category, exc)
         return results
+
+    def translate_report_content(
+        self,
+        summaries: list[ClusterSummary],
+        hot_topics: list[dict[str, object]] | None = None,
+        focus_storylines: list[dict[str, object]] | None = None,
+    ) -> bool:
+        if not summaries:
+            return False
+
+        hot_topics = hot_topics or []
+        focus_storylines = focus_storylines or []
+        label_cache: dict[str, str] = {}
+
+        try:
+            for summary in summaries:
+                self._translate_cluster_summary(summary)
+
+            for summary in summaries:
+                if summary.storyline_name:
+                    summary.storyline_name_en = label_cache.setdefault(
+                        summary.storyline_name,
+                        self._translate_short_label(summary.storyline_name),
+                    )
+                if summary.macro_topic_name:
+                    summary.macro_topic_name_en = label_cache.setdefault(
+                        summary.macro_topic_name,
+                        self._translate_short_label(summary.macro_topic_name),
+                    )
+
+            for family in hot_topics:
+                family_name = str(family.get("macro_topic_name") or family.get("storyline_name") or "").strip()
+                if not family_name:
+                    continue
+                translation = label_cache.setdefault(family_name, self._translate_short_label(family_name))
+                family["macro_topic_name_en"] = translation
+                family["storyline_name_en"] = translation
+
+            for family in focus_storylines:
+                family_name = str(family.get("storyline_name") or "").strip()
+                if not family_name:
+                    continue
+                translation = label_cache.setdefault(family_name, self._translate_short_label(family_name))
+                family["storyline_name_en"] = translation
+
+            return True
+        except Exception as exc:
+            logger.warning("English translation failed; rendering Chinese-only report: %s", exc)
+            self._clear_translated_report_content(summaries, hot_topics, focus_storylines)
+            return False
 
     def classify_macro_topics(self, clusters: list[ArticleCluster]) -> list[dict[str, str | int | None]]:
         if not clusters:
@@ -582,6 +677,141 @@ class Summarizer:
             macro_topic_icon_key=cluster.macro_topic_icon_key,
             macro_topic_member_count=cluster.macro_topic_member_count,
         )
+
+    def _translate_cluster_summary(self, summary: ClusterSummary) -> None:
+        headline = _extract_headline(summary.summary)
+        body = _body_only(summary.summary)
+        if not headline or not body:
+            raise ValueError(f"Missing structured Chinese summary for '{summary.cluster.topic_category}'")
+
+        perspective_groups = [
+            {
+                "sources": list(group.sources),
+                "perspective": group.perspective,
+            }
+            for group in summary.grouped_perspectives
+        ]
+        prompt_payload = {
+            "headline": headline,
+            "body": body,
+            "short_topic_name": summary.short_topic_name or "",
+            "perspective_groups": perspective_groups,
+        }
+        prompt = (
+            "Translate the following Chinese news digest JSON into English.\n"
+            "Rules:\n"
+            "1. Preserve facts exactly; do not add or remove information.\n"
+            "2. Keep the exact same JSON shape.\n"
+            "3. Keep every source name in perspective_groups exactly unchanged.\n"
+            "4. Preserve the exact source grouping and ordering in perspective_groups.\n"
+            "5. short_topic_name should be concise natural English suitable for a tab label.\n"
+            "6. Return compact JSON only.\n\n"
+            f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2)}"
+        )
+        content = self._json_completion(
+            system_prompt="You are a precise translator for structured news digests.",
+            user_prompt=prompt,
+            max_tokens=min(self.max_tokens, 1400),
+            temperature=0.1,
+        )
+        parsed = SummaryTranslation.model_validate_json(content)
+
+        headline_clean = parsed.headline.strip().strip("*")
+        body_clean = parsed.body.strip()
+        if not headline_clean or not body_clean:
+            raise ValueError(f"Incomplete English translation for '{summary.cluster.topic_category}'")
+
+        translated_groups = self._normalize_perspective_groups(
+            summary.cluster,
+            parsed.perspective_groups,
+            [],
+        )
+        if len(translated_groups) != len(summary.grouped_perspectives):
+            raise ValueError(
+                f"Perspective group count changed during translation for '{summary.cluster.topic_category}'"
+            )
+        for zh_group, en_group in zip(summary.grouped_perspectives, translated_groups):
+            if list(zh_group.sources) != list(en_group.sources):
+                raise ValueError(
+                    f"Perspective grouping changed during translation for '{summary.cluster.topic_category}'"
+                )
+
+        summary.summary_en = f"**{headline_clean}**\n\n{body_clean}"
+        summary.grouped_perspectives_en = translated_groups
+        if parsed.short_topic_name and parsed.short_topic_name.strip():
+            summary.short_topic_name_en = self._clean_short_label(parsed.short_topic_name)
+        elif summary.short_topic_name:
+            summary.short_topic_name_en = self._translate_short_label(summary.short_topic_name)
+
+    def _translate_short_label(self, label: str) -> str:
+        normalized = self._clean_short_label(label)
+        if not normalized:
+            raise ValueError("Cannot translate empty label")
+        if re.fullmatch(r"[A-Za-z0-9&/\- +]+", normalized):
+            return normalized
+
+        prompt = (
+            "Translate this short Chinese news topic label into concise natural English.\n"
+            "Rules:\n"
+            "1. Keep it short, usually 2-5 words.\n"
+            "2. Make it suitable for a navigation tab.\n"
+            "3. Do not add explanations or punctuation decoration.\n"
+            "4. Return JSON only: {\"translation\": \"...\"}\n\n"
+            f"label: {normalized}"
+        )
+        content = self._json_completion(
+            system_prompt="You translate short news labels into concise English.",
+            user_prompt=prompt,
+            max_tokens=120,
+            temperature=0.1,
+        )
+        parsed = LabelTranslation.model_validate_json(content)
+        translation = self._clean_short_label(parsed.translation)
+        if not translation:
+            raise ValueError(f"Empty translated label for '{normalized}'")
+        return translation
+
+    def _clear_translated_report_content(
+        self,
+        summaries: list[ClusterSummary],
+        hot_topics: list[dict[str, object]],
+        focus_storylines: list[dict[str, object]],
+    ) -> None:
+        for summary in summaries:
+            summary.summary_en = None
+            summary.grouped_perspectives_en = []
+            summary.short_topic_name_en = None
+            summary.storyline_name_en = None
+            summary.macro_topic_name_en = None
+        for family in hot_topics:
+            family.pop("macro_topic_name_en", None)
+            family.pop("storyline_name_en", None)
+        for family in focus_storylines:
+            family.pop("storyline_name_en", None)
+
+    def _clean_short_label(self, text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip()).strip(" -:：，,、。.；;")
+
+    def _json_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        temperature: float = 0.1,
+    ) -> str:
+        response = litellm.completion(
+            model=self.model,
+            api_key=self.api_key,
+            api_base=self.base_url,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+        )
+        return response.choices[0].message.content or ""
 
     def _normalize_perspective_groups(
         self,

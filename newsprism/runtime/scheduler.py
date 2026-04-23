@@ -727,7 +727,6 @@ class Scheduler:
         self.publisher = TelegramPublisher(cfg)
         self.renderer = HtmlRenderer(
             output_dir=cfg.output.get("html_dir", "output"),
-            template_name=cfg.output.get("template", "design-a"),
             source_regions={s.name: s.region for s in cfg.sources},
         )
 
@@ -1047,6 +1046,13 @@ class Scheduler:
             )
 
             hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
+            english_cfg = self.cfg.output.get("english", {}) if isinstance(self.cfg.output, dict) else {}
+            if bool(english_cfg.get("enabled", False)):
+                self.summarizer.translate_report_content(
+                    kept_summaries,
+                    hot_topics=hot_topics,
+                    focus_storylines=focus_storylines,
+                )
             focus_storyline_story_count = sum(
                 len(family.get("summaries", []))
                 for family in focus_storylines
