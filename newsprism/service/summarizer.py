@@ -18,6 +18,7 @@ import litellm
 from pydantic import BaseModel, Field
 
 from newsprism.config import Config
+from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,7 @@ class Summarizer:
         self.base_url = cfg.litellm_base_url
         self.temperature = cfg.summarizer.get("temperature", 0.3)
         self.max_tokens = cfg.summarizer.get("max_tokens", 1200)
+        self.completion_compat_kwargs = completion_compat_kwargs(self.model, self.base_url)
         self.hot_topics_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
         self.topic_icon_allowlist = self.hot_topics_cfg.get(
             "icon_allowlist",
@@ -434,6 +436,7 @@ class Summarizer:
             temperature=0.1,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
+            **self.completion_compat_kwargs,
         )
         return response.choices[0].message.content or ""
 
@@ -631,6 +634,7 @@ class Summarizer:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             response_format={"type": "json_object"},
+            **self.completion_compat_kwargs,
         )
 
         try:
@@ -810,6 +814,7 @@ class Summarizer:
             temperature=temperature,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
+            **self.completion_compat_kwargs,
         )
         return response.choices[0].message.content or ""
 

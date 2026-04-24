@@ -37,6 +37,7 @@ from bs4 import BeautifulSoup
 from newsprism.config import Config
 from newsprism.repo import DB_PATH, insert_search_request_event
 from newsprism.service.clusterer import _get_model
+from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.types import Article, ArticleCluster, SearchRequestEvent
 
 logger = logging.getLogger(__name__)
@@ -533,6 +534,7 @@ class ActiveSeeker:
         self.evaluator_model = cfg.evaluator_model
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
+        self.completion_compat_kwargs = completion_compat_kwargs(self.evaluator_model, self.base_url)
 
         self.active_search = cfg.active_search or {}
         self.telemetry_enabled = bool(self.active_search.get("telemetry_enabled", False))
@@ -775,6 +777,7 @@ class ActiveSeeker:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=100,
+                **self.completion_compat_kwargs,
             )
             content = response.choices[0].message.content or "{}"
             start = content.find("{")
@@ -830,6 +833,7 @@ class ActiveSeeker:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=30,
+                **self.completion_compat_kwargs,
             )
             content = response.choices[0].message.content or "{}"
             start = content.find("{")
@@ -1484,6 +1488,7 @@ class ActiveSeeker:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=40,
+                **self.completion_compat_kwargs,
             )
             content = (response.choices[0].message.content or "").strip()
             localized = content.splitlines()[0].strip().strip("\"'")
