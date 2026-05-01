@@ -11,7 +11,7 @@ import logging
 import re
 import struct
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -770,12 +770,38 @@ class HtmlRenderer:
             },
         )
 
+    def _build_day_links(self, report_base: Path, report_date: date, days: int = 3) -> list[dict[str, object]]:
+        links: list[dict[str, object]] = []
+        day_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        day_names_en = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        for offset in range(max(1, days)):
+            current = report_date - timedelta(days=offset)
+            date_str = current.isoformat()
+            report_dir = report_base / date_str
+            available = offset == 0 or (report_dir / "index.html").exists()
+            links.append(
+                {
+                    "date": date_str,
+                    "label": "今天" if offset == 0 else f"{offset}天前",
+                    "label_en": "Today" if offset == 0 else f"{offset}d ago",
+                    "date_display": current.strftime("%m月%d日"),
+                    "date_display_en": current.strftime("%b %d"),
+                    "day_name": day_names[current.weekday()],
+                    "day_name_en": day_names_en[current.weekday()],
+                    "href": f"../{date_str}/" if available else None,
+                    "available": available,
+                    "active": offset == 0,
+                }
+            )
+        return links
+
     def render(
         self,
         summaries: list[ClusterSummary],
         report_date: date,
         hot_topics: list[dict[str, object]] | None = None,
         focus_storylines: list[dict[str, object]] | None = None,
+        positive_summaries: list[ClusterSummary] | None = None,
         report_subdir: str | Path | None = None,
         update_latest: bool = True,
     ) -> Path:
@@ -789,6 +815,7 @@ class HtmlRenderer:
 
         hot_topics = hot_topics or []
         focus_storylines = focus_storylines or []
+        positive_summaries = positive_summaries or []
         english_available = self._english_available(summaries, hot_topics, focus_storylines)
         clusters_ctx = []
         clusters_json: list[dict] = []
@@ -961,6 +988,26 @@ class HtmlRenderer:
                 }
             )
 
+        positive_ctx: list[dict] = []
+        positive_json: list[dict] = []
+        for i, summary in enumerate(positive_summaries, 1):
+            ctx_payload, json_payload = self._build_cluster_payload(
+                summary,
+                i,
+                storyline_display_mode="positive_energy",
+                include_english=english_available,
+            )
+            reason = getattr(summary, "positive_energy_reason", "")
+            score = getattr(summary, "positive_energy_score", 0.0)
+            ctx_payload["positive_seq_index"] = i
+            ctx_payload["positive_reason"] = reason
+            ctx_payload["positive_score"] = score
+            json_payload["positive_seq_index"] = i
+            json_payload["positive_reason"] = reason
+            json_payload["positive_score"] = score
+            positive_ctx.append(ctx_payload)
+            positive_json.append(json_payload)
+
         display_rank = 1
         for family_ctx, family_json in zip(focus_storylines_ctx, focus_storylines_json):
             for member_ctx, member_json in zip(family_ctx["clusters"], family_json["clusters"]):
@@ -978,6 +1025,12 @@ class HtmlRenderer:
 
         focus_storyline_story_count = sum(len(family["clusters"]) for family in focus_storylines_ctx)
         hot_topic_story_count = sum(len(family["clusters"]) for family in hot_topics_ctx)
+        day_nav_cfg = {}
+        try:
+            day_nav_cfg = getattr(self, "day_navigation_cfg", {}) or {}
+        except AttributeError:
+            day_nav_cfg = {}
+        day_link_count = int(day_nav_cfg.get("days", 3)) if isinstance(day_nav_cfg, dict) else 3
 
         common = {
             "report_date": date_str,
@@ -992,10 +1045,12 @@ class HtmlRenderer:
             "focus_storyline_story_count": focus_storyline_story_count,
             "hot_topic_count": len(hot_topics_ctx),
             "hot_topic_story_count": hot_topic_story_count,
+            "positive_story_count": len(positive_ctx),
             "total_cluster_count": len(summaries) + focus_storyline_story_count + hot_topic_story_count,
             "english_available": english_available,
             "available_languages": ["zh", "en"] if english_available else ["zh"],
             "default_language": "zh",
+            "day_links": self._build_day_links(report_base, report_date, day_link_count),
         }
 
         template = self.env.get_template(self.template_file)
@@ -1005,6 +1060,7 @@ class HtmlRenderer:
             sections=sections,
             main_sections=sections,
             focus_storylines=focus_storylines_ctx,
+            positive_stories=positive_ctx,
             hot_topics=hot_topics_ctx,
         )
         html_path = report_dir / "index.html"
@@ -1018,6 +1074,7 @@ class HtmlRenderer:
                     **common,
                     "clusters": clusters_json,
                     "focus_storylines": focus_storylines_json,
+                    "positive_stories": positive_json,
                     "hot_topics": hot_topics_json,
                 },
                 ensure_ascii=False,

@@ -1,5 +1,5 @@
 """Tests for renderer searched article attribution."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 import os
 
@@ -888,3 +888,122 @@ class TestHotTopics:
         assert '<div class="header-stats" aria-label="report stats">' in html
         assert '<nav class="cat-tabs">' in html
         assert '<span class="logo">NewsPrism</span>' in html
+
+    def test_positive_section_renders_after_main_feed_before_focus_overview(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        main_summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Tech-General",
+                articles=[
+                    Article(
+                        url="https://reuters.com/main-positive",
+                        title="Main story",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Main story body.",
+                    )
+                ],
+            ),
+            summary="**常规追踪故事**\n\n常规追踪内容。",
+            perspectives={},
+        )
+        positive_summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Culture",
+                articles=[
+                    Article(
+                        url="https://bbc.com/fun",
+                        title="Museum opens a playful exhibition",
+                        source_name="BBC",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Culture body.",
+                    ),
+                    Article(
+                        url="https://bbc.com/fun-duplicate",
+                        title="Museum opens a playful exhibition update",
+                        source_name="BBC",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Culture body update.",
+                    ),
+                ],
+            ),
+            summary="**博物馆开放趣味新展**\n\n新展面向家庭观众，互动项目轻松有趣。",
+            perspectives={},
+        )
+        positive_summary.positive_energy_reason = "轻松文化好消息"
+        hot_summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/hot-focus",
+                        title="Hot topic",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Hot topic body.",
+                    )
+                ],
+            ),
+            summary="**热点专题故事**\n\n热点专题内容。",
+            perspectives={},
+            storyline_role="core",
+        )
+
+        html_path = renderer.render(
+            [main_summary],
+            date(2026, 3, 27),
+            hot_topics=[
+                {
+                    "dom_id": "hot-topic-1",
+                    "macro_topic_key": "focus",
+                    "macro_topic_name": "今日焦点",
+                    "topic_icon_key": "globe",
+                    "summaries": [hot_summary],
+                }
+            ],
+            positive_summaries=[positive_summary],
+        )
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+        tree = lxml_html.fromstring(html)
+
+        assert html.index("常规追踪故事") < html.index("今日正能量") < html.index("今日焦点结构")
+        assert payload["positive_story_count"] == 1
+        assert payload["positive_stories"][0]["headline"] == "博物馆开放趣味新展"
+        assert payload["positive_stories"][0]["positive_reason"] == "轻松文化好消息"
+        assert len(tree.xpath('//*[@id="positive-1"]//a[@href="https://bbc.com/fun-duplicate"]')) == 1
+        assert len(tree.xpath('//*[@id="positive-1"]//a[contains(@class, "src-chip-link")]')) == 1
+
+    def test_day_selector_marks_current_and_missing_days(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        previous = tmp_path / "2026-03-26"
+        previous.mkdir()
+        (previous / "index.html").write_text("previous", encoding="utf-8")
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/day-selector",
+                        title="Day selector story",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Day selector body.",
+                    )
+                ],
+            ),
+            summary="**日期选择故事**\n\n内容。",
+            perspectives={},
+        )
+
+        html_path = renderer.render([summary], date(2026, 3, 27))
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+        tree = lxml_html.fromstring(html_path.read_text(encoding="utf-8"))
+
+        assert [day["date"] for day in payload["day_links"]] == ["2026-03-27", "2026-03-26", "2026-03-25"]
+        assert payload["day_links"][0]["active"] is True
+        assert payload["day_links"][1]["available"] is True
+        assert payload["day_links"][2]["available"] is False
+        assert tree.xpath('//a[contains(@class, "day-link") and contains(@class, "active") and @href="../2026-03-27/"]')
+        assert tree.xpath('//a[contains(@class, "day-link") and @href="../2026-03-26/"]')
+        assert tree.xpath('//span[contains(@class, "day-link") and contains(@class, "disabled")]')

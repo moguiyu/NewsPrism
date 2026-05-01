@@ -261,6 +261,57 @@
       border-color: var(--hot-tab-border);
     }
 
+    .day-selector {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 12px;
+    }
+
+    .day-selector::-webkit-scrollbar {
+      display: none;
+    }
+
+    .day-link {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: baseline;
+      gap: 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--chip-bg);
+      color: var(--muted);
+      padding: 5px 11px;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+
+    .day-link:hover {
+      color: var(--text);
+      border-color: var(--border-hover);
+    }
+
+    .day-link.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: var(--cat-active-bg);
+      box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .day-link.disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
+    .day-link .date-part {
+      color: var(--text);
+    }
+
     .cat-tabs {
       display: flex;
       gap: 8px;
@@ -574,6 +625,93 @@
 
     .hot-topic-block .card:hover {
       border-color: rgba(255, 123, 76, 0.6);
+    }
+
+    .positive-energy {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 16px 18px 18px;
+      border: 1px solid rgba(55, 211, 153, 0.18);
+      border-radius: calc(var(--radius) + 2px);
+      background: linear-gradient(180deg, rgba(55, 211, 153, 0.09) 0%, rgba(255, 255, 255, 0.015) 72%);
+      box-shadow: 0 8px 24px rgba(55, 211, 153, 0.08);
+    }
+
+    .positive-energy .cat-label {
+      color: #48d99f;
+      margin-bottom: 0;
+    }
+
+    .positive-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .positive-counter {
+      color: #48d99f;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      opacity: 0.92;
+      white-space: nowrap;
+    }
+
+    .positive-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+    }
+
+    .positive-card {
+      background: rgba(255, 255, 255, 0.035);
+      border-color: rgba(55, 211, 153, 0.14);
+      box-shadow: none;
+    }
+
+    .positive-card:hover {
+      transform: none;
+      border-color: rgba(55, 211, 153, 0.28);
+      box-shadow: none;
+    }
+
+    .positive-card .card-body {
+      padding: 15px 17px 10px;
+    }
+
+    .positive-card .card-title {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .positive-card .card-summary {
+      font-size: 13.5px;
+      line-height: 1.7;
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .positive-reason {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      margin-bottom: 8px;
+      color: #48d99f;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .positive-card .card-footer {
+      padding: 10px 17px 14px;
+    }
+
+    .positive-card .src-chip {
+      font-size: 12px;
+      padding: 3px 10px;
     }
 
     .hot-topic-header {
@@ -970,6 +1108,15 @@
         padding-bottom: 10px;
       }
 
+      .day-selector {
+        padding-bottom: 8px;
+      }
+
+      .day-link {
+        font-size: 11.5px;
+        padding: 4px 9px;
+      }
+
       .cat-tab {
         padding: 5px 12px;
         font-size: 12.5px;
@@ -1026,6 +1173,21 @@
       .focus-storyline-block {
         padding: 14px 14px 0;
         gap: 12px;
+      }
+
+      .positive-energy {
+        padding: 14px;
+        gap: 12px;
+      }
+
+      .positive-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+      }
+
+      .positive-grid {
+        grid-template-columns: 1fr;
       }
 
       .overview-item {
@@ -1178,6 +1340,23 @@
           </div>
         </div>
       </div>
+      {% if day_links %}
+      <div class="day-selector" aria-label="report day selector">
+        {% for day in day_links %}
+          {% if day.available %}
+          <a class="day-link{% if day.active %} active{% endif %}" href="{{ day.href }}">
+            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+          </a>
+          {% else %}
+          <span class="day-link disabled" aria-disabled="true">
+            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+          </span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
       <nav class="cat-tabs">
         <button class="cat-tab active" onclick="filterView(this,'all','all')">{{ bilingual_text('全部速览', 'All overview') }}</button>
         {% for hot in hot_topics %}
@@ -1191,34 +1370,6 @@
   </div>
 
   <main>
-    {% if hot_topics %}
-    <section class="all-overview" data-all-overview="true">
-      <div class="all-overview-header">
-        <div>
-          <div class="overview-kicker">{{ bilingual_text('今日焦点结构', 'Today\'s focus map') }}</div>
-          <div class="overview-copy">{{ bilingual_text('先看常规追踪，再从下列热点主线进入专题展开。', 'Scan the regular coverage first, then jump into the featured topic threads below.') }}</div>
-        </div>
-      </div>
-      <div class="overview-list">
-        {% for hot in hot_topics %}
-        <article class="overview-item">
-          <div>
-            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
-            <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
-            <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
-            <div class="overview-anchors">
-              {% for preview in hot.preview_clusters %}
-              <span class="overview-anchor"><span class="card-index">{{ preview.hot_seq_index }}.</span>{{ bilingual_text(preview.headline, preview.headline_en or preview.headline) }}</span>
-              {% endfor %}
-            </div>
-          </div>
-          <button class="overview-cta" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')">{{ bilingual_text('进入专题', 'Open topic') }}</button>
-        </article>
-        {% endfor %}
-      </div>
-    </section>
-    {% endif %}
-
     <div class="all-feed" data-all-feed="true">
     {% for line in focus_storylines %}
     <section class="focus-storyline-block" data-focus-storyline="true">
@@ -1352,6 +1503,71 @@
     </div>
     </div>
 
+    {% if positive_stories %}
+    <section class="positive-energy" data-positive-energy="true">
+      <div class="positive-header">
+        <div class="cat-label"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日正能量', 'Positive highlights') }}</div>
+        <div class="positive-counter">{{ bilingual_text(positive_story_count ~ ' 条轻量好消息', positive_story_count ~ ' uplifting stories') }}</div>
+      </div>
+      <div class="positive-grid">
+        {% for c in positive_stories %}
+        <article class="positive-card card" id="positive-{{ c.positive_seq_index }}">
+          <div class="card-body">
+            <div class="card-title">
+              <span class="card-title-text"><span class="card-index">{{ c.positive_seq_index }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
+            </div>
+            {% if c.positive_reason %}
+            <div class="positive-reason">{{ bilingual_text(c.positive_reason, c.positive_reason) }}</div>
+            {% endif %}
+            <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
+          </div>
+          {% if c.footer_sources %}
+          <div class="card-footer">
+            <div class="source-row">
+              <div class="source-chips">
+                {% for src in c.footer_sources %}
+                <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                </a>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% if hot_topics %}
+    <section class="all-overview" data-all-overview="true">
+      <div class="all-overview-header">
+        <div>
+          <div class="overview-kicker">{{ bilingual_text('今日焦点结构', 'Today\'s focus map') }}</div>
+          <div class="overview-copy">{{ bilingual_text('先看常规追踪与轻量好消息，再从下列热点主线进入专题展开。', 'Scan the regular coverage and lighter highlights first, then jump into the featured topic threads below.') }}</div>
+        </div>
+      </div>
+      <div class="overview-list">
+        {% for hot in hot_topics %}
+        <article class="overview-item">
+          <div>
+            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
+            <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
+            <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
+            <div class="overview-anchors">
+              {% for preview in hot.preview_clusters %}
+              <span class="overview-anchor"><span class="card-index">{{ preview.hot_seq_index }}.</span>{{ bilingual_text(preview.headline, preview.headline_en or preview.headline) }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          <button class="overview-cta" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')">{{ bilingual_text('进入专题', 'Open topic') }}</button>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
     {% if hot_topics %}
     <section class="hot-topic-stage" data-hot-stage="true" style="display:none;">
       {% for hot in hot_topics %}
@@ -1471,6 +1687,10 @@
       tab.classList.add('active');
 
       document.querySelectorAll('[data-all-overview]').forEach(block => {
+        setBlockVisibility(block, mode === 'all');
+      });
+
+      document.querySelectorAll('[data-positive-energy]').forEach(block => {
         setBlockVisibility(block, mode === 'all');
       });
 

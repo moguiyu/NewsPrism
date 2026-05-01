@@ -106,6 +106,22 @@ class LabelTranslation(BaseModel):
     translation: str = Field(description="Concise English translation for the provided Chinese label.")
 
 
+class PositiveEnergyItem(BaseModel):
+    cluster_index: int = Field(description="1-based cluster index from the provided candidate list.")
+    positive: bool = Field(description="Whether the story is generally positive or uplifting.")
+    fun: bool = Field(description="Whether the story is generally fun, light, delightful, or entertaining.")
+    low_conflict: bool = Field(description="Whether the story is low-conflict and not dominated by harm, war, disaster, scandal, or market stress.")
+    confidence: float = Field(description="Confidence between 0 and 1.")
+    reason: str = Field(description="Short Chinese reason for inclusion or exclusion.")
+
+
+class PositiveEnergyBatch(BaseModel):
+    items: list[PositiveEnergyItem] = Field(
+        default_factory=list,
+        description="One classification item per candidate story.",
+    )
+
+
 class MacroTopicAssignment(BaseModel):
     cluster_index: int = Field(description="1-based cluster index from the provided candidate list.")
     macro_topic_key: str = Field(description="Stable ASCII key shared by related clusters.")
@@ -291,6 +307,61 @@ class Summarizer:
                 )
         return relations
 
+    def classify_positive_energy(self, summaries: list[ClusterSummary]) -> list[dict[str, object]]:
+        """Classify main-lane summaries for the 今日正能量 section."""
+        if not summaries:
+            return []
+
+        prompt = self._build_positive_energy_prompt(summaries)
+        try:
+            content = self._json_completion(
+                system_prompt=(
+                    "You classify daily news digests for a light positive highlights section. "
+                    "Return compact JSON only."
+                ),
+                user_prompt=prompt,
+                max_tokens=min(self.max_tokens, max(500, len(summaries) * 130)),
+                temperature=0.1,
+            )
+            parsed = self._parse_positive_energy_content(content)
+            if parsed is None:
+                logger.warning("Retrying positive-energy classification with compact JSON prompt after parse failure")
+                retry_content = self._json_completion(
+                    system_prompt=(
+                        "You classify daily news digests for a light positive highlights section. "
+                        "Return compact JSON only."
+                    ),
+                    user_prompt=f"{prompt}\n\n最后要求：只输出紧凑 JSON，不要解释，不要 Markdown。",
+                    max_tokens=min(self.max_tokens, max(500, len(summaries) * 130)),
+                    temperature=0.1,
+                )
+                parsed = self._parse_positive_energy_content(retry_content)
+            if parsed is None:
+                logger.error("Failed to parse positive-energy classification output")
+                return []
+        except Exception as exc:
+            logger.warning("Positive-energy classification failed; section will be omitted: %s", exc)
+            return []
+
+        valid_indices = set(range(1, len(summaries) + 1))
+        normalized: list[dict[str, object]] = []
+        seen: set[int] = set()
+        for item in parsed.items:
+            if item.cluster_index not in valid_indices or item.cluster_index in seen:
+                continue
+            seen.add(item.cluster_index)
+            normalized.append(
+                {
+                    "cluster_index": item.cluster_index,
+                    "positive": bool(item.positive),
+                    "fun": bool(item.fun),
+                    "low_conflict": bool(item.low_conflict),
+                    "confidence": max(0.0, min(1.0, float(item.confidence))),
+                    "reason": item.reason.strip(),
+                }
+            )
+        return normalized
+
     def name_storyline(self, anchor_clusters: list[ArticleCluster]) -> str | None:
         if not anchor_clusters:
             return None
@@ -468,6 +539,20 @@ class Summarizer:
                     return None
         return None
 
+    def _parse_positive_energy_content(self, content: str) -> PositiveEnergyBatch | None:
+        if not content.strip():
+            return None
+        try:
+            return PositiveEnergyBatch.model_validate_json(content)
+        except Exception:
+            extracted = self._extract_json_object(content)
+            if extracted and extracted != content:
+                try:
+                    return PositiveEnergyBatch.model_validate_json(extracted)
+                except Exception:
+                    return None
+        return None
+
     def _extract_json_object(self, content: str) -> str | None:
         start = content.find("{")
         end = content.rfind("}")
@@ -618,6 +703,33 @@ class Summarizer:
                 }
             )
         return normalized
+
+    def _build_positive_energy_prompt(self, summaries: list[ClusterSummary]) -> str:
+        candidates = []
+        for index, summary in enumerate(summaries, 1):
+            headline = _extract_headline(summary.summary) or summary.cluster.topic_category
+            body = _body_only(summary.summary)
+            candidates.append(
+                {
+                    "cluster_index": index,
+                    "topic_category": summary.cluster.topic_category,
+                    "headline": headline,
+                    "body": body[:500],
+                    "sources": list(summary.cluster.sources),
+                    "article_titles": [article.title for article in summary.cluster.articles[:4]],
+                }
+            )
+        return (
+            "请从每日新闻主线中判断哪些适合放入“今日正能量”轻量板块。\n"
+            "选择标准：\n"
+            "1. positive=true 表示故事整体积极、建设性、温暖、鼓舞或有明确好消息。\n"
+            "2. fun=true 表示故事轻松、有趣、文化娱乐、体育、科学发现、生活方式或让读者会心一笑。\n"
+            "3. low_conflict=true 表示不是战争、灾害、伤亡、严重政治冲突、犯罪、制裁、诉讼、市场暴跌或丑闻主导。\n"
+            "4. 可以三项都 false；不要为了凑数强行标 positive。\n"
+            "5. reason 用不超过 24 个中文字符说明原因。\n"
+            "只输出 JSON：{\"items\":[{\"cluster_index\":1,\"positive\":true,\"fun\":false,\"low_conflict\":true,\"confidence\":0.83,\"reason\":\"...\"}]}\n\n"
+            f"候选新闻：\n{json.dumps(candidates, ensure_ascii=False, indent=2)}"
+        )
 
     def _summarize_cluster(self, cluster: ArticleCluster) -> ClusterSummary:
         articles_block = self._format_articles(cluster)

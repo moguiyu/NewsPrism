@@ -105,6 +105,13 @@ output:
   latest_symlink: true
   english:
     enabled: true
+  positive_energy:
+    enabled: true
+    min_items: 3
+    max_items: 5
+    min_confidence: 0.55
+  day_navigation:
+    days: 3
   hot_topics:
     enabled: true
     max_topic_tabs: 3
