@@ -13,6 +13,7 @@ import logging
 import re
 import shutil
 import time
+import urllib.parse
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -666,6 +667,91 @@ def select_hot_topic_families(
     return hot_topics, focus_storylines, main_summaries
 
 
+def _summary_primary_domain(summary: ClusterSummary) -> str:
+    for article in summary.cluster.articles:
+        parsed = urllib.parse.urlparse(article.url)
+        domain = parsed.netloc.lower().removeprefix("www.").strip(".")
+        if domain:
+            return domain
+    if summary.cluster.sources:
+        return summary.cluster.sources[0].lower()
+    return ""
+
+
+def select_positive_energy_summaries(
+    summaries: list[ClusterSummary],
+    classifications: list[dict[str, object]],
+    cfg: Config,
+) -> list[ClusterSummary]:
+    positive_cfg = cfg.output.get("positive_energy", {}) if isinstance(cfg.output, dict) else {}
+    if not bool(positive_cfg.get("enabled", True)):
+        return []
+
+    min_items = max(1, int(positive_cfg.get("min_items", 3)))
+    max_items = max(min_items, int(positive_cfg.get("max_items", 5)))
+    min_confidence = float(positive_cfg.get("min_confidence", 0.55))
+
+    by_index = {
+        int(item.get("cluster_index", 0)): item
+        for item in classifications
+        if isinstance(item.get("cluster_index"), int)
+    }
+    candidates: list[tuple[float, int, ClusterSummary, dict[str, object]]] = []
+    for index, summary in enumerate(summaries, 1):
+        item = by_index.get(index)
+        if item is None:
+            continue
+        positive = bool(item.get("positive"))
+        fun = bool(item.get("fun"))
+        low_conflict = bool(item.get("low_conflict"))
+        confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0) or 0.0)))
+        if not low_conflict or not (positive or fun) or confidence < min_confidence:
+            continue
+        score = confidence + (0.2 if positive else 0.0) + (0.15 if fun else 0.0)
+        candidates.append((score, index, summary, item))
+
+    if len(candidates) < min_items:
+        return []
+
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    selected: list[tuple[float, int, ClusterSummary, dict[str, object]]] = []
+    selected_ids: set[int] = set()
+    domains: set[str] = set()
+
+    for candidate in candidates:
+        _, index, summary, _item = candidate
+        domain = _summary_primary_domain(summary)
+        if domain and domain in domains:
+            continue
+        selected.append(candidate)
+        selected_ids.add(index)
+        if domain:
+            domains.add(domain)
+        if len(selected) >= max_items:
+            break
+
+    if len(selected) < min_items:
+        for candidate in candidates:
+            _, index, _summary, _item = candidate
+            if index in selected_ids:
+                continue
+            selected.append(candidate)
+            selected_ids.add(index)
+            if len(selected) >= max_items or len(selected) >= min_items:
+                break
+
+    if len(selected) < min_items:
+        return []
+
+    selected.sort(key=lambda row: row[1])
+    results: list[ClusterSummary] = []
+    for score, _index, summary, item in selected[:max_items]:
+        summary.positive_energy_score = round(score, 4)  # type: ignore[attr-defined]
+        summary.positive_energy_reason = str(item.get("reason") or "").strip()  # type: ignore[attr-defined]
+        results.append(summary)
+    return results
+
+
 def _warn_on_storyline_near_miss(clusters: list[ArticleCluster], hot_keys: set[str], stage: str) -> None:
     grouped = _group_clusters_by_storyline(clusters)
     for key, members in grouped.items():
@@ -729,6 +815,7 @@ class Scheduler:
             output_dir=cfg.output.get("html_dir", "output"),
             source_regions={s.name: s.region for s in cfg.sources},
         )
+        self.renderer.day_navigation_cfg = cfg.output.get("day_navigation", {}) if isinstance(cfg.output, dict) else {}
 
     def _resolve_output_path(self, configured: str | None, default: str) -> Path:
         path = Path(configured or default)
@@ -1046,6 +1133,15 @@ class Scheduler:
             )
 
             hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
+            positive_summaries: list[ClusterSummary] = []
+            positive_cfg = self.cfg.output.get("positive_energy", {}) if isinstance(self.cfg.output, dict) else {}
+            if bool(positive_cfg.get("enabled", True)) and main_summaries:
+                positive_classifications = self.summarizer.classify_positive_energy(main_summaries)
+                positive_summaries = select_positive_energy_summaries(
+                    main_summaries,
+                    positive_classifications,
+                    self.cfg,
+                )
             english_cfg = self.cfg.output.get("english", {}) if isinstance(self.cfg.output, dict) else {}
             if bool(english_cfg.get("enabled", False)):
                 self.summarizer.translate_report_content(
@@ -1095,6 +1191,7 @@ class Scheduler:
                 today,
                 hot_topics=hot_topics,
                 focus_storylines=focus_storylines,
+                positive_summaries=positive_summaries,
                 report_subdir=self._staging_subdir if not push_after_render else None,
                 update_latest=push_after_render,
             )
