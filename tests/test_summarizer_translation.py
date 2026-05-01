@@ -114,3 +114,79 @@ def test_translate_report_content_clears_partial_english_on_failure(monkeypatch)
     assert summary.macro_topic_name_en is None
     assert "macro_topic_name_en" not in hot_topics[0]
     assert "storyline_name_en" not in focus_storylines[0]
+
+
+def test_classify_positive_energy_parses_json_with_wrapping(monkeypatch):
+    summarizer = Summarizer(load_config())
+    summary = _build_summary()
+
+    def fake_json_completion(system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0.1) -> str:
+        assert "今日正能量" in user_prompt
+        return (
+            "```json\n"
+            + json.dumps(
+                {
+                    "items": [
+                        {
+                            "cluster_index": 1,
+                            "positive": True,
+                            "fun": False,
+                            "low_conflict": True,
+                            "confidence": 0.86,
+                            "reason": "建设性进展",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+            + "\n```"
+        )
+
+    monkeypatch.setattr(summarizer, "_json_completion", fake_json_completion)
+
+    result = summarizer.classify_positive_energy([summary])
+
+    assert result == [
+        {
+            "cluster_index": 1,
+            "positive": True,
+            "fun": False,
+            "low_conflict": True,
+            "confidence": 0.86,
+            "reason": "建设性进展",
+        }
+    ]
+
+
+def test_classify_positive_energy_retries_after_malformed_json(monkeypatch):
+    summarizer = Summarizer(load_config())
+    summary = _build_summary()
+    calls = {"count": 0}
+
+    def fake_json_completion(system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0.1) -> str:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return "not json"
+        return json.dumps(
+            {
+                "items": [
+                    {
+                        "cluster_index": 1,
+                        "positive": False,
+                        "fun": True,
+                        "low_conflict": True,
+                        "confidence": 0.74,
+                        "reason": "轻松有趣",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(summarizer, "_json_completion", fake_json_completion)
+
+    result = summarizer.classify_positive_energy([summary])
+
+    assert calls["count"] == 2
+    assert result[0]["fun"] is True
+    assert result[0]["reason"] == "轻松有趣"
