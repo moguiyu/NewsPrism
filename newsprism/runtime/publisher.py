@@ -71,6 +71,7 @@ class TelegramPublisher:
     async def publish_rendered(self, data_json_path: str | Path, report_date: date) -> None:
         payload = json.loads(Path(data_json_path).read_text(encoding="utf-8"))
         clusters = payload.get("clusters", [])
+        positive_stories = payload.get("positive_stories", [])
         items = [
             {
                 "topic_category": str(cluster.get("topic", "")),
@@ -79,6 +80,14 @@ class TelegramPublisher:
             for cluster in clusters
             if cluster.get("summary")
         ]
+        items.extend(
+            {
+                "topic_category": str(cluster.get("topic", "")),
+                "summary": str(cluster.get("summary", "")),
+            }
+            for cluster in positive_stories
+            if cluster.get("summary")
+        )
         await self._publish_items(items, report_date)
 
     async def _publish_items(self, items: list[dict[str, str]], report_date: date) -> None:

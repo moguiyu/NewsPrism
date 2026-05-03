@@ -879,15 +879,19 @@ class TestHotTopics:
         assert ".site-header {\n        background: transparent;" in html
         assert "position: static;" in html
         assert ".header-brand {\n        display: none;" in html
-        assert ".header-stats {\n        flex-wrap: nowrap;" in html
+        assert ".header-tools {\n        justify-content: flex-start;" in html
         assert "overflow-x: auto;" in html
         assert ".all-overview {\n        gap: 10px;" in html
         assert ".overview-list {\n        display: grid;" in html
         assert "grid-auto-flow: column;" in html
         assert ".overview-anchors {\n        display: none;" in html
-        assert '<div class="header-stats" aria-label="report stats">' in html
+        assert '<div class="footer-stats" aria-label="report stats">' in html
         assert '<nav class="cat-tabs">' in html
         assert '<span class="logo">NewsPrism</span>' in html
+        tree = lxml_html.fromstring(html)
+        assert not tree.xpath('//*[@class="site-header"]//*[@aria-label="report stats"]')
+        assert tree.xpath('//footer//*[@aria-label="report stats"]')
+        assert not tree.xpath('//button[contains(@class, "positive-tab")]')
 
     def test_positive_section_renders_after_main_feed_before_focus_overview(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -967,10 +971,19 @@ class TestHotTopics:
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
         tree = lxml_html.fromstring(html)
 
-        assert html.index("常规追踪故事") < html.index("今日正能量") < html.index("今日焦点结构")
+        all_feed = tree.xpath('//*[@data-all-feed="true"]')[0]
+        positive_section = tree.xpath('//*[@data-positive-energy="true"]')[0]
+        focus_overview = tree.xpath('//*[@data-all-overview="true"]')[0]
+
+        assert focus_overview.sourceline < all_feed.sourceline < positive_section.sourceline
         assert payload["positive_story_count"] == 1
+        assert payload["cluster_count"] == 1
+        assert payload["total_cluster_count"] == 3
+        assert payload["clusters"][0]["headline"] == "常规追踪故事"
         assert payload["positive_stories"][0]["headline"] == "博物馆开放趣味新展"
         assert payload["positive_stories"][0]["positive_reason"] == "轻松文化好消息"
+        assert tree.xpath('//button[contains(@class, "positive-tab") and contains(@onclick, "positive")]')
+        assert not tree.xpath('//*[@data-main-feed-card and contains(., "博物馆开放趣味新展")]')
         assert len(tree.xpath('//*[@id="positive-1"]//a[@href="https://bbc.com/fun-duplicate"]')) == 1
         assert len(tree.xpath('//*[@id="positive-1"]//a[contains(@class, "src-chip-link")]')) == 1
 
@@ -1005,5 +1018,8 @@ class TestHotTopics:
         assert payload["day_links"][1]["available"] is True
         assert payload["day_links"][2]["available"] is False
         assert tree.xpath('//a[contains(@class, "day-link") and contains(@class, "active") and @href="../2026-03-27/"]')
+        assert tree.xpath('//*[@class="header-tools"]//*[@aria-label="report day selector"]')
+        assert not tree.xpath('//a[contains(@class, "day-link") and contains(@class, "active")]//*[contains(@class, "date-part")]')
         assert tree.xpath('//a[contains(@class, "day-link") and @href="../2026-03-26/"]')
+        assert tree.xpath('//a[contains(@class, "day-link") and @href="../2026-03-26/"]//*[contains(@class, "date-part") and contains(., "03月26日")]')
         assert tree.xpath('//span[contains(@class, "day-link") and contains(@class, "disabled")]')

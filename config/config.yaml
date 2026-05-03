@@ -65,6 +65,80 @@ filter:
   keywords_file: "config/keywords.txt"
   min_topic_score: 0.1
   max_topics_per_article: 3
+  positive_energy_pre_filter:
+    enabled: true
+    topic: "Positive Energy"
+    include_keywords:
+      - "whale calf"
+      - "baby whale"
+      - "baby animal"
+      - "cute"
+      - "adorable"
+      - "heartwarming"
+      - "happy"
+      - "delight"
+      - "joy"
+      - "funny"
+      - "rescued"
+      - "rescue"
+      - "reunion"
+      - "festival"
+      - "celebration"
+      - "breakthrough"
+      - "小鲸"
+      - "鲸宝宝"
+      - "幼鲸"
+      - "动物宝宝"
+      - "可爱"
+      - "暖心"
+      - "开心"
+      - "快乐"
+      - "有趣"
+      - "搞笑"
+      - "治愈"
+      - "团圆"
+      - "庆祝"
+      - "节日"
+      - "获救"
+    exclude_keywords:
+      - "war"
+      - "attack"
+      - "death"
+      - "dead"
+      - "killed"
+      - "injury"
+      - "injured"
+      - "crime"
+      - "shooting"
+      - "murder"
+      - "lawsuit"
+      - "scandal"
+      - "disaster"
+      - "crash"
+      - "sanction"
+      - "tariff"
+      - "conflict"
+      - "crisis"
+      - "collapse"
+      - "plunge"
+      - "战争"
+      - "袭击"
+      - "死亡"
+      - "遇难"
+      - "伤亡"
+      - "受伤"
+      - "犯罪"
+      - "枪击"
+      - "谋杀"
+      - "诉讼"
+      - "丑闻"
+      - "灾难"
+      - "坠毁"
+      - "制裁"
+      - "关税"
+      - "冲突"
+      - "危机"
+      - "暴跌"
 
 # ─── CLUSTERING ────────────────────────────────────────────────────────────────
 clustering:
@@ -107,9 +181,9 @@ output:
     enabled: true
   positive_energy:
     enabled: true
-    min_items: 3
+    min_items: 1
     max_items: 5
-    min_confidence: 0.55
+    min_confidence: 0.78
   day_navigation:
     days: 3
   hot_topics:

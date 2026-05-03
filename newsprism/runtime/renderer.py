@@ -55,6 +55,7 @@ _BROAD_CATEGORY_MAP: dict[str, str] = {
     "Games - Platform": "文化艺术",
     "Games - General": "文化艺术",
     "Culture": "文化艺术",
+    "Positive Energy": "文化艺术",
     # 体育运动
     "Sports": "体育运动",
     # 科学健康
@@ -1046,7 +1047,7 @@ class HtmlRenderer:
             "hot_topic_count": len(hot_topics_ctx),
             "hot_topic_story_count": hot_topic_story_count,
             "positive_story_count": len(positive_ctx),
-            "total_cluster_count": len(summaries) + focus_storyline_story_count + hot_topic_story_count,
+            "total_cluster_count": len(summaries) + len(positive_ctx) + focus_storyline_story_count + hot_topic_story_count,
             "english_available": english_available,
             "available_languages": ["zh", "en"] if english_available else ["zh"],
             "default_language": "zh",

@@ -5,6 +5,7 @@ from newsprism.runtime.scheduler import (
     select_hot_topic_families,
     select_positive_energy_summaries,
     select_report_clusters,
+    split_positive_energy_lane,
 )
 from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
 
@@ -476,10 +477,10 @@ def test_select_positive_energy_summaries_enforces_domain_diversity():
         _positive_summary("D", "https://third.example/d", "D science story"),
     ]
     classifications = [
-        {"cluster_index": 1, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.95, "reason": "好消息A"},
-        {"cluster_index": 2, "positive": True, "fun": True, "low_conflict": True, "confidence": 0.9, "reason": "好消息B"},
-        {"cluster_index": 3, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.8, "reason": "文化轻松"},
-        {"cluster_index": 4, "positive": False, "fun": True, "low_conflict": True, "confidence": 0.75, "reason": "科学有趣"},
+        {"cluster_index": 1, "good_fit": True, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.95, "reason": "好消息A"},
+        {"cluster_index": 2, "good_fit": True, "positive": True, "fun": True, "low_conflict": True, "confidence": 0.9, "reason": "好消息B"},
+        {"cluster_index": 3, "good_fit": True, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.8, "reason": "文化轻松"},
+        {"cluster_index": 4, "good_fit": True, "positive": False, "fun": True, "low_conflict": True, "confidence": 0.75, "reason": "科学有趣"},
     ]
 
     selected = select_positive_energy_summaries(summaries, classifications, cfg)
@@ -491,6 +492,9 @@ def test_select_positive_energy_summaries_enforces_domain_diversity():
     ]
     assert selected[0].positive_energy_reason == "好消息B"
 
+    regular = split_positive_energy_lane(summaries, selected)
+    assert [summary.cluster.articles[0].url for summary in regular] == ["https://same.example/a"]
+
 
 def test_select_positive_energy_summaries_omits_when_fewer_than_minimum_eligible():
     cfg = _config(main_limit=6)
@@ -501,9 +505,73 @@ def test_select_positive_energy_summaries_omits_when_fewer_than_minimum_eligible
         _positive_summary("C", "https://c.example/1", "C market stress"),
     ]
     classifications = [
-        {"cluster_index": 1, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.92, "reason": "温暖"},
-        {"cluster_index": 2, "positive": True, "fun": False, "low_conflict": False, "confidence": 0.92, "reason": "冲突"},
-        {"cluster_index": 3, "positive": False, "fun": False, "low_conflict": True, "confidence": 0.92, "reason": "不轻松"},
+        {"cluster_index": 1, "good_fit": True, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.92, "reason": "温暖"},
+        {"cluster_index": 2, "good_fit": True, "positive": True, "fun": False, "low_conflict": False, "confidence": 0.92, "reason": "冲突"},
+        {"cluster_index": 3, "good_fit": False, "positive": False, "fun": False, "low_conflict": True, "confidence": 0.92, "reason": "不轻松"},
     ]
 
-    assert select_positive_energy_summaries(summaries, classifications, cfg) == []
+    selected = select_positive_energy_summaries(summaries, classifications, cfg)
+    assert selected == []
+    assert split_positive_energy_lane(summaries, selected) == summaries
+
+
+def test_select_positive_energy_summaries_rejects_weak_low_conflict_candidates():
+    cfg = _config(main_limit=3)
+    cfg.output["positive_energy"] = {"enabled": True, "min_items": 1, "max_items": 5, "min_confidence": 0.78}
+    summaries = [
+        _positive_summary("A", "https://a.example/1", "Neutral policy story"),
+        _positive_summary("B", "https://b.example/1", "Whale calf delights watchers"),
+    ]
+    classifications = [
+        {"cluster_index": 1, "good_fit": False, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.95, "reason": "只是低冲突"},
+        {"cluster_index": 2, "good_fit": True, "positive": True, "fun": True, "low_conflict": True, "confidence": 0.88, "reason": "可爱暖心"},
+    ]
+
+    selected = select_positive_energy_summaries(summaries, classifications, cfg)
+
+    assert [summary.cluster.articles[0].url for summary in selected] == ["https://b.example/1"]
+
+
+def test_select_positive_energy_summaries_blocks_procedural_rule_stories():
+    cfg = _config(main_limit=3)
+    cfg.output["positive_energy"] = {"enabled": True, "min_items": 1, "max_items": 5, "min_confidence": 0.78}
+    summaries = [
+        _positive_summary("A", "https://a.example/oscar", "AI-generated actors ineligible for Oscars"),
+        _positive_summary("B", "https://b.example/whale", "Whale calf delights watchers"),
+    ]
+    classifications = [
+        {"cluster_index": 1, "good_fit": True, "positive": True, "fun": False, "low_conflict": True, "confidence": 0.95, "reason": "保护创作"},
+        {"cluster_index": 2, "good_fit": True, "positive": True, "fun": True, "low_conflict": True, "confidence": 0.88, "reason": "可爱暖心"},
+    ]
+
+    selected = select_positive_energy_summaries(summaries, classifications, cfg)
+
+    assert [summary.cluster.articles[0].url for summary in selected] == ["https://b.example/whale"]
+
+
+def test_select_positive_energy_summaries_allows_one_strong_story_by_default():
+    cfg = _config(main_limit=3)
+    cfg.output["positive_energy"] = {"enabled": True, "max_items": 5, "min_confidence": 0.78}
+    summary = _positive_summary("A", "https://a.example/whale", "Whale calf swims with pod")
+    classifications = [
+        {"cluster_index": 1, "good_fit": True, "positive": True, "fun": True, "low_conflict": True, "confidence": 0.86, "reason": "小鲸可爱暖心"},
+    ]
+
+    selected = select_positive_energy_summaries([summary], classifications, cfg)
+
+    assert selected == [summary]
+    assert selected[0].positive_energy_reason == "小鲸可爱暖心"
+
+
+def test_report_clusters_preserve_positive_energy_candidates_beyond_main_limit():
+    cfg = _config(main_limit=1)
+    cfg.filter["positive_energy_pre_filter"] = {"topic": "Positive Energy"}
+    cfg.output["positive_energy"] = {"max_items": 5}
+    regular = _cluster("Regular story")
+    positive = _cluster("Whale calf story")
+    positive.articles[0].topics = ["Positive Energy"]
+
+    hot_clusters, main_clusters = select_report_clusters([regular, positive], cfg)
+
+    assert hot_clusters == []
+    assert main_clusters == [regular, positive]
