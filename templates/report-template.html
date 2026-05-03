@@ -157,10 +157,10 @@
 
     .header-top {
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
       gap: 20px;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
     }
 
     .header-brand {
@@ -185,11 +185,12 @@
       font-weight: 500;
     }
 
-    .header-stats {
+    .footer-stats {
       display: flex;
       flex-wrap: wrap;
-      justify-content: flex-end;
+      justify-content: center;
       gap: 8px;
+      margin-bottom: 12px;
     }
 
     .header-actions {
@@ -197,6 +198,14 @@
       flex-direction: column;
       align-items: flex-end;
       gap: 10px;
+    }
+
+    .header-tools {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      min-width: 0;
     }
 
     .language-toggle {
@@ -267,7 +276,8 @@
       overflow-x: auto;
       scrollbar-width: none;
       -webkit-overflow-scrolling: touch;
-      padding-bottom: 12px;
+      justify-content: flex-end;
+      max-width: 460px;
     }
 
     .day-selector::-webkit-scrollbar {
@@ -371,6 +381,21 @@
       border-color: rgba(255, 123, 76, 0.7);
       color: var(--text);
       box-shadow: 0 8px 22px var(--hot-tab-glow);
+    }
+
+    .positive-tab {
+      background: linear-gradient(135deg, rgba(55, 211, 153, 0.14) 0%, rgba(255, 255, 255, 0.02) 100%);
+      border-color: rgba(55, 211, 153, 0.32);
+      color: #48d99f;
+      box-shadow: 0 4px 16px rgba(55, 211, 153, 0.14);
+    }
+
+    .positive-tab:hover,
+    .positive-tab.active {
+      color: var(--text);
+      border-color: rgba(55, 211, 153, 0.5);
+      background: linear-gradient(135deg, rgba(55, 211, 153, 0.22) 0%, rgba(255, 255, 255, 0.05) 100%);
+      box-shadow: 0 8px 22px rgba(55, 211, 153, 0.16);
     }
 
     .hot-tab .hot-icon {
@@ -1059,7 +1084,7 @@
 
       .header-top {
         display: block;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
       }
 
       .header-brand {
@@ -1068,11 +1093,24 @@
 
       .header-actions {
         align-items: stretch;
+        gap: 6px;
+      }
+
+      .header-tools {
+        justify-content: flex-start;
         gap: 8px;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 2px;
+      }
+
+      .header-tools::-webkit-scrollbar {
+        display: none;
       }
 
       .language-toggle {
-        align-self: flex-start;
+        flex: 0 0 auto;
       }
 
       .header-date {
@@ -1082,17 +1120,17 @@
         text-align: right;
       }
 
-      .header-stats {
+      .footer-stats {
         flex-wrap: nowrap;
-        justify-content: flex-start;
+        justify-content: center;
         gap: 6px;
         overflow-x: auto;
         scrollbar-width: none;
         -webkit-overflow-scrolling: touch;
-        padding-bottom: 2px;
+        padding-bottom: 4px;
       }
 
-      .header-stats::-webkit-scrollbar {
+      .footer-stats::-webkit-scrollbar {
         display: none;
       }
 
@@ -1109,7 +1147,8 @@
       }
 
       .day-selector {
-        padding-bottom: 8px;
+        flex: 0 0 auto;
+        max-width: none;
       }
 
       .day-link {
@@ -1323,42 +1362,40 @@
           <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
         </div>
         <div class="header-actions">
+          <div class="header-tools">
           {% if english_available %}
-          <div class="language-toggle" aria-label="language toggle">
-            <button type="button" class="lang-btn active" data-lang-choice="zh" onclick="setLanguage('zh')">中文</button>
-            <button type="button" class="lang-btn" data-lang-choice="en" onclick="setLanguage('en')">English</button>
-          </div>
+            <div class="language-toggle" aria-label="language toggle">
+              <button type="button" class="lang-btn active" data-lang-choice="zh" onclick="setLanguage('zh')">中文</button>
+              <button type="button" class="lang-btn" data-lang-choice="en" onclick="setLanguage('en')">English</button>
+            </div>
           {% endif %}
-          <div class="header-stats" aria-label="report stats">
-            <span class="header-stat">{{ bilingual_markup('<strong>' ~ cluster_count ~ '</strong> 条常规追踪', '<strong>' ~ cluster_count ~ '</strong> regular stories') }}</span>
-            {% if focus_storyline_count %}
-            <span class="header-stat header-stat-accent">{{ bilingual_markup('<strong>' ~ focus_storyline_count ~ '</strong> 组主线 / ' ~ focus_storyline_story_count ~ ' 条故事', '<strong>' ~ focus_storyline_count ~ '</strong> storylines / ' ~ focus_storyline_story_count ~ ' stories') }}</span>
-            {% endif %}
-            {% if hot_topic_count %}
-            <span class="header-stat header-stat-hot">{{ bilingual_markup('<strong>' ~ hot_topic_count ~ '</strong> 个热点 / ' ~ hot_topic_story_count ~ ' 条专题', '<strong>' ~ hot_topic_count ~ '</strong> hot topics / ' ~ hot_topic_story_count ~ ' stories') }}</span>
-            {% endif %}
+          {% if day_links %}
+            <div class="day-selector" aria-label="report day selector">
+              {% for day in day_links %}
+                {% if day.available %}
+                <a class="day-link{% if day.active %} active{% endif %}" href="{{ day.href }}">
+                  <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+                  {% if not day.active %}
+                  <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+                  {% endif %}
+                </a>
+                {% else %}
+                <span class="day-link disabled" aria-disabled="true">
+                  <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+                  <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+                </span>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
           </div>
         </div>
       </div>
-      {% if day_links %}
-      <div class="day-selector" aria-label="report day selector">
-        {% for day in day_links %}
-          {% if day.available %}
-          <a class="day-link{% if day.active %} active{% endif %}" href="{{ day.href }}">
-            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
-            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
-          </a>
-          {% else %}
-          <span class="day-link disabled" aria-disabled="true">
-            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
-            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
-          </span>
-          {% endif %}
-        {% endfor %}
-      </div>
-      {% endif %}
       <nav class="cat-tabs">
         <button class="cat-tab active" onclick="filterView(this,'all','all')">{{ bilingual_text('全部速览', 'All overview') }}</button>
+        {% if positive_stories %}
+        <button class="cat-tab positive-tab" onclick="filterView(this,'positive','positive')"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日正能量', 'Positive highlights') }}</button>
+        {% endif %}
         {% for hot in hot_topics %}
         <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</button>
         {% endfor %}
@@ -1370,6 +1407,34 @@
   </div>
 
   <main>
+    {% if hot_topics %}
+    <section class="all-overview" data-all-overview="true">
+      <div class="all-overview-header">
+        <div>
+          <div class="overview-kicker">{{ bilingual_text('今日焦点结构', 'Today\'s focus map') }}</div>
+          <div class="overview-copy">{{ bilingual_text('先从热点主线看清今日结构，再进入常规追踪与轻量好消息。', 'Start with the featured topic map, then continue into regular coverage and lighter highlights.') }}</div>
+        </div>
+      </div>
+      <div class="overview-list">
+        {% for hot in hot_topics %}
+        <article class="overview-item">
+          <div>
+            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
+            <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
+            <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
+            <div class="overview-anchors">
+              {% for preview in hot.preview_clusters %}
+              <span class="overview-anchor"><span class="card-index">{{ preview.hot_seq_index }}.</span>{{ bilingual_text(preview.headline, preview.headline_en or preview.headline) }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          <button class="overview-cta" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')">{{ bilingual_text('进入专题', 'Open topic') }}</button>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
     <div class="all-feed" data-all-feed="true">
     {% for line in focus_storylines %}
     <section class="focus-storyline-block" data-focus-storyline="true">
@@ -1541,34 +1606,6 @@
     {% endif %}
 
     {% if hot_topics %}
-    <section class="all-overview" data-all-overview="true">
-      <div class="all-overview-header">
-        <div>
-          <div class="overview-kicker">{{ bilingual_text('今日焦点结构', 'Today\'s focus map') }}</div>
-          <div class="overview-copy">{{ bilingual_text('先看常规追踪与轻量好消息，再从下列热点主线进入专题展开。', 'Scan the regular coverage and lighter highlights first, then jump into the featured topic threads below.') }}</div>
-        </div>
-      </div>
-      <div class="overview-list">
-        {% for hot in hot_topics %}
-        <article class="overview-item">
-          <div>
-            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
-            <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
-            <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
-            <div class="overview-anchors">
-              {% for preview in hot.preview_clusters %}
-              <span class="overview-anchor"><span class="card-index">{{ preview.hot_seq_index }}.</span>{{ bilingual_text(preview.headline, preview.headline_en or preview.headline) }}</span>
-              {% endfor %}
-            </div>
-          </div>
-          <button class="overview-cta" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')">{{ bilingual_text('进入专题', 'Open topic') }}</button>
-        </article>
-        {% endfor %}
-      </div>
-    </section>
-    {% endif %}
-
-    {% if hot_topics %}
     <section class="hot-topic-stage" data-hot-stage="true" style="display:none;">
       {% for hot in hot_topics %}
       <div class="hot-topic-block" data-hot-id="{{ hot.dom_id }}" style="display:none;">
@@ -1644,7 +1681,19 @@
   </main>
 
   <footer>
-    {{ bilingual_text('NewsPrism · ' ~ report_date_display ~ ' · AI 多视角聚合', 'NewsPrism · ' ~ report_date_display_en ~ ' · AI Multi-Perspective Aggregation') }}
+    <div class="footer-stats" aria-label="report stats">
+      <span class="header-stat">{{ bilingual_markup('<strong>' ~ cluster_count ~ '</strong> 条常规追踪', '<strong>' ~ cluster_count ~ '</strong> regular stories') }}</span>
+      {% if positive_story_count %}
+      <span class="header-stat">{{ bilingual_markup('<strong>' ~ positive_story_count ~ '</strong> 条正能量', '<strong>' ~ positive_story_count ~ '</strong> positive stories') }}</span>
+      {% endif %}
+      {% if focus_storyline_count %}
+      <span class="header-stat header-stat-accent">{{ bilingual_markup('<strong>' ~ focus_storyline_count ~ '</strong> 组主线 / ' ~ focus_storyline_story_count ~ ' 条故事', '<strong>' ~ focus_storyline_count ~ '</strong> storylines / ' ~ focus_storyline_story_count ~ ' stories') }}</span>
+      {% endif %}
+      {% if hot_topic_count %}
+      <span class="header-stat header-stat-hot">{{ bilingual_markup('<strong>' ~ hot_topic_count ~ '</strong> 个热点 / ' ~ hot_topic_story_count ~ ' 条专题', '<strong>' ~ hot_topic_count ~ '</strong> hot topics / ' ~ hot_topic_story_count ~ ' stories') }}</span>
+      {% endif %}
+    </div>
+    <div>{{ bilingual_text('NewsPrism · ' ~ report_date_display ~ ' · AI 多视角聚合', 'NewsPrism · ' ~ report_date_display_en ~ ' · AI Multi-Perspective Aggregation') }}</div>
   </footer>
 
   <script>
@@ -1691,7 +1740,7 @@
       });
 
       document.querySelectorAll('[data-positive-energy]').forEach(block => {
-        setBlockVisibility(block, mode === 'all');
+        setBlockVisibility(block, mode === 'all' || mode === 'positive');
       });
 
       const allFeed = document.querySelector('[data-all-feed]');

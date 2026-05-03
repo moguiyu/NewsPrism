@@ -253,7 +253,43 @@ ASML
 your-local-semiconductor-brand
 ```
 
-### 3. Disable or target specific sources
+### 3. Tune 今日正能量 discovery
+
+`今日正能量` uses two gates:
+
+- `filter.positive_energy_pre_filter` rescues clear cheerful candidates before portal/no-keyword articles are dropped.
+- `output.positive_energy` controls the stricter post-summary LLM selection used by the rendered section.
+- A final deterministic blocker rejects procedural, rules, policy, legal, market, geopolitical, crime, disaster, and conflict stories even if the LLM marks them as positive.
+
+The pre-filter is intentionally conservative. Add high-signal happy/cute/funny terms to `include_keywords`, and add harm/conflict terms to `exclude_keywords` when a source produces weak matches. The final section can render with one strong story, so do not broaden the pre-filter just to fill a quota.
+
+Example:
+
+```yaml
+filter:
+  positive_energy_pre_filter:
+    enabled: true
+    topic: "Positive Energy"
+    include_keywords:
+      - "whale calf"
+      - "baby animal"
+      - "可爱"
+      - "暖心"
+    exclude_keywords:
+      - "death"
+      - "crime"
+      - "战争"
+      - "冲突"
+
+output:
+  positive_energy:
+    enabled: true
+    min_items: 1
+    max_items: 5
+    min_confidence: 0.78
+```
+
+### 4. Disable or target specific sources
 
 Every source entry under `sources:` can be tuned.
 

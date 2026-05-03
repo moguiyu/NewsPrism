@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from newsprism.config import Config, SourceConfig
 from newsprism.runtime.scheduler import Scheduler
 from newsprism.service.collector import Collector
-from newsprism.types import RawArticle
+from newsprism.service.filter import TopicTagger
+from newsprism.types import Article, RawArticle
 
 
 def _cfg(collection: dict, schedule: dict | None = None, sources: list[SourceConfig] | None = None) -> Config:
@@ -24,7 +25,7 @@ def _cfg(collection: dict, schedule: dict | None = None, sources: list[SourceCon
     )
 
 
-def _source(name: str) -> SourceConfig:
+def _source(name: str, tier: str = "tech") -> SourceConfig:
     return SourceConfig(
         name=name,
         name_en=name,
@@ -34,6 +35,7 @@ def _source(name: str) -> SourceConfig:
         weight=1.0,
         language="en",
         region="us",
+        tier=tier,
     )
 
 
@@ -45,6 +47,67 @@ def _raw(source_name: str) -> RawArticle:
         published_at=datetime.now(tz=timezone.utc),
         content="body " * 100,
     )
+
+
+def _article(source_name: str, title: str, content: str = "body") -> Article:
+    return Article(
+        url=f"https://example.com/{source_name}/{title}",
+        title=title,
+        source_name=source_name,
+        published_at=datetime.now(tz=timezone.utc),
+        content=content,
+    )
+
+
+def test_positive_energy_pre_filter_rescues_portal_whale_calf_story():
+    cfg = _cfg(
+        collection={},
+        sources=[_source("Portal", tier="portal")],
+    )
+    tagger = TopicTagger(cfg)
+    article = _article("Portal", "Rare whale calf spotted playing near coast")
+
+    tagged = tagger.tag_all([article])
+
+    assert tagged == [article]
+    assert article.topics == ["Positive Energy"]
+
+
+def test_positive_energy_pre_filter_keeps_neutral_portal_story_dropped():
+    cfg = _cfg(
+        collection={},
+        sources=[_source("Portal", tier="portal")],
+    )
+    tagger = TopicTagger(cfg)
+    article = _article("Portal", "City council reviews parking fees")
+
+    assert tagger.tag_all([article]) == []
+
+
+def test_positive_energy_pre_filter_excludes_conflict_with_positive_word():
+    cfg = _cfg(
+        collection={},
+        sources=[_source("Portal", tier="portal")],
+    )
+    tagger = TopicTagger(cfg)
+    article = _article("Portal", "Happy reunion follows shooting investigation")
+
+    assert tagger.tag_all([article]) == []
+
+
+def test_positive_energy_pre_filter_merges_with_normal_topic_once():
+    cfg = _cfg(
+        collection={},
+        sources=[_source("Portal", tier="portal")],
+    )
+    cfg.topics = {"Culture": ["festival"]}
+    tagger = TopicTagger(cfg)
+    article = _article("Portal", "Cute festival brings joy downtown")
+
+    tagged = tagger.tag_all([article])
+
+    assert tagged == [article]
+    assert article.topics == ["Culture", "Positive Energy"]
 
 
 def test_collect_delta_uses_configured_delta_sources(monkeypatch):

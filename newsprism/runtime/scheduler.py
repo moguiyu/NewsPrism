@@ -39,7 +39,7 @@ from newsprism.repo import (
     update_article_embedding,
 )
 from newsprism.runtime.publisher import TelegramPublisher
-from newsprism.runtime.renderer import HtmlRenderer, _extract_headline
+from newsprism.runtime.renderer import HtmlRenderer, _body_only, _extract_headline
 from newsprism.service.clusterer import Clusterer
 from newsprism.service.collector import Collector
 from newsprism.service.dedup import Deduplicator
@@ -439,17 +439,38 @@ def _validated_family_name(members: list[ClusterSummary], max_chars: int) -> str
     )
 
 
+def _cluster_has_topic(cluster: ArticleCluster, topic: str) -> bool:
+    return any(topic in article.topics for article in cluster.articles)
+
+
 def select_report_clusters(
     clusters: list[ArticleCluster],
     cfg: Config,
     _source_regions: dict[str, str] | None = None,
 ) -> tuple[list[ArticleCluster], list[ArticleCluster]]:
     hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
+    positive_cfg = cfg.filter.get("positive_energy_pre_filter", {}) if isinstance(cfg.filter, dict) else {}
+    positive_topic = str(positive_cfg.get("topic", "Positive Energy")).strip() or "Positive Energy"
+    positive_extra_limit = max(
+        0,
+        int((cfg.output.get("positive_energy", {}) if isinstance(cfg.output, dict) else {}).get("max_items", 5)),
+    )
     main_limit = cfg.clustering.get("max_clusters_per_report", 20)
 
     _reset_hot_topic_metadata(clusters)
     if not hot_cfg.get("enabled", False):
-        return [], clusters[:main_limit]
+        main_clusters = clusters[:main_limit]
+        selected_ids = {id(cluster) for cluster in main_clusters}
+        for cluster in clusters[main_limit:]:
+            if not _cluster_has_topic(cluster, positive_topic):
+                continue
+            if id(cluster) in selected_ids:
+                continue
+            main_clusters.append(cluster)
+            selected_ids.add(id(cluster))
+            if len(main_clusters) >= main_limit + positive_extra_limit:
+                break
+        return [], main_clusters
 
     max_topic_tabs = hot_cfg.get("max_topic_tabs", 3)
     min_items_per_topic = hot_cfg.get("min_items_per_topic", 5)
@@ -511,6 +532,17 @@ def select_report_clusters(
         main_clusters.append(cluster)
         if len(main_clusters) >= main_limit:
             break
+
+    selected_ids = {id(cluster) for cluster in hot_clusters + main_clusters}
+    for cluster in clusters:
+        if len(main_clusters) >= main_limit + positive_extra_limit:
+            break
+        if id(cluster) in selected_ids:
+            continue
+        if not _cluster_has_topic(cluster, positive_topic):
+            continue
+        main_clusters.append(cluster)
+        selected_ids.add(id(cluster))
 
     return hot_clusters, main_clusters
 
@@ -678,6 +710,73 @@ def _summary_primary_domain(summary: ClusterSummary) -> str:
     return ""
 
 
+_POSITIVE_ENERGY_FINAL_BLOCKERS = (
+    "ai-generated",
+    "ineligible",
+    "eligible",
+    "eligibility",
+    "oscar",
+    "oscars",
+    "academy",
+    "rule",
+    "rules",
+    "policy",
+    "regulation",
+    "regulatory",
+    "antitrust",
+    "lawsuit",
+    "sanction",
+    "tariff",
+    "trade",
+    "market",
+    "shares",
+    "stock",
+    "military",
+    "troop",
+    "war",
+    "attack",
+    "death",
+    "injury",
+    "crime",
+    "crisis",
+    "disaster",
+    "新规",
+    "规则",
+    "资格",
+    "无缘",
+    "政策",
+    "监管",
+    "反垄断",
+    "诉讼",
+    "制裁",
+    "关税",
+    "贸易",
+    "市场",
+    "股价",
+    "军事",
+    "战争",
+    "袭击",
+    "死亡",
+    "受伤",
+    "犯罪",
+    "危机",
+    "灾难",
+)
+
+
+def _summary_blocked_for_positive_energy(summary: ClusterSummary) -> bool:
+    headline = _extract_headline(summary.summary) or summary.cluster.topic_category
+    text = " ".join(
+        [
+            summary.cluster.topic_category,
+            headline,
+            _body_only(summary.summary),
+            " ".join(article.title for article in summary.cluster.articles[:4]),
+        ]
+    ).lower()
+    return any(blocker in text for blocker in _POSITIVE_ENERGY_FINAL_BLOCKERS)
+
+
 def select_positive_energy_summaries(
     summaries: list[ClusterSummary],
     classifications: list[dict[str, object]],
@@ -687,9 +786,9 @@ def select_positive_energy_summaries(
     if not bool(positive_cfg.get("enabled", True)):
         return []
 
-    min_items = max(1, int(positive_cfg.get("min_items", 3)))
+    min_items = max(1, int(positive_cfg.get("min_items", 1)))
     max_items = max(min_items, int(positive_cfg.get("max_items", 5)))
-    min_confidence = float(positive_cfg.get("min_confidence", 0.55))
+    min_confidence = float(positive_cfg.get("min_confidence", 0.78))
 
     by_index = {
         int(item.get("cluster_index", 0)): item
@@ -701,13 +800,16 @@ def select_positive_energy_summaries(
         item = by_index.get(index)
         if item is None:
             continue
+        if _summary_blocked_for_positive_energy(summary):
+            continue
+        good_fit = bool(item.get("good_fit"))
         positive = bool(item.get("positive"))
         fun = bool(item.get("fun"))
         low_conflict = bool(item.get("low_conflict"))
         confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0) or 0.0)))
-        if not low_conflict or not (positive or fun) or confidence < min_confidence:
+        if not good_fit or not low_conflict or not (positive or fun) or confidence < min_confidence:
             continue
-        score = confidence + (0.2 if positive else 0.0) + (0.15 if fun else 0.0)
+        score = confidence + 0.25 + (0.2 if positive else 0.0) + (0.15 if fun else 0.0)
         candidates.append((score, index, summary, item))
 
     if len(candidates) < min_items:
@@ -750,6 +852,14 @@ def select_positive_energy_summaries(
         summary.positive_energy_reason = str(item.get("reason") or "").strip()  # type: ignore[attr-defined]
         results.append(summary)
     return results
+
+
+def split_positive_energy_lane(
+    main_summaries: list[ClusterSummary],
+    positive_summaries: list[ClusterSummary],
+) -> list[ClusterSummary]:
+    positive_ids = {id(summary) for summary in positive_summaries}
+    return [summary for summary in main_summaries if id(summary) not in positive_ids]
 
 
 def _warn_on_storyline_near_miss(clusters: list[ArticleCluster], hot_keys: set[str], stage: str) -> None:
@@ -1142,6 +1252,7 @@ class Scheduler:
                     positive_classifications,
                     self.cfg,
                 )
+            regular_summaries = split_positive_energy_lane(main_summaries, positive_summaries)
             english_cfg = self.cfg.output.get("english", {}) if isinstance(self.cfg.output, dict) else {}
             if bool(english_cfg.get("enabled", False)):
                 self.summarizer.translate_report_content(
@@ -1159,7 +1270,12 @@ class Scheduler:
                 for family in hot_topics
                 if isinstance(family.get("summaries"), list)
             )
-            total_story_count = len(main_summaries) + focus_storyline_story_count + hot_topic_story_count
+            total_story_count = (
+                len(regular_summaries)
+                + len(positive_summaries)
+                + focus_storyline_story_count
+                + hot_topic_story_count
+            )
             hot_storyline_keys = {
                 str(family.get("macro_topic_key", ""))
                 for family in hot_topics
@@ -1172,22 +1288,24 @@ class Scheduler:
             )
 
             logger.info(
-                "Story display groups: %d hot topics, %d focus storylines, %d remaining for main report (cap=%d)",
+                "Story display groups: %d hot topics, %d focus storylines, %d positive stories, %d regular main stories (cap=%d)",
                 len(hot_topics),
                 len(focus_storylines),
-                len(main_summaries),
+                len(positive_summaries),
+                len(regular_summaries),
                 self.cfg.clustering.get("max_clusters_per_report", 20),
             )
             logger.info(
-                "Render input: %d kept stories after freshness (%d main report, %d focus storyline stories, %d hot topic stories)",
+                "Render input: %d kept stories after freshness (%d regular main, %d positive, %d focus storyline stories, %d hot topic stories)",
                 total_story_count,
-                len(main_summaries),
+                len(regular_summaries),
+                len(positive_summaries),
                 focus_storyline_story_count,
                 hot_topic_story_count,
             )
 
             html_path = self.renderer.render(
-                main_summaries,
+                regular_summaries,
                 today,
                 hot_topics=hot_topics,
                 focus_storylines=focus_storylines,
