@@ -122,6 +122,8 @@ def test_classify_positive_energy_parses_json_with_wrapping(monkeypatch):
 
     def fake_json_completion(system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0.1) -> str:
         assert "今日正能量" in user_prompt
+        assert "good_fit=true" in user_prompt
+        assert "仅仅“没有坏消息”不算" in user_prompt
         return (
             "```json\n"
             + json.dumps(
@@ -129,6 +131,7 @@ def test_classify_positive_energy_parses_json_with_wrapping(monkeypatch):
                     "items": [
                         {
                             "cluster_index": 1,
+                            "good_fit": True,
                             "positive": True,
                             "fun": False,
                             "low_conflict": True,
@@ -149,6 +152,7 @@ def test_classify_positive_energy_parses_json_with_wrapping(monkeypatch):
     assert result == [
         {
             "cluster_index": 1,
+            "good_fit": True,
             "positive": True,
             "fun": False,
             "low_conflict": True,
@@ -172,6 +176,7 @@ def test_classify_positive_energy_retries_after_malformed_json(monkeypatch):
                 "items": [
                     {
                         "cluster_index": 1,
+                        "good_fit": True,
                         "positive": False,
                         "fun": True,
                         "low_conflict": True,
@@ -188,5 +193,6 @@ def test_classify_positive_energy_retries_after_malformed_json(monkeypatch):
     result = summarizer.classify_positive_energy([summary])
 
     assert calls["count"] == 2
+    assert result[0]["good_fit"] is True
     assert result[0]["fun"] is True
     assert result[0]["reason"] == "轻松有趣"

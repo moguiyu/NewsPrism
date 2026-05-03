@@ -108,6 +108,10 @@ class LabelTranslation(BaseModel):
 
 class PositiveEnergyItem(BaseModel):
     cluster_index: int = Field(description="1-based cluster index from the provided candidate list.")
+    good_fit: bool = Field(
+        default=False,
+        description="Whether the story is a strict fit for 今日正能量: cheerful, funny, happy, cute, heartwarming, or clearly uplifting.",
+    )
     positive: bool = Field(description="Whether the story is generally positive or uplifting.")
     fun: bool = Field(description="Whether the story is generally fun, light, delightful, or entertaining.")
     low_conflict: bool = Field(description="Whether the story is low-conflict and not dominated by harm, war, disaster, scandal, or market stress.")
@@ -353,6 +357,7 @@ class Summarizer:
             normalized.append(
                 {
                     "cluster_index": item.cluster_index,
+                    "good_fit": bool(item.good_fit),
                     "positive": bool(item.positive),
                     "fun": bool(item.fun),
                     "low_conflict": bool(item.low_conflict),
@@ -722,12 +727,14 @@ class Summarizer:
         return (
             "请从每日新闻主线中判断哪些适合放入“今日正能量”轻量板块。\n"
             "选择标准：\n"
-            "1. positive=true 表示故事整体积极、建设性、温暖、鼓舞或有明确好消息。\n"
-            "2. fun=true 表示故事轻松、有趣、文化娱乐、体育、科学发现、生活方式或让读者会心一笑。\n"
-            "3. low_conflict=true 表示不是战争、灾害、伤亡、严重政治冲突、犯罪、制裁、诉讼、市场暴跌或丑闻主导。\n"
-            "4. 可以三项都 false；不要为了凑数强行标 positive。\n"
-            "5. reason 用不超过 24 个中文字符说明原因。\n"
-            "只输出 JSON：{\"items\":[{\"cluster_index\":1,\"positive\":true,\"fun\":false,\"low_conflict\":true,\"confidence\":0.83,\"reason\":\"...\"}]}\n\n"
+            "1. good_fit=true 只给真正让读者感到开心、可爱、好笑、暖心、治愈、轻松愉快或明确振奋的新闻。\n"
+            "2. positive=true 表示故事整体积极、温暖、鼓舞或有明确好消息；仅仅“没有坏消息”不算。\n"
+            "3. fun=true 表示故事轻松、有趣、文化娱乐、体育、科学发现、生活方式或让读者会心一笑。\n"
+            "4. low_conflict=true 表示不是战争、灾害、伤亡、严重政治冲突、犯罪、制裁、诉讼、市场暴跌或丑闻主导。\n"
+            "5. 中性、严肃、程序性、政策、商业、地缘政治、诉讼、事故、灾害、犯罪、市场压力类新闻，即使 low_conflict，也必须 good_fit=false。\n"
+            "6. 可以全部 false；不要为了凑数强行标 good_fit 或 positive。\n"
+            "7. reason 用不超过 24 个中文字符说明原因。\n"
+            "只输出 JSON：{\"items\":[{\"cluster_index\":1,\"good_fit\":true,\"positive\":true,\"fun\":false,\"low_conflict\":true,\"confidence\":0.83,\"reason\":\"...\"}]}\n\n"
             f"候选新闻：\n{json.dumps(candidates, ensure_ascii=False, indent=2)}"
         )
 
