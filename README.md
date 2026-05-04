@@ -1,6 +1,6 @@
 # NewsPrism
 
-NewsPrism is a multilingual news monitor that collects articles from 38 sources across 11 countries, clusters same-event coverage, and publishes a Chinese digest that highlights how different outlets frame the same story.
+NewsPrism is a multilingual news monitor that collects articles from 38 sources across 11 countries, clusters same-event coverage, and publishes a Chinese digest with cross-source framing, focus maps, and strict positive highlights.
 
 ```text
 Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Summarize angles  ->  Render HTML / publish
@@ -13,6 +13,7 @@ This public repository supports both self-hosting with Docker and local developm
 - Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
 - Event-level clustering with same-day and cross-day deduplication
 - Perspective-seeking for missing regional angles
+- Dedicated `今日正能量` lane for cheerful, funny, happy, or heartwarming stories that pass a strict post-summary classifier
 - HTML report rendering with a story-first layout
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 

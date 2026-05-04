@@ -5,6 +5,7 @@ For design rationale and principles, see [core-beliefs.md](core-beliefs.md).
 
 | Date | Decision | Rationale | Supersedes |
 |---|---|---|---|
+| 2026-05-04 | Evaluate positive-energy extras beyond the regular main-feed cap | A strict positive lane should not lose cheerful candidates simply because the regular hard-news feed already filled 20 slots; extras are classified separately and render only if accepted | Positive candidates clipped by the main-lane cap |
 | 2026-05-03 | Add an early positive-energy rescue lane before portal keyword filtering | Let clearly cheerful stories survive the normal hard-news filter, while a stricter post-summary LLM gate prevents weak or merely neutral stories from entering `今日正能量` | Post-summary-only positive highlights |
 | 2026-04-06 | Move maintainer-only deployment and assistant runbooks out of the public repo | Keep the public repository focused on local development and contribution | — |
 | 2026-04-22 | Consolidate report rendering onto one default template | Eliminate duplicated template maintenance and focus all front-end evolution on a single report surface | Three HTML report templates |
