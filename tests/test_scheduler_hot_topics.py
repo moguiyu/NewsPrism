@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from newsprism.config import Config, SourceConfig
 from newsprism.runtime.scheduler import (
+    positive_energy_classification_pool,
     select_hot_topic_families,
     select_positive_energy_summaries,
     select_report_clusters,
@@ -575,3 +576,61 @@ def test_report_clusters_preserve_positive_energy_candidates_beyond_main_limit()
 
     assert hot_clusters == []
     assert main_clusters == [regular, positive]
+
+
+def test_positive_energy_pool_preserves_candidate_clipped_by_main_lane_cap():
+    cfg = _config(main_limit=2)
+    cfg.filter["positive_energy_pre_filter"] = {"topic": "Positive Energy"}
+    cfg.output["positive_energy"] = {"enabled": True, "max_items": 5, "min_confidence": 0.78}
+    summaries = [
+        _summary(_cluster("Regular story 1"), "Regular story 1"),
+        _summary(_cluster("Regular story 2"), "Regular story 2"),
+        _summary(_cluster("Whale calf delights watchers"), "Whale calf delights watchers"),
+    ]
+    summaries[2].cluster.articles[0].topics = ["Positive Energy"]
+
+    hot_topics, focus_storylines, main_summaries = select_hot_topic_families(summaries, cfg)
+    pool = positive_energy_classification_pool(summaries, main_summaries, hot_topics, focus_storylines, cfg)
+    classifications = [
+        {"cluster_index": 1, "good_fit": False, "positive": False, "fun": False, "low_conflict": True, "confidence": 0.1, "reason": "普通"},
+        {"cluster_index": 2, "good_fit": False, "positive": False, "fun": False, "low_conflict": True, "confidence": 0.1, "reason": "普通"},
+        {"cluster_index": 3, "good_fit": True, "positive": True, "fun": True, "low_conflict": True, "confidence": 0.88, "reason": "可爱暖心"},
+    ]
+
+    selected = select_positive_energy_summaries(pool, classifications, cfg)
+
+    assert main_summaries == summaries[:2]
+    assert pool == summaries
+    assert selected == [summaries[2]]
+    assert split_positive_energy_lane(main_summaries, selected) == main_summaries
+
+
+def test_positive_energy_pool_includes_extra_after_hot_topic_and_regular_cap():
+    cfg = _config(main_limit=20)
+    cfg.filter["positive_energy_pre_filter"] = {"topic": "Positive Energy"}
+    cfg.output["positive_energy"] = {"enabled": True, "max_items": 5, "min_confidence": 0.78}
+    hot_clusters = [
+        _cluster(f"Hot story {index}", role="core", storyline_key="hot-story", storyline_name="热点主线")
+        for index in range(1, 6)
+    ]
+    for cluster in hot_clusters:
+        cluster.is_hot_topic = True
+        cluster.macro_topic_member_count = 5
+    regular_summaries = [
+        _summary(_cluster(f"Regular story {index}"), f"Regular story {index}")
+        for index in range(1, 21)
+    ]
+    positive_extra = _summary(_cluster("Snooker comeback delights fans"), "Snooker comeback delights fans")
+    positive_extra.cluster.topic_category = "Sports"
+    positive_extra.cluster.articles[0].topics = ["Sports", "Positive Energy"]
+    summaries = [_summary(cluster, cluster.articles[0].title) for cluster in hot_clusters]
+    summaries.extend(regular_summaries)
+    summaries.append(positive_extra)
+
+    hot_topics, focus_storylines, main_summaries = select_hot_topic_families(summaries, cfg)
+    pool = positive_energy_classification_pool(summaries, main_summaries, hot_topics, focus_storylines, cfg)
+
+    assert len(hot_topics) == 1
+    assert len(main_summaries) == 20
+    assert positive_extra not in main_summaries
+    assert pool == main_summaries + [positive_extra]

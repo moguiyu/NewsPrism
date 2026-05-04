@@ -263,6 +263,8 @@ your-local-semiconductor-brand
 
 The pre-filter is intentionally conservative. Add high-signal happy/cute/funny terms to `include_keywords`, and add harm/conflict terms to `exclude_keywords` when a source produces weak matches. The final section can render with one strong story, so do not broaden the pre-filter just to fill a quota.
 
+Positive candidates are evaluated separately from the regular main-feed cap. A story tagged with the configured positive topic can still be sent to the final classifier even if it falls just after the regular `clustering.max_clusters_per_report` limit; it will only render if the final classifier and deterministic blocker accept it. Scheduler logs include the positive candidate pool size, rejected/blocked counts, and selected headlines for debugging.
+
 Example:
 
 ```yaml

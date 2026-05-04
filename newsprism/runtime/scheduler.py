@@ -443,14 +443,18 @@ def _cluster_has_topic(cluster: ArticleCluster, topic: str) -> bool:
     return any(topic in article.topics for article in cluster.articles)
 
 
+def _positive_energy_topic(cfg: Config) -> str:
+    positive_cfg = cfg.filter.get("positive_energy_pre_filter", {}) if isinstance(cfg.filter, dict) else {}
+    return str(positive_cfg.get("topic", "Positive Energy")).strip() or "Positive Energy"
+
+
 def select_report_clusters(
     clusters: list[ArticleCluster],
     cfg: Config,
     _source_regions: dict[str, str] | None = None,
 ) -> tuple[list[ArticleCluster], list[ArticleCluster]]:
     hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
-    positive_cfg = cfg.filter.get("positive_energy_pre_filter", {}) if isinstance(cfg.filter, dict) else {}
-    positive_topic = str(positive_cfg.get("topic", "Positive Energy")).strip() or "Positive Energy"
+    positive_topic = _positive_energy_topic(cfg)
     positive_extra_limit = max(
         0,
         int((cfg.output.get("positive_energy", {}) if isinstance(cfg.output, dict) else {}).get("max_items", 5)),
@@ -710,6 +714,51 @@ def _summary_primary_domain(summary: ClusterSummary) -> str:
     return ""
 
 
+def _summary_has_positive_energy_topic(summary: ClusterSummary, cfg: Config) -> bool:
+    positive_topic = _positive_energy_topic(cfg)
+    return any(positive_topic in article.topics for article in summary.cluster.articles)
+
+
+def _summary_ids_from_families(families: list[dict[str, object]]) -> set[int]:
+    ids: set[int] = set()
+    for family in families:
+        summaries = family.get("summaries")
+        if not isinstance(summaries, list):
+            continue
+        ids.update(id(summary) for summary in summaries if isinstance(summary, ClusterSummary))
+    return ids
+
+
+def positive_energy_classification_pool(
+    kept_summaries: list[ClusterSummary],
+    main_summaries: list[ClusterSummary],
+    hot_topics: list[dict[str, object]],
+    focus_storylines: list[dict[str, object]],
+    cfg: Config,
+) -> list[ClusterSummary]:
+    """Return main summaries plus positive extras that were clipped by the regular feed cap."""
+    positive_cfg = cfg.output.get("positive_energy", {}) if isinstance(cfg.output, dict) else {}
+    if not bool(positive_cfg.get("enabled", True)):
+        return []
+
+    max_extra = max(0, int(positive_cfg.get("max_items", 5)))
+    pool = list(main_summaries)
+    selected_ids = {id(summary) for summary in pool}
+    excluded_ids = _summary_ids_from_families(hot_topics) | _summary_ids_from_families(focus_storylines)
+
+    for summary in kept_summaries:
+        if id(summary) in selected_ids or id(summary) in excluded_ids:
+            continue
+        if not _summary_has_positive_energy_topic(summary, cfg):
+            continue
+        pool.append(summary)
+        selected_ids.add(id(summary))
+        if len(pool) >= len(main_summaries) + max_extra:
+            break
+
+    return pool
+
+
 _POSITIVE_ENERGY_FINAL_BLOCKERS = (
     "ai-generated",
     "ineligible",
@@ -796,11 +845,16 @@ def select_positive_energy_summaries(
         if isinstance(item.get("cluster_index"), int)
     }
     candidates: list[tuple[float, int, ClusterSummary, dict[str, object]]] = []
+    missing_classification = 0
+    blocked = 0
+    rejected = 0
     for index, summary in enumerate(summaries, 1):
         item = by_index.get(index)
         if item is None:
+            missing_classification += 1
             continue
         if _summary_blocked_for_positive_energy(summary):
+            blocked += 1
             continue
         good_fit = bool(item.get("good_fit"))
         positive = bool(item.get("positive"))
@@ -808,11 +862,20 @@ def select_positive_energy_summaries(
         low_conflict = bool(item.get("low_conflict"))
         confidence = max(0.0, min(1.0, float(item.get("confidence", 0.0) or 0.0)))
         if not good_fit or not low_conflict or not (positive or fun) or confidence < min_confidence:
+            rejected += 1
             continue
         score = confidence + 0.25 + (0.2 if positive else 0.0) + (0.15 if fun else 0.0)
         candidates.append((score, index, summary, item))
 
     if len(candidates) < min_items:
+        logger.info(
+            "Positive energy selection: considered=%d eligible=%d selected=0 blocked=%d rejected=%d missing_classification=%d",
+            len(summaries),
+            len(candidates),
+            blocked,
+            rejected,
+            missing_classification,
+        )
         return []
 
     candidates.sort(key=lambda row: (-row[0], row[1]))
@@ -843,6 +906,14 @@ def select_positive_energy_summaries(
                 break
 
     if len(selected) < min_items:
+        logger.info(
+            "Positive energy selection: considered=%d eligible=%d selected=0 blocked=%d rejected=%d missing_classification=%d",
+            len(summaries),
+            len(candidates),
+            blocked,
+            rejected,
+            missing_classification,
+        )
         return []
 
     selected.sort(key=lambda row: row[1])
@@ -851,6 +922,16 @@ def select_positive_energy_summaries(
         summary.positive_energy_score = round(score, 4)  # type: ignore[attr-defined]
         summary.positive_energy_reason = str(item.get("reason") or "").strip()  # type: ignore[attr-defined]
         results.append(summary)
+    logger.info(
+        "Positive energy selection: considered=%d eligible=%d selected=%d blocked=%d rejected=%d missing_classification=%d headlines=%s",
+        len(summaries),
+        len(candidates),
+        len(results),
+        blocked,
+        rejected,
+        missing_classification,
+        [_extract_headline(summary.summary) or summary.cluster.topic_category for summary in results],
+    )
     return results
 
 
@@ -1245,10 +1326,22 @@ class Scheduler:
             hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
             positive_summaries: list[ClusterSummary] = []
             positive_cfg = self.cfg.output.get("positive_energy", {}) if isinstance(self.cfg.output, dict) else {}
-            if bool(positive_cfg.get("enabled", True)) and main_summaries:
-                positive_classifications = self.summarizer.classify_positive_energy(main_summaries)
+            positive_pool = positive_energy_classification_pool(
+                kept_summaries,
+                main_summaries,
+                hot_topics,
+                focus_storylines,
+                self.cfg,
+            )
+            if bool(positive_cfg.get("enabled", True)) and positive_pool:
+                logger.info(
+                    "Positive energy candidate pool: %d main summaries + %d positive extras",
+                    len(main_summaries),
+                    max(0, len(positive_pool) - len(main_summaries)),
+                )
+                positive_classifications = self.summarizer.classify_positive_energy(positive_pool)
                 positive_summaries = select_positive_energy_summaries(
-                    main_summaries,
+                    positive_pool,
                     positive_classifications,
                     self.cfg,
                 )
