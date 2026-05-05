@@ -11,6 +11,7 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [
     { name = "NewsPrism contributors" },
+    { name = "OpenAI Codex" },
 ]
 keywords = [
     "news",
