@@ -170,6 +170,8 @@ NewsPrism is an independent project inspired by [TrendRadar](https://github.com/
 
 NewsPrism also relies on the self-hosted [NewsNow](https://github.com/ourongxing/newsnow) project for stronger coverage of difficult Chinese news sources. Thanks to that project and its author for making that workflow practical.
 
+Development assistance for recent quality, deployment, and release work was provided by OpenAI Codex.
+
 ## Deployment Notes
 
 - Supported public deployment target: one Linux server with Docker Compose
