@@ -680,6 +680,9 @@ class HtmlRenderer:
                 "url": article.url,
                 "source": article.source_name,
                 "published_at": article.published_at.strftime("%H:%M"),
+                "search_acceptance_status": getattr(article, "search_acceptance_status", "accepted" if article.is_searched else None),
+                "search_acceptance_reason": getattr(article, "search_acceptance_reason", ""),
+                "result_freshness_state": getattr(article, "result_freshness_state", None),
             }
             for article in summary.cluster.articles
         ]
@@ -733,6 +736,16 @@ class HtmlRenderer:
             "suppressed_group_count": perspective_payload["suppressed_group_count"],
             "perspective_preview": perspective_payload["perspective_preview"],
             "perspective_preview_en": perspective_payload_en["perspective_preview"],
+            "source_confirmation_preview": (
+                "多家来源呈现相近事实框架。"
+                if summary.cluster.is_multi_source and perspective_payload["distinct_perspective_count"] == 1
+                else ""
+            ),
+            "source_confirmation_preview_en": (
+                "Multiple sources confirm the same core framing."
+                if summary.cluster.is_multi_source and perspective_payload["distinct_perspective_count"] == 1
+                else ""
+            ),
             "has_expandable_perspectives": perspective_payload["has_expandable_perspectives"],
             "articles": articles_data,
             "article_count": len(articles_data),
@@ -753,6 +766,12 @@ class HtmlRenderer:
             "topic_icon_key": getattr(summary, "topic_icon_key", None),
             "organic_unique_regions": getattr(summary, "organic_unique_regions", 0),
             "organic_unique_sources": getattr(summary, "organic_unique_sources", 0),
+            "event_signature": getattr(summary, "event_signature", None),
+            "duplicate_action": getattr(summary, "duplicate_action", "kept"),
+            "duplicate_reason": getattr(summary, "duplicate_reason", ""),
+            "duplicate_confidence": getattr(summary, "duplicate_confidence", 0.0),
+            "selection_score": getattr(summary, "selection_score", None),
+            "selection_reasons": list(getattr(summary, "selection_reasons", [])),
         }
         return (
             {
@@ -765,9 +784,9 @@ class HtmlRenderer:
             {
                 **base,
                 "headline": headline_raw,
-                "summary": summary.summary,
+                "summary": body_text,
                 "headline_en": headline_raw_en or None,
-                "summary_en": summary.summary_en if include_english else None,
+                "summary_en": body_text_en if include_english else None,
             },
         )
 

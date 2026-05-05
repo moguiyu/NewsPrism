@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from newsprism.config import Config, SourceConfig
 from newsprism.runtime.scheduler import (
     positive_energy_classification_pool,
+    resolve_display_duplicates,
     select_hot_topic_families,
     select_positive_energy_summaries,
     select_report_clusters,
@@ -287,6 +288,202 @@ def test_select_hot_topic_families_keeps_distinct_main_lane_stories_with_shared_
         summary_a.summary,
         summary_b.summary,
     ]
+
+
+def test_display_duplicate_resolver_merges_trump_iran_china_visit_split():
+    war_cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            _article("Yonhap", "Trump wants Iran war ended before mid-May China visit"),
+            _article("AP News", "Trump delays Iran strike deadline as talks continue"),
+        ],
+    )
+    visit_cluster = ArticleCluster(
+        topic_category="Geopolitics",
+        articles=[
+            _article("Reuters", "Trump plans May visit to China after Iran war delay"),
+            _article("澎湃新闻", "特朗普将于5月中旬访华，中美领导人将举行会晤"),
+        ],
+    )
+    war_summary = ClusterSummary(
+        cluster=war_cluster,
+        summary="**特朗普寻求数周内结束对伊战争并推迟霍尔木兹海峡打击期限**\n\n特朗普希望在5月中旬访华前结束与伊朗的战争，并推迟针对伊朗能源设施的打击期限。",
+        perspectives={"Yonhap": "聚焦特朗普结束伊朗战争的时间表。"},
+    )
+    visit_summary = ClusterSummary(
+        cluster=visit_cluster,
+        summary="**特朗普将于5月中旬访华，中美领导人将举行会晤**\n\n白宫称特朗普计划在5月中旬访问中国，此前他推迟伊朗战争相关打击期限以争取谈判空间。",
+        perspectives={
+            "Reuters": "聚焦访华时间表与伊朗战争延后之间的外交关联。",
+            "澎湃新闻": "聚焦中美会晤安排。",
+        },
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["Reuters"], perspective="聚焦访华时间表与伊朗战争延后之间的外交关联。"),
+            PerspectiveGroup(sources=["澎湃新闻"], perspective="聚焦中美会晤安排。"),
+        ],
+    )
+
+    hot_topics, focus_storylines, regular, positive = resolve_display_duplicates(
+        [],
+        [],
+        [war_summary, visit_summary],
+        [],
+    )
+
+    assert hot_topics == []
+    assert focus_storylines == []
+    assert positive == []
+    assert regular == [visit_summary]
+    assert visit_summary.duplicate_action == "merged"
+    assert war_summary.duplicate_action == "suppressed"
+    assert "Reuters" in visit_summary.cluster.sources
+    assert "Yonhap" in visit_summary.cluster.sources
+    assert visit_summary.event_signature["contexts"] == ["iran-war", "trump-china-visit"]
+
+
+def test_display_duplicate_resolver_merges_cross_lane_duplicate():
+    focus_summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Space",
+            articles=[_article("The Verge", "NASA cancels lunar Gateway to fund moon base")],
+        ),
+        summary="**NASA 取消月球轨道站计划，转向建设200亿美元月球基地**\n\nNASA 将资金从月球轨道站转向月球基地建设。",
+        perspectives={"The Verge": "聚焦项目调整。"},
+    )
+    regular_summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Space",
+            articles=[_article("Reuters", "NASA pauses lunar space station and backs $20 billion moon base")],
+        ),
+        summary="**NASA 宣布暂停月球轨道空间站计划，转向投资200亿美元建设月球基地**\n\nNASA 暂停月球轨道空间站计划，转向投资月球基地。",
+        perspectives={
+            "Reuters": "聚焦预算转向。",
+            "BBC": "聚焦登月计划影响。",
+        },
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["Reuters"], perspective="聚焦预算转向。"),
+            PerspectiveGroup(sources=["BBC"], perspective="聚焦登月计划影响。"),
+        ],
+    )
+    focus_storylines = [{"storyline_key": "nasa-moon", "member_count": 1, "summaries": [focus_summary]}]
+
+    hot_topics, focus_storylines, regular, positive = resolve_display_duplicates(
+        [],
+        focus_storylines,
+        [regular_summary],
+        [],
+    )
+
+    assert hot_topics == []
+    assert focus_storylines == []
+    assert positive == []
+    assert regular == [regular_summary]
+    assert regular_summary.duplicate_action == "merged"
+    assert focus_summary.duplicate_action == "suppressed"
+
+
+def test_display_duplicate_resolver_keeps_same_company_different_actions():
+    wwdc = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Smartphones & Electronics",
+            articles=[_article("The Verge", "Apple announces WWDC26 dates")],
+        ),
+        summary="**苹果 WWDC26 定档 6 月 8 日，将聚焦 AI 进展与 iOS 27**\n\n苹果宣布开发者大会日期，并预告系统更新。",
+        perspectives={"The Verge": "聚焦开发者大会。"},
+    )
+    maps = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Tech Companies - International",
+            articles=[_article("TechCrunch", "Apple Maps will add search ads")],
+        ),
+        summary="**苹果地图将推出搜索广告并上线网页版以挑战谷歌**\n\n苹果计划扩大地图商业化。",
+        perspectives={"TechCrunch": "聚焦广告业务。"},
+    )
+
+    _hot_topics, _focus_storylines, regular, _positive = resolve_display_duplicates([], [], [wwdc, maps], [])
+
+    assert regular == [wwdc, maps]
+    assert wwdc.duplicate_action == "kept"
+    assert maps.duplicate_action == "kept"
+
+
+def test_selection_score_prefers_distinct_perspectives_over_same_angle_pileup():
+    cfg = _config(main_limit=2)
+    pileup_cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            _article("Reuters", "Same fact confirmed"),
+            _article("BBC", "Same fact confirmed"),
+            _article("AP", "Same fact confirmed"),
+            _article("Guardian", "Same fact confirmed"),
+        ],
+    )
+    rich_cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            _article("Reuters", "Policy dispute deepens"),
+            _article("BBC", "Policy dispute deepens"),
+        ],
+    )
+    pileup = ClusterSummary(
+        cluster=pileup_cluster,
+        summary="**Same fact confirmed**\n\nBody.",
+        perspectives={source: "Same angle." for source in pileup_cluster.sources},
+        grouped_perspectives=[PerspectiveGroup(sources=pileup_cluster.sources, perspective="Same angle.")],
+    )
+    rich = ClusterSummary(
+        cluster=rich_cluster,
+        summary="**Policy dispute deepens**\n\nBody.",
+        perspectives={"Reuters": "Official angle.", "BBC": "Public impact angle."},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["Reuters"], perspective="Official angle."),
+            PerspectiveGroup(sources=["BBC"], perspective="Public impact angle."),
+        ],
+    )
+
+    _hot_topics, _focus_storylines, main_summaries = select_hot_topic_families([pileup, rich], cfg)
+
+    assert main_summaries[0] == rich
+    assert rich.selection_score > pileup.selection_score
+
+
+def test_selection_balance_reserves_slot_for_qualified_tech_story():
+    cfg = _config(main_limit=5)
+    geopolitical = []
+    for index in range(5):
+        cluster = ArticleCluster(
+            topic_category="World News",
+            articles=[
+                _article("Reuters", f"World story {index} A"),
+                _article("BBC", f"World story {index} B"),
+            ],
+        )
+        geopolitical.append(
+            ClusterSummary(
+                cluster=cluster,
+                summary=f"**World story {index}**\n\nBody.",
+                perspectives={"Reuters": "Official angle.", "BBC": "Public angle."},
+                grouped_perspectives=[
+                    PerspectiveGroup(sources=["Reuters"], perspective="Official angle."),
+                    PerspectiveGroup(sources=["BBC"], perspective="Public angle."),
+                ],
+            )
+        )
+    tech_cluster = ArticleCluster(
+        topic_category="AI & LLM",
+        articles=[_article("TechCrunch", "AI model launch")],
+    )
+    tech = ClusterSummary(
+        cluster=tech_cluster,
+        summary="**AI model launch**\n\nBody.",
+        perspectives={"TechCrunch": "Product angle."},
+        grouped_perspectives=[PerspectiveGroup(sources=["TechCrunch"], perspective="Product angle.")],
+    )
+
+    _hot_topics, _focus_storylines, main_summaries = select_hot_topic_families([*geopolitical, tech], cfg)
+
+    assert tech in main_summaries
+    assert len(main_summaries) == 5
 
 
 def test_select_hot_topic_families_suppresses_incoherent_hotspot_family():

@@ -75,7 +75,11 @@ class TelegramPublisher:
         items = [
             {
                 "topic_category": str(cluster.get("topic", "")),
-                "summary": str(cluster.get("summary", "")),
+                "summary": (
+                    f"**{cluster.get('headline')}**\n\n{cluster.get('summary', '')}"
+                    if cluster.get("headline") and "**" not in str(cluster.get("summary", ""))
+                    else str(cluster.get("summary", ""))
+                ),
             }
             for cluster in clusters
             if cluster.get("summary")
@@ -83,7 +87,11 @@ class TelegramPublisher:
         items.extend(
             {
                 "topic_category": str(cluster.get("topic", "")),
-                "summary": str(cluster.get("summary", "")),
+                "summary": (
+                    f"**{cluster.get('headline')}**\n\n{cluster.get('summary', '')}"
+                    if cluster.get("headline") and "**" not in str(cluster.get("summary", ""))
+                    else str(cluster.get("summary", ""))
+                ),
             }
             for cluster in positive_stories
             if cluster.get("summary")

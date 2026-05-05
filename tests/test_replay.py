@@ -176,3 +176,36 @@ def test_scheduler_replay_resets_target_articles_and_republishes(monkeypatch):
     assert calls["report_date"] == replay_date
     assert calls["articles_override"] == target_articles
     assert calls["push_after_render"] is True
+
+
+def test_scheduler_publish_cleans_existing_report_before_collecting_unclustered(monkeypatch):
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.cfg = _cfg()
+
+    import asyncio
+
+    scheduler._pipeline_lock = asyncio.Lock()
+    calls: dict[str, object] = {}
+    monkeypatch.setattr("newsprism.runtime.scheduler.get_report_article_ids", lambda _: [11, 22])
+
+    def reset(ids):
+        calls["reset_ids"] = ids
+        return len(ids)
+
+    def delete(report_date):
+        calls["deleted_report_date"] = report_date
+        return 2
+
+    def get_unclustered_articles(max_age_hours):
+        calls["get_unclustered_after_cleanup"] = "reset_ids" in calls and "deleted_report_date" in calls
+        return []
+
+    monkeypatch.setattr("newsprism.runtime.scheduler.reset_articles_clustered", reset)
+    monkeypatch.setattr("newsprism.runtime.scheduler.delete_clusters_for_date", delete)
+    monkeypatch.setattr("newsprism.runtime.scheduler.get_unclustered_articles", get_unclustered_articles)
+
+    asyncio.run(scheduler.publish(report_date=datetime(2026, 3, 14, tzinfo=timezone.utc).date(), push_after_render=False))
+
+    assert calls["reset_ids"] == [11, 22]
+    assert calls["deleted_report_date"] == "2026-03-14"
+    assert calls["get_unclustered_after_cleanup"] is True
