@@ -56,6 +56,8 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
             http_status=200,
             result_count=3,
             accepted_count=1,
+            rejection_reason="generic_page",
+            rejection_count=2,
             duration_ms=120,
             estimated_cost_usd=0.02,
         ),
@@ -64,7 +66,7 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
 
     with sqlite3.connect(db_path) as conn:
         telemetry = conn.execute(
-            "SELECT provider, request_type, target_region, accepted_count, estimated_cost_usd "
+            "SELECT provider, request_type, target_region, accepted_count, rejection_reason, rejection_count, estimated_cost_usd "
             "FROM search_request_events"
         ).fetchone()
-    assert telemetry == ("x", "user_timeline", "jp", 1, 0.02)
+    assert telemetry == ("x", "user_timeline", "jp", 1, "generic_page", 2, 0.02)

@@ -1458,6 +1458,8 @@
             <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
             {% if c.perspective_preview %}
             <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
+            {% elif c.source_confirmation_preview %}
+            <div class="card-preview">{{ bilingual_text('多源确认：' ~ c.source_confirmation_preview, 'Multi-source confirmation: ' ~ (c.source_confirmation_preview_en or c.source_confirmation_preview)) }}</div>
             {% endif %}
           </div>
 
@@ -1521,6 +1523,8 @@
             <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
             {% if c.perspective_preview %}
             <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
+            {% elif c.source_confirmation_preview %}
+            <div class="card-preview">{{ bilingual_text('多源确认：' ~ c.source_confirmation_preview, 'Multi-source confirmation: ' ~ (c.source_confirmation_preview_en or c.source_confirmation_preview)) }}</div>
             {% endif %}
           </div>
 

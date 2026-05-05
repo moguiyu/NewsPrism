@@ -526,6 +526,49 @@ class TestSearchAndFetch:
         results = seeker._search_and_fetch(ArticleCluster(topic_category="Tech", articles=[]), "jp", "chip export")
 
         assert results == ([], "")
+        assert seeker.rejection_counts["stale"] == 1
+
+    @patch("newsprism.service.seeker.ActiveSeeker._search_tavily")
+    def test_search_rejects_unknown_freshness_for_non_official_results(self, mock_tavily, seeker):
+        mock_tavily.return_value = [
+            {
+                "url": "https://nhk.or.jp/news/no-date",
+                "title": "Japan chip export controls response",
+                "content": "Japan chip export controls response and policy details." + "x" * 120,
+                "origin_region": "jp",
+            }
+        ]
+
+        results = seeker._search_and_fetch(ArticleCluster(topic_category="Tech", articles=[]), "jp", "chip export")
+
+        assert results == ([], "")
+        assert seeker.rejection_counts["unknown_freshness"] == 1
+
+    @patch("newsprism.service.seeker.ActiveSeeker._search_tavily")
+    def test_search_rejects_generic_result_pages(self, mock_tavily, seeker):
+        mock_tavily.return_value = [
+            {
+                "url": "https://www.reuters.com/company/general-motors-co/",
+                "title": "General Motors Co | Reuters",
+                "content": "General Motors company profile and latest stock information." + "x" * 120,
+                "published_at": datetime.now(tz=timezone.utc).isoformat(),
+                "origin_region": "jp",
+                "source_name": "Reuters",
+            },
+            {
+                "url": "https://www.asahi.com/topics/word/産業用ロボット.html",
+                "title": "産業用ロボットの最新ニュース：朝日新聞",
+                "content": "Topic page collecting industrial robot news." + "x" * 120,
+                "published_at": datetime.now(tz=timezone.utc).isoformat(),
+                "origin_region": "jp",
+                "source_name": "朝日新聞",
+            },
+        ]
+
+        results = seeker._search_and_fetch(ArticleCluster(topic_category="Tech", articles=[]), "jp", "industrial robot")
+
+        assert results == ([], "")
+        assert seeker.rejection_counts["generic_page"] == 2
 
     @patch("newsprism.service.seeker.ActiveSeeker._search_tavily")
     def test_search_rejects_repeated_angle(self, mock_tavily, seeker):

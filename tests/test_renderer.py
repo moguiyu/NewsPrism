@@ -174,6 +174,8 @@ class TestPerspectivesContext:
         assert "data-lang-choice=\"en\"" not in html
         assert payload["available_languages"] == ["zh"]
         assert payload["clusters"][0]["perspectives_list"] == []
+        assert "**Single-source story**" not in html
+        assert payload["clusters"][0]["summary"] == "Body text here."
 
     def test_render_with_english_content_enables_language_toggle(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -208,6 +210,78 @@ class TestPerspectivesContext:
         assert payload["default_language"] == "zh"
         assert payload["clusters"][0]["headline_en"] == "English Headline"
         assert "English summary content." in payload["clusters"][0]["summary_en"]
+
+    def test_render_includes_duplicate_audit_metadata(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/duplicate-audit",
+                        title="Trump China visit",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Story body.",
+                    )
+                ],
+            ),
+            summary="**特朗普访华安排**\n\n摘要内容。",
+            perspectives={},
+        )
+        summary.event_signature = {"entities": ["特朗普", "中国"], "actions": ["visit"], "times": [], "contexts": ["trump-china-visit"]}
+        summary.duplicate_action = "merged"
+        summary.duplicate_reason = "shared_context:trump-china-visit"
+        summary.duplicate_confidence = 0.88
+
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert payload["clusters"][0]["event_signature"]["contexts"] == ["trump-china-visit"]
+        assert payload["clusters"][0]["duplicate_action"] == "merged"
+        assert payload["clusters"][0]["duplicate_reason"] == "shared_context:trump-china-visit"
+        assert payload["clusters"][0]["duplicate_confidence"] == 0.88
+
+    def test_render_labels_one_angle_multi_source_as_confirmation(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/one",
+                        title="One angle",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="One angle body.",
+                    ),
+                    Article(
+                        url="https://bbc.com/one",
+                        title="One angle confirmed",
+                        source_name="BBC",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="One angle confirmed body.",
+                    ),
+                ],
+            ),
+            summary="**One angle story**\n\nBody text here.",
+            perspectives={
+                "Reuters": "Both sources report the same core fact.",
+                "BBC": "Both sources report the same core fact.",
+            },
+            grouped_perspectives=[
+                PerspectiveGroup(sources=["Reuters", "BBC"], perspective="Both sources report the same core fact."),
+            ],
+        )
+
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert "多源确认：" in html
+        assert "视角差异：" not in html
+        assert payload["clusters"][0]["distinct_perspective_count"] == 1
+        assert payload["clusters"][0]["source_confirmation_preview"]
 
     def test_focus_storyline_prefers_readable_name_over_truncated_prefix(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
