@@ -526,6 +526,14 @@ class ActiveSeeker:
     # Countries where native internet is heavily restricted/geo-blocked.
     # BrightData unavailability for these is logged at WARN level.
     _BLOCKED_REGIONS: frozenset[str] = frozenset({"ir", "kp", "by", "cu", "sy", "ru"})
+    _GENERIC_RESULT_PATH_RE = re.compile(
+        r"(^|/)(author|authors|company|companies|topic|topics|tag|tags|search|archive|archives|category|categories|word)(/|$)",
+        re.IGNORECASE,
+    )
+    _GENERIC_RESULT_TITLE_RE = re.compile(
+        r"(\|\s*Reuters\s*$|latest news|latest updates|最新ニュース|最新消息|関連記事|company profile|author profile)",
+        re.IGNORECASE,
+    )
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -564,6 +572,8 @@ class ActiveSeeker:
         self._web_search_cache: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         self._official_web_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._official_social_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self.rejection_counts: dict[str, int] = {}
+        self._rejected_result_keys: set[tuple[str, str]] = set()
         self.social_providers: dict[str, SocialFallbackProvider] = {
             "x": XOfficialProvider(
                 cfg.x_bearer_token,
@@ -577,6 +587,8 @@ class ActiveSeeker:
         self._web_search_cache.clear()
         self._official_web_cache.clear()
         self._official_social_cache.clear()
+        self.rejection_counts.clear()
+        self._rejected_result_keys.clear()
 
     def _billing_config(self, provider_key: str) -> dict[str, Any]:
         return self.billing.get(provider_key, {}) or {}
@@ -623,6 +635,8 @@ class ActiveSeeker:
         http_status: int | None = None,
         result_count: int | None = None,
         accepted_count: int | None = None,
+        rejection_reason: str | None = None,
+        rejection_count: int | None = None,
         duration_ms: int | None = None,
         estimated_cost_usd: float | None = None,
     ) -> None:
@@ -638,6 +652,8 @@ class ActiveSeeker:
                 http_status=http_status,
                 result_count=result_count,
                 accepted_count=accepted_count,
+                rejection_reason=rejection_reason,
+                rejection_count=rejection_count,
                 duration_ms=duration_ms,
                 estimated_cost_usd=estimated_cost_usd,
             ),
@@ -860,19 +876,21 @@ class ActiveSeeker:
         for query in search_queries:
             news_results = self._search_brightdata(region, query)
             if news_results:
-                accepted = self._accept_results(cluster, region, query, news_results)
+                accepted = self._accept_results(cluster, region, query, news_results, "brightdata")
                 if accepted:
                     return accepted, "BrightData"
             news_results = self._search_tavily(region, query)
             if news_results:
-                accepted = self._accept_results(cluster, region, query, news_results)
+                accepted = self._accept_results(cluster, region, query, news_results, "tavily")
                 if accepted:
                     return accepted, "Tavily"
 
         # Stage 3: Curated official web sources
         official_web_results = self._search_official_web(region)
         if official_web_results:
-            accepted_web = self._accept_results(cluster, region, search_queries[0], official_web_results)
+            accepted_web = self._accept_results(
+                cluster, region, search_queries[0], official_web_results, "official_web"
+            )
             if accepted_web:
                 return accepted_web, "official_web"
 
@@ -882,7 +900,9 @@ class ActiveSeeker:
         social_results = self._search_official_social(region, search_queries[0])
         if not social_results:
             return [], ""
-        accepted_social = self._accept_results(cluster, region, search_queries[0], social_results)
+        accepted_social = self._accept_results(
+            cluster, region, search_queries[0], social_results, "official_social"
+        )
         if accepted_social:
             return accepted_social, "official_social"
         return [], ""
@@ -893,22 +913,47 @@ class ActiveSeeker:
         region: str,
         search_keyword: str,
         results: list[dict[str, Any]],
+        provider_key: str | None = None,
     ) -> list[Article]:
         existing_urls = {article.url for article in cluster.articles}
         accepted_sources = {article.source_name for article in cluster.articles if article.search_region == region}
         accepted: list[Article] = []
+        rejection_reasons: dict[str, int] = {}
         for result in results:
             article = self._result_to_article(result, region)
             if article is None or article.url in existing_urls:
                 continue
             if article.source_name in accepted_sources:
                 continue
-            if not self._is_result_acceptable(cluster, article, search_keyword):
+            rejection_reason = self._result_rejection_reason(cluster, article, search_keyword)
+            if rejection_reason:
+                article.search_acceptance_status = "rejected"  # type: ignore[attr-defined]
+                article.search_acceptance_reason = rejection_reason  # type: ignore[attr-defined]
+                rejection_key = (article.url, rejection_reason)
+                if rejection_key not in self._rejected_result_keys:
+                    self._rejected_result_keys.add(rejection_key)
+                    self.rejection_counts[rejection_reason] = self.rejection_counts.get(rejection_reason, 0) + 1
+                    rejection_reasons[rejection_reason] = rejection_reasons.get(rejection_reason, 0) + 1
+                logger.debug("Rejected %s: %s", article.url, rejection_reason)
                 continue
+            article.search_acceptance_status = "accepted"  # type: ignore[attr-defined]
+            article.search_acceptance_reason = ""  # type: ignore[attr-defined]
             accepted.append(article)
             accepted_sources.add(article.source_name)
             if len(accepted) >= self.max_results_per_region:
                 break
+        if provider_key and rejection_reasons:
+            for reason, count in sorted(rejection_reasons.items()):
+                self._record_search_event(
+                    provider=provider_key,
+                    request_type="acceptance_filter",
+                    target_region=region,
+                    query=search_keyword,
+                    result_count=len(results),
+                    accepted_count=len(accepted),
+                    rejection_reason=reason,
+                    rejection_count=count,
+                )
         return accepted
 
     def _result_to_article(self, result: dict[str, Any], region: str) -> Article | None:
@@ -931,7 +976,7 @@ class ActiveSeeker:
         if not origin_region and result.get("is_official_source"):
             origin_region = region
 
-        return Article(
+        article = Article(
             id=None,
             url=url,
             title=title,
@@ -947,21 +992,31 @@ class ActiveSeeker:
             origin_region=origin_region,
             searched_provider=result.get("searched_provider"),
         )
+        article.result_freshness_state = self._freshness_state(published_at, article.is_official_source)  # type: ignore[attr-defined]
+        return article
 
     def _is_result_acceptable(self, cluster: ArticleCluster, article: Article, search_keyword: str) -> bool:
+        return self._result_rejection_reason(cluster, article, search_keyword) == ""
+
+    def _result_rejection_reason(self, cluster: ArticleCluster, article: Article, search_keyword: str) -> str:
         if not self._is_region_valid(article):
-            logger.debug("Rejected %s: region mismatch", article.url)
-            return False
-        if not self._passes_freshness(article):
-            logger.debug("Rejected %s: stale or unknown freshness", article.url)
-            return False
+            return "region_mismatch"
+        if self._is_generic_result(article):
+            return "generic_page"
+        freshness_state = getattr(article, "result_freshness_state", None) or self._freshness_state(
+            self._parse_published_at(article.published_at, article.url),
+            article.is_official_source,
+        )
+        article.result_freshness_state = freshness_state  # type: ignore[attr-defined]
+        if freshness_state == "unknown":
+            return "unknown_freshness"
+        if freshness_state == "stale":
+            return "stale"
         if not self._passes_event_match(cluster, article, search_keyword):
-            logger.debug("Rejected %s: event match too weak", article.url)
-            return False
+            return "weak_event_match"
         if not self._adds_new_angle(cluster, article):
-            logger.debug("Rejected %s: repeated existing angle", article.url)
-            return False
-        return True
+            return "repeated_angle"
+        return ""
 
     def _is_region_valid(self, article: Article) -> bool:
         return article.origin_region == article.search_region and article.search_region is not None
@@ -973,14 +1028,48 @@ class ActiveSeeker:
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=self.result_max_age_h)
         return parsed >= cutoff
 
+    def _freshness_state(self, published_at: datetime | None, is_official_source: bool) -> str:
+        if published_at is None:
+            if is_official_source and self.allow_unknown_freshness_for_official:
+                return "unknown_official_allowed"
+            return "unknown"
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=self.result_max_age_h)
+        return "fresh" if published_at >= cutoff else "stale"
+
+    def _is_generic_result(self, article: Article) -> bool:
+        parsed = urllib.parse.urlparse(article.url)
+        path = parsed.path.lower().strip("/")
+        if self._GENERIC_RESULT_PATH_RE.search(f"/{path}/"):
+            return True
+        if self._GENERIC_RESULT_TITLE_RE.search(article.title):
+            return True
+        if not path and parsed.netloc:
+            return True
+        return False
+
     def _passes_event_match(self, cluster: ArticleCluster, article: Article, search_keyword: str) -> bool:
         lexical_score = max(
             self._query_token_overlap(search_keyword, f"{article.title}\n{article.content[:800]}"),
             self._cluster_title_overlap(cluster, article.title),
         )
-        if lexical_score >= max(self.min_query_token_overlap, self.min_cluster_title_overlap):
+        shared_signal = self._shared_entity_or_action_signal(cluster, article, search_keyword)
+        if lexical_score >= max(self.min_query_token_overlap, self.min_cluster_title_overlap) and shared_signal:
             return True
-        return self._semantic_event_match(cluster, article) >= self.semantic_match_threshold
+        semantic_score = self._semantic_event_match(cluster, article)
+        if shared_signal and semantic_score >= self.semantic_match_threshold:
+            return True
+        return semantic_score >= max(self.semantic_match_threshold, 0.85) and bool(
+            re.search(r"[^\x00-\x7f]", f"{article.title} {article.content[:500]}")
+        )
+
+    def _shared_entity_or_action_signal(self, cluster: ArticleCluster, article: Article, search_keyword: str) -> bool:
+        cluster_text = " ".join(existing.title for existing in cluster.articles[:6])
+        candidate_text = f"{article.title} {article.content[:500]}"
+        cluster_tokens = set(self._keyword_tokens(f"{cluster_text} {search_keyword}"))
+        candidate_tokens = set(self._keyword_tokens(candidate_text))
+        if len(cluster_tokens & candidate_tokens) >= 2:
+            return True
+        return self._query_token_overlap(search_keyword, candidate_text) >= self.min_query_token_overlap
 
     def _adds_new_angle(self, cluster: ArticleCluster, article: Article) -> bool:
         max_overlap = 0.0

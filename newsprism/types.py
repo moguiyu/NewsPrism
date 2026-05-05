@@ -60,6 +60,8 @@ class SearchRequestEvent:
     http_status: int | None = None
     result_count: int | None = None
     accepted_count: int | None = None
+    rejection_reason: str | None = None
+    rejection_count: int | None = None
     duration_ms: int | None = None
     estimated_cost_usd: float | None = None
     created_at: datetime | None = None

@@ -70,6 +70,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 http_status INTEGER,
                 result_count INTEGER,
                 accepted_count INTEGER,
+                rejection_reason TEXT,
+                rejection_count INTEGER,
                 duration_ms INTEGER,
                 estimated_cost_usd REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -120,6 +122,13 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("ALTER TABLE articles ADD COLUMN origin_region TEXT")
         if "searched_provider" not in article_columns:
             conn.execute("ALTER TABLE articles ADD COLUMN searched_provider TEXT")
+
+        cursor = conn.execute("PRAGMA table_info(search_request_events)")
+        search_event_columns = {row[1] for row in cursor.fetchall()}
+        if "rejection_reason" not in search_event_columns:
+            conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_reason TEXT")
+        if "rejection_count" not in search_event_columns:
+            conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_count INTEGER")
 
 
 @contextmanager
@@ -226,9 +235,10 @@ def insert_search_request_event(event: SearchRequestEvent, db_path: Path = DB_PA
         cur = conn.execute(
             """INSERT INTO search_request_events (
                    provider, request_type, target_region, query, account_id,
-                   http_status, result_count, accepted_count, duration_ms, estimated_cost_usd, created_at
+                   http_status, result_count, accepted_count, rejection_reason, rejection_count,
+                   duration_ms, estimated_cost_usd, created_at
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
             (
                 event.provider,
                 event.request_type,
@@ -238,6 +248,8 @@ def insert_search_request_event(event: SearchRequestEvent, db_path: Path = DB_PA
                 event.http_status,
                 event.result_count,
                 event.accepted_count,
+                event.rejection_reason,
+                event.rejection_count,
                 event.duration_ms,
                 event.estimated_cost_usd,
                 event.created_at.isoformat() if event.created_at else None,
