@@ -1,0 +1,35 @@
+quality:
+  min_publish_score: 0.45
+  min_review_score: 0.35
+  suppress_score: 0.20
+  high_risk_single_source_review: true
+  high_risk_single_source_suppress: false
+  require_independent_counterpart_for_official: true
+  max_claims_per_cluster: 6
+  min_claim_support_confidence: 0.55
+
+source_reliability:
+  tier_scores:
+    editorial: 0.82
+    tech: 0.74
+    portal: 0.55
+    official: 0.72
+    official_web: 0.72
+    official_social: 0.64
+    active_search: 0.58
+    unknown: 0.45
+  searched_provider_penalty: 0.08
+  independent_source_bonus: 0.06
+  official_source_penalty: 0.03
+
+editorial_rules:
+  - id: official_independent_contrast
+    description: Prefer official and independent source contrast on high-risk stories.
+  - id: multi_region_confirmation
+    description: Prefer claims confirmed by sources from multiple regions.
+  - id: contested_claims_no_single_source
+    description: Do not present contested facts as settled when only one source supports them.
+  - id: evidence_bound_summary
+    description: Summaries must stay within confirmed or explicitly attributed evidence.
+  - id: frame_attribution
+    description: Attribute national, institutional, or commercial framing to its source.

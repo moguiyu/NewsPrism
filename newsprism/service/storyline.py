@@ -12,7 +12,7 @@ from datetime import date
 import numpy as np
 
 from newsprism.config import Config
-from newsprism.types import Article, ArticleCluster, Cluster
+from newsprism.types import Article, ArticleCluster, Cluster, ClusterQualityReport, StorylineEvent
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,14 @@ _HEADLINEISH_NAME_TOKENS = {
 _STORYLINE_NAME_STOPWORDS = _GENERIC_TITLE_STOPWORDS | {
     "总统", "总理", "部长", "政府", "白宫", "交通部", "能源设施", "消息", "报道", "主线", "话题", "焦点",
     "战事", "局势", "危机", "冲突", "谈判", "制裁", "贸易", "选情", "政策", "能源", "航运", "赛事", "疫情", "灾情",
+}
+_STATE_CORRECTION_TERMS = {
+    "更正", "纠正", "撤回", "否认", "澄清", "辟谣",
+    "correction", "corrected", "retract", "denies", "clarifies",
+}
+_STATE_TURNING_POINT_TERMS = {
+    "突破", "转折", "升级", "扩大", "达成协议", "停火", "批准", "裁定",
+    "breakthrough", "turning point", "escalates", "expands", "deal", "ceasefire", "ruling",
 }
 
 
@@ -304,6 +312,98 @@ def _spillover_signal_score(signals: set[str]) -> int:
 def _is_broad_policy_profile(profile: dict[str, object]) -> bool:
     signals = set(profile["signals"])
     return bool(signals & {"regulation", "diplomacy"}) and not bool(signals & {"transport", "energy", "market"})
+
+
+class StorylineStateMachine:
+    """Assign explicit lifecycle state and a compact timeline for storyline clusters."""
+
+    STATES = {"emerging", "developing", "turning_point", "correction", "stabilized", "archived"}
+
+    def resolve_state(
+        self,
+        cluster: ArticleCluster,
+        historical_clusters: list[Cluster],
+        quality_report: ClusterQualityReport | None = None,
+        report_date: date | None = None,
+    ) -> str:
+        text = _cluster_text(cluster)
+        lowered = text.lower()
+        quality_report = quality_report or cluster.quality_report
+        if any(term in lowered or term in text for term in _STATE_CORRECTION_TERMS):
+            return "correction"
+        if quality_report and quality_report.contested_claims:
+            return "turning_point"
+        if any(term in lowered or term in text for term in _STATE_TURNING_POINT_TERMS):
+            return "turning_point"
+        related_history = self._related_history(cluster, historical_clusters)
+        if related_history and quality_report and quality_report.overall_score >= 0.72 and not quality_report.flags:
+            return "stabilized"
+        if related_history:
+            return "developing"
+        return "emerging"
+
+    def apply(
+        self,
+        clusters: list[ArticleCluster],
+        historical_clusters: list[Cluster],
+        current_date: date,
+    ) -> list[ArticleCluster]:
+        for cluster in clusters:
+            state = self.resolve_state(cluster, historical_clusters, cluster.quality_report, current_date)
+            cluster.storyline_state = state
+            cluster.storyline_timeline = self.timeline_for_cluster(cluster, historical_clusters, current_date, state)
+        return clusters
+
+    def timeline_for_cluster(
+        self,
+        cluster: ArticleCluster,
+        historical_clusters: list[Cluster],
+        current_date: date,
+        state: str | None = None,
+    ) -> list[StorylineEvent]:
+        key = cluster.storyline_key or cluster.macro_topic_key or _slugify(cluster.topic_category)
+        related = self._related_history(cluster, historical_clusters)
+        events: list[StorylineEvent] = []
+        for historical in related[:4]:
+            events.append(
+                StorylineEvent(
+                    storyline_key=key,
+                    event_date=historical.report_date,
+                    title=_short_name(historical.summary or historical.topic_category, 80),
+                    state=getattr(historical, "storyline_state", "developing") or "developing",
+                    summary=historical.summary,
+                    cluster_id=historical.id,
+                    quality_score=float(getattr(historical, "quality_score", 0.0) or 0.0),
+                    event_type="history",
+                )
+            )
+        lead_title = cluster.articles[0].title if cluster.articles else cluster.topic_category
+        events.append(
+            StorylineEvent(
+                storyline_key=key,
+                event_date=current_date.isoformat(),
+                title=lead_title,
+                state=state or cluster.storyline_state,
+                summary=cluster.topic_category,
+                cluster_id=None,
+                quality_score=(cluster.quality_report.overall_score if cluster.quality_report else 0.0),
+                event_type="current",
+            )
+        )
+        events.sort(key=lambda event: event.event_date)
+        return events[-5:]
+
+    def _related_history(self, cluster: ArticleCluster, historical_clusters: list[Cluster]) -> list[Cluster]:
+        key = cluster.storyline_key or cluster.macro_topic_key
+        if not key:
+            return []
+        related = [
+            historical
+            for historical in historical_clusters
+            if historical.storyline_key == key
+        ]
+        related.sort(key=lambda historical: (historical.report_date, historical.id or 0), reverse=True)
+        return related
 
 
 class EventClusterValidator:

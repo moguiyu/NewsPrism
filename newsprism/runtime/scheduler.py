@@ -14,7 +14,7 @@ import re
 import shutil
 import time
 import urllib.parse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -34,9 +34,11 @@ from newsprism.repo import (
     init_db,
     insert_article,
     insert_cluster,
+    insert_cluster_quality_report,
     mark_articles_clustered,
     reset_articles_clustered,
     update_article_embedding,
+    upsert_storyline_state,
 )
 from newsprism.runtime.publisher import TelegramPublisher
 from newsprism.runtime.renderer import HtmlRenderer, _body_only, _extract_headline
@@ -45,8 +47,9 @@ from newsprism.service.collector import Collector
 from newsprism.service.dedup import Deduplicator
 from newsprism.service.filter import TopicTagger
 from newsprism.service.freshness import FreshnessEvaluator
+from newsprism.service.quality import QualityAssessor
 from newsprism.service.seeker import ActiveSeeker
-from newsprism.service.storyline import EventClusterValidator, StorylineResolver
+from newsprism.service.storyline import EventClusterValidator, StorylineResolver, StorylineStateMachine
 from newsprism.service.summarizer import Summarizer
 from newsprism.types import ArticleCluster, Cluster, ClusterSummary, raw_to_articles
 
@@ -1492,7 +1495,9 @@ class Scheduler:
         self.cluster_validator = EventClusterValidator(cfg)
         self.seeker = ActiveSeeker(cfg)
         self.summarizer = Summarizer(cfg)
+        self.quality_assessor = QualityAssessor(cfg)
         self.freshness_evaluator = FreshnessEvaluator(cfg)
+        self.storyline_state_machine = StorylineStateMachine()
         self.storyline_resolver = StorylineResolver(
             cfg,
             summarizer=self.summarizer,
@@ -1775,7 +1780,30 @@ class Scheduler:
                     if article.id is None and callable(get_article_id_by_url):
                         article.id = get_article_id_by_url(article.url)
 
+            precheck_reports = self.quality_assessor.assess_clusters(selected_clusters)
+            quality_stats = Counter(report.status for report in precheck_reports)
+            selected_clusters = [
+                cluster
+                for cluster in selected_clusters
+                if not (cluster.quality_report and cluster.quality_report.status == "suppress")
+            ]
+            logger.info(
+                "Quality precheck: %s; %d clusters retained",
+                dict(quality_stats),
+                len(selected_clusters),
+            )
+            self.storyline_state_machine.apply(
+                selected_clusters,
+                get_recent_clusters(
+                    days=hot_cfg.get("history_window_days", 5),
+                    anchor_date=today.isoformat(),
+                ),
+                today,
+            )
+
             summaries = self.summarizer.summarize_all(selected_clusters)
+            for summary in summaries:
+                self.quality_assessor.postcheck_summary(summary)
 
             # Phase 2.6: Evaluate freshness against historical clusters
             historical = get_recent_clusters(
@@ -1819,8 +1847,14 @@ class Scheduler:
                     storyline_name=cs.cluster.storyline_name,
                     storyline_role=cs.cluster.storyline_role,
                     storyline_confidence=cs.cluster.storyline_confidence,
+                    storyline_state=cs.storyline_state or cs.cluster.storyline_state,
+                    quality_status=cs.quality_status,
+                    quality_score=cs.quality_score,
                 )
-                insert_cluster(cluster_record)
+                cluster_id = insert_cluster(cluster_record)
+                if cs.quality_report is not None:
+                    insert_cluster_quality_report(cluster_id, cs.quality_report)
+                upsert_storyline_state(cluster_id, cs, today.isoformat())
                 mark_articles_clustered([a.id for a in cs.cluster.articles if a.id])
 
                 kept_summaries.append(cs)

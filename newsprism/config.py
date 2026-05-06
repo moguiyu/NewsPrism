@@ -45,6 +45,7 @@ class Config:
     summarizer: dict[str, Any]
     output: dict[str, Any]
     active_search: dict[str, Any]
+    editorial_values: dict[str, Any] = field(default_factory=dict)
 
     # Topic equivalence: canonical topic → list of equivalent topics
     topic_equivalence: dict[str, list[str]] = field(default_factory=dict)
@@ -89,6 +90,12 @@ def _parse_keywords(keywords_file: str) -> dict[str, list[str]]:
 def load_config(config_path: str = "config/config.yaml") -> Config:
     path = Path(config_path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    editorial_values_path = Path(raw.get("editorial_values_file", "config/editorial-values.yaml"))
+    if not editorial_values_path.is_absolute():
+        editorial_values_path = path.parent.parent / editorial_values_path
+    editorial_values: dict[str, Any] = {}
+    if editorial_values_path.exists():
+        editorial_values = yaml.safe_load(editorial_values_path.read_text(encoding="utf-8")) or {}
 
     sources = [
         SourceConfig(
@@ -130,5 +137,6 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         summarizer=raw.get("summarizer", {}),
         output=raw.get("output", {}),
         active_search=raw.get("active_search", {}),
+        editorial_values=editorial_values,
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
     )
