@@ -3,18 +3,22 @@
 NewsPrism is a multilingual news monitor that collects articles from 38 sources across 11 countries, clusters same-event coverage, and publishes a Chinese digest with cross-source framing, focus maps, and strict positive highlights.
 
 ```text
-Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Summarize angles  ->  Render HTML / publish
+Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Assess quality  ->  Summarize angles  ->  Render HTML / publish
 ```
 
 This public repository supports both self-hosting with Docker and local development from source.
+
+Current major release: `v0.2.0`.
 
 ## Highlights
 
 - Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
 - Event-level clustering with same-day and cross-day deduplication
 - Perspective-seeking for missing regional angles
+- Cluster quality gates with claim/evidence tracking, source reliability scoring, and audit counters
+- Storyline lifecycle state and compact timelines for developing topics
 - Dedicated `今日正能量` lane for cheerful, funny, happy, or heartwarming stories that pass a strict post-summary classifier
-- HTML report rendering with a story-first layout
+- WIRED-inspired static HTML reports with system/light/dark modes
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 
 ## Architecture
@@ -111,6 +115,7 @@ For the default image-based install, those files live inside the container image
 |---|---|
 | `.env` | provider keys, public report URL, scheduler timezone, optional integrations |
 | `config/config.yaml` | schedule, source list, clustering thresholds, dedup rules, English report toggle, active-search behavior |
+| `config/editorial-values.yaml` | quality thresholds, source reliability scores, and evidence rules |
 | `config/keywords.txt` | topic groups and keyword filters |
 | `config/style-guide.md` | editorial prompt and no-fabrication rules used by the summarizer |
 | `templates/report-template.html` | HTML branding and presentation |
@@ -148,6 +153,7 @@ Most behavior is file-based:
 | File | Purpose |
 |---|---|
 | `config/config.yaml` | Sources, schedules, thresholds, template selection |
+| `config/editorial-values.yaml` | Editorial quality gates and reliability scoring |
 | `config/keywords.txt` | Topic taxonomy and keyword mapping |
 | `config/style-guide.md` | Editorial prompt and no-fabrication constraints |
 | `docs/generated/db-schema.md` | Current SQLite schema reference |

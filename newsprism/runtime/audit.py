@@ -95,6 +95,12 @@ def audit(days: int = 10, anchor_date: str | None = None, db_path: str | Path = 
             search_event_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(search_request_events)").fetchall()
             }
+            quality_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(cluster_quality_reports)").fetchall()
+            }
+            storyline_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(storylines)").fetchall()
+            }
             rejection_reason_select = (
                 "rejection_reason" if "rejection_reason" in search_event_columns else "NULL AS rejection_reason"
             )
@@ -119,6 +125,33 @@ def audit(days: int = 10, anchor_date: str | None = None, db_path: str | Path = 
                    WHERE date(created_at) BETWEEN date(?) AND date(?)""",
                 (start, end),
             ).fetchall()
+            quality_rows = []
+            claim_rows = []
+            storyline_rows = []
+            if quality_columns:
+                quality_rows = conn.execute(
+                    """SELECT cluster_id, status, quality_score, fact_coverage, source_diversity,
+                              reliability_score, bias_risk, flags, confirmed_claims, contested_claims,
+                              evidence_summary, decision_status
+                       FROM cluster_quality_reports
+                       WHERE cluster_id IN (
+                           SELECT id FROM clusters WHERE report_date BETWEEN ? AND ?
+                       )""",
+                    (start, end),
+                ).fetchall()
+                claim_rows = conn.execute(
+                    """SELECT cluster_id, claim_uid
+                       FROM cluster_claims
+                       WHERE cluster_id IN (
+                           SELECT id FROM clusters WHERE report_date BETWEEN ? AND ?
+                       )""",
+                    (start, end),
+                ).fetchall()
+            if storyline_columns:
+                storyline_rows = conn.execute(
+                    "SELECT storyline_key, storyline_state, last_report_date, quality_score FROM storylines WHERE last_report_date BETWEEN ? AND ?",
+                    (start, end),
+                ).fetchall()
         raw_by_source = Counter(row["source_name"] for row in article_rows)
         raw_by_region = Counter(row["origin_region"] or "unknown" for row in article_rows)
         raw_by_tier = Counter(_source_tier(row, configured_tiers) for row in article_rows)
@@ -175,6 +208,44 @@ def audit(days: int = 10, anchor_date: str | None = None, db_path: str | Path = 
                 sum(float(row["estimated_cost_usd"] or 0.0) for row in search_event_rows), 6
             ),
         }
+        if quality_rows:
+            quality_status = Counter(row["status"] for row in quality_rows)
+            quality_flags: Counter[str] = Counter()
+            no_confirmed_claims = 0
+            low_quality_count = 0
+            for row in quality_rows:
+                score = float(row["quality_score"] or 0.0)
+                if score < 0.45:
+                    low_quality_count += 1
+                try:
+                    flags = json.loads(row["flags"] or "[]")
+                except json.JSONDecodeError:
+                    flags = []
+                quality_flags.update(str(flag) for flag in flags)
+                try:
+                    confirmed = json.loads(row["confirmed_claims"] or "[]")
+                except json.JSONDecodeError:
+                    confirmed = []
+                if not confirmed:
+                    no_confirmed_claims += 1
+            result["db"]["quality_report_count"] = len(quality_rows)
+            result["db"]["quality_status"] = quality_status.most_common()
+            result["db"]["quality_flags"] = quality_flags.most_common(25)
+            result["db"]["quality_claim_count"] = len(claim_rows)
+            result["db"]["avg_quality_score"] = round(
+                sum(float(row["quality_score"] or 0.0) for row in quality_rows) / len(quality_rows),
+                4,
+            )
+            result["issues"]["quality_low_score_cluster"] += low_quality_count
+            result["issues"]["quality_no_confirmed_claims"] += no_confirmed_claims
+            result["issues"]["quality_high_risk_single_source"] += min(
+                quality_flags.get("high_risk_topic", 0),
+                quality_flags.get("single_source", 0),
+            )
+        if storyline_rows:
+            storyline_state = Counter(row["storyline_state"] for row in storyline_rows)
+            result["db"]["storyline_state"] = storyline_state.most_common()
+            result["issues"]["storyline_correction_events"] += storyline_state.get("correction", 0)
 
     for report_date, payload, html in _load_rendered_reports(output, start, end):
         clusters = payload.get("clusters") or []
@@ -187,6 +258,15 @@ def audit(days: int = 10, anchor_date: str | None = None, db_path: str | Path = 
             duplicate_actions[str(cluster.get("duplicate_action") or "kept")] += 1
             if cluster.get("is_multi") and int(cluster.get("distinct_perspective_count") or 0) <= 1:
                 one_angle_multi += 1
+            quality_status = str(cluster.get("quality_status") or "unknown")
+            quality_score = float(cluster.get("quality_score") or 0.0)
+            quality_flags = {str(flag) for flag in cluster.get("quality_flags") or []}
+            if quality_status in {"needs_review", "seek_more_evidence"}:
+                result["issues"][f"rendered_quality_{quality_status}"] += 1
+            if quality_score and quality_score < 0.45:
+                result["issues"]["rendered_quality_low_score"] += 1
+            if {"high_risk_topic", "single_source"} <= quality_flags:
+                result["issues"]["rendered_high_risk_single_source"] += 1
             for article in cluster.get("articles") or []:
                 status = article.get("search_acceptance_status")
                 reason = article.get("search_acceptance_reason")
@@ -230,6 +310,8 @@ def format_audit_report(payload: dict[str, Any]) -> str:
         "",
         f"DB raw articles: {payload.get('db', {}).get('raw_article_count', 0)}",
         f"DB clusters: {payload.get('db', {}).get('cluster_count', 0)}",
+        f"DB quality reports: {payload.get('db', {}).get('quality_report_count', 0)}",
+        f"Avg quality score: {payload.get('db', {}).get('avg_quality_score', 0)}",
         f"Rendered reports: {len(payload.get('rendered_reports', []))}",
         "",
         "Issues:",
