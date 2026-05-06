@@ -47,6 +47,80 @@ Database: SQLite at `data/newsprism.db`
 | storyline_name | TEXT | Human-readable storyline label used for hotspot tabs |
 | storyline_role | TEXT NOT NULL DEFAULT 'none' | `core`, `spillover`, or `none` |
 | storyline_confidence | REAL NOT NULL DEFAULT 0.0 | Resolver confidence for storyline assignment |
+| storyline_state | TEXT NOT NULL DEFAULT 'emerging' | Lifecycle state: `emerging`, `developing`, `turning_point`, `correction`, `stabilized`, or `archived` |
+| quality_status | TEXT NOT NULL DEFAULT 'unknown' | Quality gate result: `publishable`, `needs_review`, `seek_more_evidence`, `suppress`, or `unknown` |
+| quality_score | REAL NOT NULL DEFAULT 0.0 | Cluster quality score from 0.0 to 1.0 |
+| created_at | TEXT | Insert timestamp |
+
+## Table: cluster_quality_reports
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PRIMARY KEY | Auto-increment |
+| cluster_id | INTEGER NOT NULL | Associated `clusters.id`; unique per cluster |
+| status | TEXT NOT NULL | Gate status: `publishable`, `needs_review`, `seek_more_evidence`, or `suppress` |
+| quality_score | REAL NOT NULL | Overall weighted quality score |
+| fact_coverage | REAL NOT NULL | Share of extracted claims with supporting evidence |
+| source_diversity | REAL NOT NULL | Diversity score across sources and represented regions |
+| reliability_score | REAL NOT NULL | Average source reliability score |
+| bias_risk | REAL NOT NULL | Risk score from high-risk topic, single-source, official-only, or single-region signals |
+| flags | TEXT NOT NULL DEFAULT '[]' | JSON array of quality flags |
+| confirmed_claims | TEXT NOT NULL DEFAULT '[]' | JSON array of claims with support |
+| contested_claims | TEXT NOT NULL DEFAULT '[]' | JSON array of contested claims |
+| evidence_summary | TEXT NOT NULL DEFAULT '' | Human-readable evidence summary |
+| decision_status | TEXT NOT NULL DEFAULT 'publishable' | Final gate decision |
+| decision_reason | TEXT NOT NULL DEFAULT '' | Reason for the gate decision |
+| summary_constraints | TEXT NOT NULL DEFAULT '[]' | JSON array of summarizer constraints derived from the decision |
+| created_at | TEXT | Insert timestamp or quality report timestamp |
+
+## Table: cluster_claims
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PRIMARY KEY | Auto-increment |
+| cluster_id | INTEGER NOT NULL | Associated `clusters.id` |
+| claim_uid | TEXT NOT NULL | Stable claim identifier within the cluster |
+| text | TEXT NOT NULL | Extracted claim text |
+| claim_type | TEXT NOT NULL | `event`, `number`, `quote`, `causal`, `forecast`, `correction`, or `context` |
+| importance | REAL NOT NULL | Claim importance score |
+| source_names | TEXT NOT NULL DEFAULT '[]' | JSON array of source names associated with the claim |
+
+## Table: claim_evidence
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PRIMARY KEY | Auto-increment |
+| cluster_id | INTEGER NOT NULL | Associated `clusters.id` |
+| claim_uid | TEXT NOT NULL | Claim identifier from `cluster_claims` |
+| source_name | TEXT NOT NULL | Source used as evidence |
+| stance | TEXT NOT NULL | `supports`, `refutes`, or `uncovered` |
+| excerpt | TEXT NOT NULL DEFAULT '' | Supporting excerpt when available |
+| confidence | REAL NOT NULL | Evidence confidence score |
+
+## Table: storylines
+
+| Column | Type | Notes |
+|---|---|---|
+| storyline_key | TEXT PRIMARY KEY | Stable storyline identifier |
+| storyline_name | TEXT | Human-readable storyline label |
+| storyline_state | TEXT NOT NULL DEFAULT 'emerging' | Latest lifecycle state |
+| last_report_date | TEXT NOT NULL | Most recent report date for this storyline |
+| quality_score | REAL NOT NULL DEFAULT 0.0 | Latest cluster quality score |
+| updated_at | TEXT | Update timestamp |
+
+## Table: storyline_events
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PRIMARY KEY | Auto-increment |
+| storyline_key | TEXT NOT NULL | Associated storyline identifier |
+| cluster_id | INTEGER | Associated cluster when available |
+| event_date | TEXT NOT NULL | YYYY-MM-DD |
+| title | TEXT NOT NULL | Timeline event title |
+| storyline_state | TEXT NOT NULL DEFAULT 'emerging' | Lifecycle state at this event |
+| summary | TEXT NOT NULL DEFAULT '' | Event summary |
+| quality_score | REAL NOT NULL DEFAULT 0.0 | Event quality score |
+| event_type | TEXT NOT NULL DEFAULT 'update' | `history`, `current`, or future event type |
 | created_at | TEXT | Insert timestamp |
 
 ## Table: search_request_events
@@ -71,5 +145,9 @@ Database: SQLite at `data/newsprism.db`
 - `articles.url` — UNIQUE index (dedup guard)
 - `articles.clustered` — for fast unclustered article queries
 - `clusters.report_date` — for fast daily report queries
+- `cluster_quality_reports.cluster_id` — for cluster quality lookup
+- `cluster_claims.cluster_id` — for cluster claim lookup
+- `claim_evidence.cluster_id` — for cluster evidence lookup
+- `storyline_events.(storyline_key, event_date)` — for timeline lookup
 - `search_request_events.created_at` — for time-window cost and volume analysis
 - `search_request_events.(provider, request_type)` — for provider-level cost aggregation

@@ -793,12 +793,21 @@ class Summarizer:
             storyline_name=cluster.storyline_name,
             storyline_role=cluster.storyline_role,
             storyline_confidence=cluster.storyline_confidence,
+            storyline_state=cluster.storyline_state,
+            storyline_timeline=list(cluster.storyline_timeline),
             storyline_membership_status=cluster.storyline_membership_status,
             storyline_anchor_labels=list(cluster.storyline_anchor_labels),
             macro_topic_key=cluster.macro_topic_key,
             macro_topic_name=cluster.macro_topic_name,
             macro_topic_icon_key=cluster.macro_topic_icon_key,
             macro_topic_member_count=cluster.macro_topic_member_count,
+            quality_report=cluster.quality_report,
+            quality_status=cluster.quality_report.status if cluster.quality_report else "unknown",
+            quality_score=cluster.quality_report.overall_score if cluster.quality_report else 0.0,
+            quality_flags=list(cluster.quality_report.flags) if cluster.quality_report else [],
+            confirmed_claims=list(cluster.quality_report.confirmed_claims) if cluster.quality_report else [],
+            contested_claims=list(cluster.quality_report.contested_claims) if cluster.quality_report else [],
+            evidence_summary=cluster.quality_report.evidence_summary if cluster.quality_report else "",
         )
 
     def _translate_cluster_summary(self, summary: ClusterSummary) -> None:
@@ -1008,6 +1017,7 @@ class Summarizer:
     def _build_prompt(self, cluster: ArticleCluster, articles_block: str) -> str:
         source_list = "、".join(cluster.sources)
         is_multi = cluster.is_multi_source
+        quality_block = self._quality_prompt_block(cluster)
 
         # Explicitly ask for JSON
         if is_multi:
@@ -1038,7 +1048,30 @@ class Summarizer:
                 "额外要求：headline 和 body 只负责概括事件事实；只输出 JSON，不要解释。"
             )
 
-        return f"{instruction}\n\n{articles_block}"
+        return f"{instruction}\n\n{quality_block}\n\n{articles_block}"
+
+    def _quality_prompt_block(self, cluster: ArticleCluster) -> str:
+        report = getattr(cluster, "quality_report", None)
+        decision = getattr(cluster, "quality_decision", None)
+        if report is None:
+            return ""
+        constraints = list(getattr(decision, "summary_constraints", []) or [])
+        confirmed = list(getattr(report, "confirmed_claims", []) or [])[:6]
+        contested = list(getattr(report, "contested_claims", []) or [])[:6]
+        payload = {
+            "quality_status": report.status,
+            "quality_score": round(float(report.overall_score), 3),
+            "evidence_summary": report.evidence_summary,
+            "confirmed_claims": confirmed,
+            "contested_claims": contested,
+            "summary_constraints": constraints,
+        }
+        return (
+            "质量评估约束：\n"
+            "请严格依据以下质量评估结果写摘要；confirmed_claims 可以作为事实陈述，"
+            "contested_claims 必须显式归因或避免定论。\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        )
 
     def _build_macro_topic_prompt(self, clusters: list[ArticleCluster]) -> str:
         cluster_lines: list[str] = []

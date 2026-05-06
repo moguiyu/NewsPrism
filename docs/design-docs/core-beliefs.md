@@ -71,3 +71,35 @@ Fetch chain per source: `newsnow → RSS → rss_fallback → site API → HTML 
 
 **Consequence**: operational dependency on newsnow Docker service. Its failure degrades
 Chinese-source coverage gracefully but does not break the pipeline.
+
+---
+
+## 7. Trust is data, not decoration
+
+Source provenance, claim support, and editorial risk are part of the report contract.
+They should be computed before summarization, persisted with the cluster, and rendered
+where readers can inspect them.
+
+**Consequence**: quality assessment can suppress weak clusters, request more evidence
+for high-risk single-source stories, and constrain summaries to supported claims.
+
+---
+
+## 8. Storylines have lifecycle state
+
+A developing story is not just a repeated topic. It can emerge, continue, turn, correct,
+or stabilize across days.
+
+**Consequence**: storyline state and timeline events are stored in SQLite and exported
+to reports instead of being inferred only from same-day hot-topic grouping.
+
+---
+
+## 9. Reports should feel editorial, not operational
+
+NewsPrism is read like a digest, not operated like a dashboard. Visual hierarchy should
+come from typography, rules, spacing, and source labels rather than rounded cards,
+decorative surfaces, shadows, or gradients.
+
+**Consequence**: `templates/report-template.html` follows the WIRED-inspired reference
+in `docs/design-docs/DESIGN.md`, including flat light and dark newsprint modes.

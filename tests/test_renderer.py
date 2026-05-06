@@ -177,6 +177,42 @@ class TestPerspectivesContext:
         assert "**Single-source story**" not in html
         assert payload["clusters"][0]["summary"] == "Body text here."
 
+    def test_render_exports_quality_and_storyline_state(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/story",
+                        title="Checked story",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Checked story body.",
+                    )
+                ],
+            ),
+            summary="**Checked story**\n\nBody text here.",
+            perspectives={},
+            quality_status="publishable",
+            quality_score=0.76,
+            quality_flags=["single_source"],
+            confirmed_claims=["Checked story"],
+            evidence_summary="1 source assessed.",
+            storyline_state="emerging",
+        )
+
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+        cluster = payload["clusters"][0]
+
+        assert cluster["quality_status"] == "publishable"
+        assert cluster["quality_score"] == 0.76
+        assert cluster["confirmed_claims"] == ["Checked story"]
+        assert cluster["storyline_state"] == "emerging"
+        assert "多源确认" in html
+
     def test_render_with_english_content_enables_language_toggle(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         summary = ClusterSummary(
