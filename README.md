@@ -8,7 +8,7 @@ Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Assess quality  ->  S
 
 This public repository supports both self-hosting with Docker and local development from source.
 
-Current major release: `v0.2.0`.
+Current major release: `v0.3.0`.
 
 ## Highlights
 
@@ -17,7 +17,7 @@ Current major release: `v0.2.0`.
 - Perspective-seeking for missing regional angles
 - Cluster quality gates with claim/evidence tracking, source reliability scoring, and audit counters
 - Storyline lifecycle state and compact timelines for developing topics
-- Dedicated `今日正能量` lane for cheerful, funny, happy, or heartwarming stories that pass a strict post-summary classifier
+- Dedicated `今日正能量` lane selected locally from the existing source catalog with zero extra LLM tokens
 - WIRED-inspired static HTML reports with system/light/dark modes
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 
