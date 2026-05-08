@@ -1,5 +1,7 @@
 # NewsPrism Configuration
 
+feelgood_keywords_file: "config/feelgood_keywords.yaml"
+
 # ─── SCHEDULE ──────────────────────────────────────────────────────────────────
 schedule:
   # Full collection runs 4/day. A smaller pre-publish delta run catches
@@ -184,6 +186,11 @@ output:
     min_items: 1
     max_items: 5
     min_confidence: 0.78
+    candidate_min_items: 20
+    target_items: 5
+    empty_rate_target: 0.05
+    source_diversity: true
+    use_llm_classifier: false
   day_navigation:
     days: 3
   hot_topics:
