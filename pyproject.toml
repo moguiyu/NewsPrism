@@ -41,6 +41,7 @@ dependencies = [
     # AI / ML
     "litellm>=1.30",
     "sentence-transformers>=3.0",
+    "vaderSentiment>=3.3",
     # Telegram
     "python-telegram-bot>=21.0",
     # Templating
