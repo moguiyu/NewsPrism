@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.3.0 - 2026-05-08
+
+Positive lane recovery and local scoring release.
+
+### Added
+
+- Local `FeelgoodScorer` for selecting `今日正能量` stories from existing collected `Article` records without additional LLM calls.
+- `config/feelgood_keywords.yaml` with cheerful themes, entity boosts, narrative patterns, and strict blockers for hard-news topics.
+- Positive lane metadata in rendered data, including local score, category, source, Chinese reason, and English reason.
+- Renderer coverage so English mode remains available when positive summaries provide English fields.
+- Tests for positive scoring, source provenance boundaries, bilingual positive tags, scheduler integration, and translation drift handling.
+
+### Changed
+
+- `Scheduler.publish()` now selects positive stories from the same article window used by the main pipeline, without marking those articles clustered or changing main clustering input.
+- Default positive lane behavior no longer initializes or calls a dedicated feelgood collector and no longer calls `Summarizer.classify_positive_energy()`.
+- English translation now preserves the report when a model response changes perspective grouping; source grouping is kept stable and only the affected perspective text falls back.
+- Deployment docs now describe the existing-sources-only positive lane and zero-token local scoring controls.
+
+### Removed
+
+- Runtime use of independent feelgood RSS/scrape sources for `今日正能量`.
+
+### Validation
+
+- Full local test suite: 140 passed.
+- fnOS publish smoke run completed for 2026-05-08 with `cluster_count=15`, `positive_story_count=5`, and `english_available=true`.
+- Server Telegram environment repaired and validated with `fnosnews_bot` without sending a duplicate report.
+
 ## v0.2.0 - 2026-05-06
 
 Major editorial trust and report design release.

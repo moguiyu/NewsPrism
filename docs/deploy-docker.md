@@ -255,40 +255,26 @@ your-local-semiconductor-brand
 
 ### 3. Tune 今日正能量 discovery
 
-`今日正能量` uses two gates:
+`今日正能量` is selected from articles already collected through the configured source catalog. It does not use a separate feelgood source list and does not call the LLM classifier in the default publish path.
 
-- `filter.positive_energy_pre_filter` rescues clear cheerful candidates before portal/no-keyword articles are dropped.
-- `output.positive_energy` controls the stricter post-summary LLM selection used by the rendered section.
-- A final deterministic blocker rejects procedural, rules, policy, legal, market, geopolitical, crime, disaster, and conflict stories even if the LLM marks them as positive.
+The local scorer uses:
 
-The pre-filter is intentionally conservative. Add high-signal happy/cute/funny terms to `include_keywords`, and add harm/conflict terms to `exclude_keywords` when a source produces weak matches. The final section can render with one strong story, so do not broaden the pre-filter just to fill a quota.
+- `config/feelgood_keywords.yaml` for cheerful themes, entity boosts, narrative patterns, and hard blockers.
+- `output.positive_energy` for target count, candidate minimum, source diversity, and `use_llm_classifier`.
+- URL/title/domain dedupe so a single source cannot dominate the final five stories.
 
-Positive candidates are evaluated separately from the regular main-feed cap. A story tagged with the configured positive topic can still be sent to the final classifier even if it falls just after the regular `clustering.max_clusters_per_report` limit; it will only render if the final classifier and deterministic blocker accept it. Scheduler logs include the positive candidate pool size, rejected/blocked counts, and selected headlines for debugging.
+Keep blockers strict for policy, legal, market, geopolitical, crime, disaster, death, injury, drought, and conflict stories. Positive candidates are evaluated in parallel with the main cluster path, then rendered through the existing `positive_summaries` contract without marking DB articles as clustered.
 
 Example:
 
 ```yaml
-filter:
-  positive_energy_pre_filter:
-    enabled: true
-    topic: "Positive Energy"
-    include_keywords:
-      - "whale calf"
-      - "baby animal"
-      - "可爱"
-      - "暖心"
-    exclude_keywords:
-      - "death"
-      - "crime"
-      - "战争"
-      - "冲突"
-
 output:
   positive_energy:
     enabled: true
-    min_items: 1
-    max_items: 5
-    min_confidence: 0.78
+    target_items: 5
+    candidate_min_items: 20
+    source_diversity: true
+    use_llm_classifier: false
 ```
 
 ### 4. Disable or target specific sources
