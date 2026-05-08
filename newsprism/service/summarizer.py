@@ -853,20 +853,10 @@ class Summarizer:
         if not headline_clean or not body_clean:
             raise ValueError(f"Incomplete English translation for '{summary.cluster.topic_category}'")
 
-        translated_groups = self._normalize_perspective_groups(
-            summary.cluster,
+        translated_groups = self._align_translated_perspective_groups(
+            summary,
             parsed.perspective_groups,
-            [],
         )
-        if len(translated_groups) != len(summary.grouped_perspectives):
-            raise ValueError(
-                f"Perspective group count changed during translation for '{summary.cluster.topic_category}'"
-            )
-        for zh_group, en_group in zip(summary.grouped_perspectives, translated_groups):
-            if list(zh_group.sources) != list(en_group.sources):
-                raise ValueError(
-                    f"Perspective grouping changed during translation for '{summary.cluster.topic_category}'"
-                )
 
         summary.summary_en = f"**{headline_clean}**\n\n{body_clean}"
         summary.grouped_perspectives_en = translated_groups
@@ -874,6 +864,46 @@ class Summarizer:
             summary.short_topic_name_en = self._clean_short_label(parsed.short_topic_name)
         elif summary.short_topic_name:
             summary.short_topic_name_en = self._translate_short_label(summary.short_topic_name)
+
+    def _align_translated_perspective_groups(
+        self,
+        summary: ClusterSummary,
+        parsed_groups: list[PerspectiveGroupItem],
+    ) -> list[PerspectiveGroup]:
+        """Keep source grouping stable even when the translator drifts.
+
+        A single malformed perspective_groups translation should not disable the
+        entire English report. The renderer can still use the translated
+        headline/body, while perspective rows keep the original source groups.
+        """
+        if not summary.grouped_perspectives:
+            return []
+
+        if len(parsed_groups) != len(summary.grouped_perspectives):
+            logger.warning(
+                "Perspective group count changed during translation for '%s'; preserving original source grouping",
+                summary.cluster.topic_category,
+            )
+
+        aligned: list[PerspectiveGroup] = []
+        for index, zh_group in enumerate(summary.grouped_perspectives):
+            translated_text = ""
+            if index < len(parsed_groups):
+                parsed_group = parsed_groups[index]
+                if list(parsed_group.sources) != list(zh_group.sources):
+                    logger.warning(
+                        "Perspective grouping changed during translation for '%s'; preserving original sources",
+                        summary.cluster.topic_category,
+                    )
+                translated_text = self._clean_perspective_text(parsed_group.perspective)
+
+            aligned.append(
+                PerspectiveGroup(
+                    sources=list(zh_group.sources),
+                    perspective=translated_text or self._fallback_perspective_text_en(),
+                )
+            )
+        return aligned
 
     def _translate_short_label(self, label: str) -> str:
         normalized = self._clean_short_label(label)
@@ -1002,6 +1032,9 @@ class Summarizer:
 
     def _fallback_perspective_text(self) -> str:
         return "该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。"
+
+    def _fallback_perspective_text_en(self) -> str:
+        return "This source reports a similar angle to the main summary."
 
     def _format_articles(self, cluster: ArticleCluster) -> str:
         lines: list[str] = []

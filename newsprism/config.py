@@ -46,6 +46,7 @@ class Config:
     output: dict[str, Any]
     active_search: dict[str, Any]
     editorial_values: dict[str, Any] = field(default_factory=dict)
+    feelgood_keywords: dict[str, Any] = field(default_factory=dict)
 
     # Topic equivalence: canonical topic → list of equivalent topics
     topic_equivalence: dict[str, list[str]] = field(default_factory=dict)
@@ -87,15 +88,36 @@ def _parse_keywords(keywords_file: str) -> dict[str, list[str]]:
     return topics
 
 
+def _resolve_config_path(config_root: Path, configured: str) -> Path:
+    path = Path(configured)
+    if path.is_absolute():
+        return path
+    return config_root / path
+
+
+def _load_yaml_file(config_root: Path, configured: str, default: Any) -> Any:
+    path = _resolve_config_path(config_root, configured)
+    if not path.exists():
+        return default
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or default
+
+
 def load_config(config_path: str = "config/config.yaml") -> Config:
     path = Path(config_path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    editorial_values_path = Path(raw.get("editorial_values_file", "config/editorial-values.yaml"))
-    if not editorial_values_path.is_absolute():
-        editorial_values_path = path.parent.parent / editorial_values_path
+    config_root = path.parent.parent
+    editorial_values_path = _resolve_config_path(
+        config_root,
+        raw.get("editorial_values_file", "config/editorial-values.yaml"),
+    )
     editorial_values: dict[str, Any] = {}
     if editorial_values_path.exists():
         editorial_values = yaml.safe_load(editorial_values_path.read_text(encoding="utf-8")) or {}
+    feelgood_keywords = _load_yaml_file(
+        config_root,
+        raw.get("feelgood_keywords_file", "config/feelgood_keywords.yaml"),
+        {},
+    )
 
     sources = [
         SourceConfig(
@@ -138,5 +160,6 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         output=raw.get("output", {}),
         active_search=raw.get("active_search", {}),
         editorial_values=editorial_values,
+        feelgood_keywords=feelgood_keywords,
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
     )

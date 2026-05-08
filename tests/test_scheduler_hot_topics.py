@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from newsprism.config import Config, SourceConfig
 from newsprism.runtime.scheduler import (
+    Scheduler,
     positive_energy_classification_pool,
     resolve_display_duplicates,
     select_hot_topic_families,
@@ -759,6 +760,55 @@ def test_select_positive_energy_summaries_allows_one_strong_story_by_default():
 
     assert selected == [summary]
     assert selected[0].positive_energy_reason == "小鲸可爱暖心"
+
+
+def test_scheduler_default_positive_energy_path_uses_local_feelgood_pipeline():
+    cfg = _config(main_limit=3)
+    cfg.output["positive_energy"] = {"enabled": True, "max_items": 5}
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.cfg = cfg
+
+    assert scheduler._use_feelgood_pipeline() is True
+
+    cfg.output["positive_energy"]["use_llm_classifier"] = True
+    assert scheduler._use_feelgood_pipeline() is False
+
+
+def test_scheduler_selects_positive_summaries_from_existing_articles_without_llm():
+    cfg = _config(main_limit=3)
+    cfg.clustering["time_window_hours"] = 48
+    cfg.output["positive_energy"] = {
+        "enabled": True,
+        "target_items": 1,
+        "candidate_min_items": 1,
+        "use_llm_classifier": False,
+    }
+    article = Article(
+        url="https://feelgood.example/puppy",
+        title="Adorable puppy rescued by volunteers",
+        source_name="Animal Feed",
+        published_at=datetime.now(tz=timezone.utc),
+        content="Adorable puppy rescued by volunteers and reunited with a family.",
+    )
+    summary = _positive_summary("Animal Feed", article.url, article.title)
+
+    class ScorerStub:
+        def select_articles(self, articles: list[Article], limit: int = 5) -> list[ClusterSummary]:
+            assert articles == [article]
+            assert limit == 1
+            return [summary]
+
+    class SummarizerStub:
+        def classify_positive_energy(self, summaries: list[ClusterSummary]) -> list[dict[str, object]]:
+            raise AssertionError("LLM positive classifier should not run")
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.cfg = cfg
+    scheduler.feelgood_scorer = ScorerStub()
+    scheduler.summarizer = SummarizerStub()
+
+    assert not hasattr(scheduler, "feelgood_collector")
+    assert scheduler._select_positive_article_summaries([article]) == [summary]
 
 
 def test_report_clusters_preserve_positive_energy_candidates_beyond_main_limit():

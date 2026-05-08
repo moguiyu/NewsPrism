@@ -90,6 +90,40 @@ def test_translate_report_content_populates_english_fields(monkeypatch):
     assert focus_storylines[0]["storyline_name_en"] == "China Visit"
 
 
+def test_translate_report_content_keeps_english_when_perspective_groups_drift(monkeypatch):
+    summarizer = Summarizer(load_config())
+    summary = _build_summary()
+
+    def fake_json_completion(system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0.1) -> str:
+        if "Chinese news digest JSON" in user_prompt:
+            return json.dumps(
+                {
+                    "headline": "English Headline",
+                    "body": "English summary content.",
+                    "short_topic_name": "Middle East",
+                    "perspective_groups": [
+                        {"sources": ["Reuters", "BBC"], "perspective": "Merged angle"},
+                    ],
+                }
+            )
+        if "label: 访华主线" in user_prompt:
+            return json.dumps({"translation": "China Visit"})
+        if "label: 中东局势" in user_prompt:
+            return json.dumps({"translation": "Middle East"})
+        raise AssertionError(f"Unexpected prompt: {user_prompt}")
+
+    monkeypatch.setattr(summarizer, "_json_completion", fake_json_completion)
+
+    assert summarizer.translate_report_content([summary]) is True
+
+    assert summary.summary_en == "**English Headline**\n\nEnglish summary content."
+    assert [group.sources for group in summary.grouped_perspectives_en] == [["Reuters"], ["BBC"]]
+    assert [group.perspective for group in summary.grouped_perspectives_en] == [
+        "Merged angle",
+        "This source reports a similar angle to the main summary.",
+    ]
+
+
 def test_translate_report_content_clears_partial_english_on_failure(monkeypatch):
     summarizer = Summarizer(load_config())
     summary = _build_summary()

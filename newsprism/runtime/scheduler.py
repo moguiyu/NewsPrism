@@ -8,6 +8,7 @@ Layer: runtime — the only layer that imports from all others.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -45,13 +46,14 @@ from newsprism.runtime.renderer import HtmlRenderer, _body_only, _extract_headli
 from newsprism.service.clusterer import Clusterer
 from newsprism.service.collector import Collector
 from newsprism.service.dedup import Deduplicator
+from newsprism.service.feelgood_scorer import FeelgoodScorer
 from newsprism.service.filter import TopicTagger
 from newsprism.service.freshness import FreshnessEvaluator
 from newsprism.service.quality import QualityAssessor
 from newsprism.service.seeker import ActiveSeeker
 from newsprism.service.storyline import EventClusterValidator, StorylineResolver, StorylineStateMachine
 from newsprism.service.summarizer import Summarizer
-from newsprism.types import ArticleCluster, Cluster, ClusterSummary, raw_to_articles
+from newsprism.types import Article, ArticleCluster, Cluster, ClusterSummary, raw_to_articles
 
 logger = logging.getLogger(__name__)
 
@@ -1489,6 +1491,7 @@ class Scheduler:
         self._apscheduler: AsyncIOScheduler | None = None
 
         self.collector = Collector(cfg)
+        self.feelgood_scorer = FeelgoodScorer(cfg)
         self.tagger = TopicTagger(cfg)
         self.deduplicator = Deduplicator(cfg)
         self.clusterer = Clusterer(cfg)
@@ -1509,6 +1512,37 @@ class Scheduler:
             source_regions={s.name: s.region for s in cfg.sources},
         )
         self.renderer.day_navigation_cfg = cfg.output.get("day_navigation", {}) if isinstance(cfg.output, dict) else {}
+
+    def _positive_energy_cfg(self) -> dict:
+        return self.cfg.output.get("positive_energy", {}) if isinstance(self.cfg.output, dict) else {}
+
+    def _use_feelgood_pipeline(self) -> bool:
+        positive_cfg = self._positive_energy_cfg()
+        return bool(positive_cfg.get("enabled", True)) and not bool(positive_cfg.get("use_llm_classifier", False))
+
+    def _select_positive_article_summaries(self, articles: list[Article]) -> list[ClusterSummary]:
+        positive_cfg = self._positive_energy_cfg()
+        target_items = max(
+            1,
+            int(positive_cfg.get("target_items", positive_cfg.get("max_items", 5)) or 5),
+        )
+        candidate_min_items = int(positive_cfg.get("candidate_min_items", 20) or 20)
+        if len(articles) < candidate_min_items:
+            logger.warning(
+                "Positive energy article pool below target: input=%d target_min=%d",
+                len(articles),
+                candidate_min_items,
+            )
+        summaries = self.feelgood_scorer.select_articles(articles, limit=target_items)
+        if not summaries:
+            logger.warning("Positive energy local selection empty after scoring existing articles")
+        elif len(summaries) < target_items:
+            logger.info(
+                "Positive energy local selection below display target: selected=%d target=%d",
+                len(summaries),
+                target_items,
+            )
+        return summaries
 
     def _resolve_output_path(self, configured: str | None, default: str) -> Path:
         path = Path(configured or default)
@@ -1712,9 +1746,19 @@ class Scheduler:
                 logger.warning("No unclustered articles found — skipping %s", phase_name.lower())
                 return
 
+            feelgood_task: asyncio.Task[list[ClusterSummary]] | None = None
+            if self._use_feelgood_pipeline():
+                feelgood_task = asyncio.create_task(
+                    asyncio.to_thread(self._select_positive_article_summaries, list(articles))
+                )
+
             clusters = self.clusterer.cluster(articles)
             if not clusters:
                 logger.warning("No clusters formed — skipping %s", phase_name.lower())
+                if feelgood_task is not None:
+                    feelgood_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await feelgood_task
                 return
             logger.info("Event cluster stage: %d clusters formed", len(clusters))
 
@@ -1866,26 +1910,38 @@ class Scheduler:
 
             hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
             positive_summaries: list[ClusterSummary] = []
-            positive_cfg = self.cfg.output.get("positive_energy", {}) if isinstance(self.cfg.output, dict) else {}
-            positive_pool = positive_energy_classification_pool(
-                kept_summaries,
-                main_summaries,
-                hot_topics,
-                focus_storylines,
-                self.cfg,
-            )
-            if bool(positive_cfg.get("enabled", True)) and positive_pool:
+            positive_cfg = self._positive_energy_cfg()
+            if self._use_feelgood_pipeline():
+                if feelgood_task is not None:
+                    try:
+                        positive_summaries = await feelgood_task
+                    except Exception as exc:
+                        logger.warning("Feelgood micro-pipeline failed; positive section omitted: %s", exc)
+                        positive_summaries = []
                 logger.info(
-                    "Positive energy candidate pool: %d main summaries + %d positive extras",
-                    len(main_summaries),
-                    max(0, len(positive_pool) - len(main_summaries)),
+                    "Positive energy local pipeline from existing articles: selected=%d use_llm_classifier=false",
+                    len(positive_summaries),
                 )
-                positive_classifications = self.summarizer.classify_positive_energy(positive_pool)
-                positive_summaries = select_positive_energy_summaries(
-                    positive_pool,
-                    positive_classifications,
+            else:
+                positive_pool = positive_energy_classification_pool(
+                    kept_summaries,
+                    main_summaries,
+                    hot_topics,
+                    focus_storylines,
                     self.cfg,
                 )
+                if bool(positive_cfg.get("enabled", True)) and positive_pool:
+                    logger.info(
+                        "Positive energy candidate pool: %d main summaries + %d positive extras",
+                        len(main_summaries),
+                        max(0, len(positive_pool) - len(main_summaries)),
+                    )
+                    positive_classifications = self.summarizer.classify_positive_energy(positive_pool)
+                    positive_summaries = select_positive_energy_summaries(
+                        positive_pool,
+                        positive_classifications,
+                        self.cfg,
+                    )
             regular_summaries = split_positive_energy_lane(main_summaries, positive_summaries)
             hot_topics, focus_storylines, regular_summaries, positive_summaries = resolve_display_duplicates(
                 hot_topics,

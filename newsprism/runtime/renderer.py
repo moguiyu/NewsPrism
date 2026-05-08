@@ -646,8 +646,11 @@ class HtmlRenderer:
         summaries: list[ClusterSummary],
         hot_topics: list[dict[str, object]],
         focus_storylines: list[dict[str, object]],
+        positive_summaries: list[ClusterSummary] | None = None,
     ) -> bool:
-        if not summaries:
+        positive_summaries = positive_summaries or []
+        has_english_positive = any(bool(getattr(summary, "summary_en", None)) for summary in positive_summaries)
+        if not summaries and not has_english_positive:
             return False
         if any(not summary.summary_en for summary in summaries):
             return False
@@ -856,7 +859,7 @@ class HtmlRenderer:
         hot_topics = hot_topics or []
         focus_storylines = focus_storylines or []
         positive_summaries = positive_summaries or []
-        english_available = self._english_available(summaries, hot_topics, focus_storylines)
+        english_available = self._english_available(summaries, hot_topics, focus_storylines, positive_summaries)
         clusters_ctx = []
         clusters_json: list[dict] = []
 
@@ -1038,13 +1041,22 @@ class HtmlRenderer:
                 include_english=english_available,
             )
             reason = getattr(summary, "positive_energy_reason", "")
+            reason_en = getattr(summary, "positive_energy_reason_en", reason)
             score = getattr(summary, "positive_energy_score", 0.0)
+            category = getattr(summary, "positive_energy_category", summary.cluster.topic_category)
+            source = getattr(summary, "positive_energy_source", summary.cluster.sources[0] if summary.cluster.sources else "")
             ctx_payload["positive_seq_index"] = i
             ctx_payload["positive_reason"] = reason
+            ctx_payload["positive_reason_en"] = reason_en
             ctx_payload["positive_score"] = score
+            ctx_payload["positive_category"] = category
+            ctx_payload["positive_source"] = source
             json_payload["positive_seq_index"] = i
             json_payload["positive_reason"] = reason
+            json_payload["positive_reason_en"] = reason_en
             json_payload["positive_score"] = score
+            json_payload["positive_category"] = category
+            json_payload["positive_source"] = source
             positive_ctx.append(ctx_payload)
             positive_json.append(json_payload)
 

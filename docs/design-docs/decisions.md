@@ -5,6 +5,7 @@ For design rationale and principles, see [core-beliefs.md](core-beliefs.md).
 
 | Date | Decision | Rationale | Supersedes |
 |---|---|---|---|
+| 2026-05-07 | Score `今日正能量` locally from existing collected sources only | Cheerful stories should stay within the same source provenance boundary as the main report while avoiding extra LLM token spend | LLM post-summary positive-energy classifier as default |
 | 2026-05-06 | Persist cluster quality reports, claims, and evidence | Trust signals need to survive beyond the summarizer prompt so audits, future reports, and UI provenance can inspect why a story was published, reviewed, or suppressed | Summary-only quality judgment |
 | 2026-05-06 | Add explicit storyline lifecycle state and timelines | Cross-day stories should show whether they are emerging, developing, correcting, or stabilizing instead of appearing as unrelated daily clusters | Hot-topic grouping without lifecycle state |
 | 2026-05-06 | Adopt WIRED-inspired flat editorial report design with system/light/dark modes | The report is a news product, not a feed dashboard; rule-led typography, square controls, and inverted newsprint dark mode better match source provenance and multi-perspective reading | Rounded glass/card report UI |

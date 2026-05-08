@@ -2744,7 +2744,7 @@
               <span class="card-title-text"><span class="card-index">{{ c.positive_seq_index }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
             </div>
             {% if c.positive_reason %}
-            <div class="positive-reason">{{ bilingual_text(c.positive_reason, c.positive_reason) }}</div>
+            <div class="positive-reason">{{ bilingual_text(c.positive_reason, c.positive_reason_en or c.positive_reason) }}</div>
             {% endif %}
             <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
           </div>
