@@ -17,6 +17,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
+from newsprism.service.language import looks_like_chinese_text
 from newsprism.types import ClusterSummary
 
 logger = logging.getLogger(__name__)
@@ -649,10 +650,18 @@ class HtmlRenderer:
         positive_summaries: list[ClusterSummary] | None = None,
     ) -> bool:
         positive_summaries = positive_summaries or []
-        has_english_positive = any(bool(getattr(summary, "summary_en", None)) for summary in positive_summaries)
-        if not summaries and not has_english_positive:
+        visible_summaries = list(summaries) + list(positive_summaries)
+        for family in hot_topics + focus_storylines:
+            family_summaries = family.get("summaries", [])
+            if isinstance(family_summaries, list):
+                visible_summaries.extend(
+                    summary for summary in family_summaries if isinstance(summary, ClusterSummary)
+                )
+        if not visible_summaries:
             return False
-        if any(not summary.summary_en for summary in summaries):
+        if any(not summary.summary_en for summary in visible_summaries):
+            return False
+        if any(not looks_like_chinese_text(summary.summary) for summary in visible_summaries):
             return False
         for family in hot_topics:
             if not family.get("macro_topic_name_en") or not family.get("storyline_name_en"):
