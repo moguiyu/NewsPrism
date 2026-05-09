@@ -377,8 +377,6 @@ class FeelgoodScorer:
             summary=f"**{article.title}**\n\n{body}",
             perspectives={article.source_name: body},
         )
-        if self._is_english_source(article):
-            summary.summary_en = summary.summary
         summary.positive_energy_score = candidate.score  # type: ignore[attr-defined]
         summary.positive_energy_reason = candidate.reason  # type: ignore[attr-defined]
         summary.positive_energy_reason_en = candidate.reason_en  # type: ignore[attr-defined]
@@ -418,9 +416,3 @@ class FeelgoodScorer:
         if not deduped:
             return "轻量好消息", "Uplifting"
         return "、".join(part[0] for part in deduped), ", ".join(part[1] for part in deduped)
-
-    def _is_english_source(self, article: Article) -> bool:
-        source = self.source_meta.get(article.source_name)
-        if source is not None:
-            return getattr(source, "language", "") == "en"
-        return bool(re.search(r"[A-Za-z]", article.title)) and not re.search(r"[\u4e00-\u9fff]", article.title)

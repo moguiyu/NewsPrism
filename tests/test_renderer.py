@@ -1105,7 +1105,7 @@ class TestHotTopics:
         assert len(tree.xpath('//*[@id="positive-1"]//a[@href="https://bbc.com/fun-duplicate"]')) == 1
         assert len(tree.xpath('//*[@id="positive-1"]//a[contains(@class, "src-chip-link")]')) == 1
 
-    def test_positive_only_english_content_keeps_language_toggle(self, renderer, tmp_path):
+    def test_positive_only_source_language_content_does_not_enable_language_toggle(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         positive_summary = ClusterSummary(
             cluster=ArticleCluster(
@@ -1133,11 +1133,43 @@ class TestHotTopics:
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
         tree = lxml_html.fromstring(html)
 
+        assert payload["english_available"] is False
+        assert payload["available_languages"] == ["zh"]
+        assert not tree.xpath('//*[contains(@class, "language-toggle")]')
+        assert payload["positive_stories"][0]["positive_reason_en"] == "Cute"
+        assert "bilingual_text(c.positive_reason, c.positive_reason)" not in html
+
+    def test_positive_only_normalized_bilingual_content_keeps_language_toggle(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        positive_summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Positive Energy",
+                articles=[
+                    Article(
+                        url="https://bbc.com/puppy",
+                        title="Adorable puppy rescued by volunteers",
+                        source_name="BBC",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Adorable puppy rescued by volunteers and reunited with a family.",
+                    )
+                ],
+            ),
+            summary="**志愿者救助可爱小狗**\n\n志愿者救下一只可爱小狗，并帮助它与新家庭团聚。",
+            summary_en="**Adorable puppy rescued by volunteers**\n\nAdorable puppy rescued by volunteers and reunited with a family.",
+            perspectives={},
+        )
+        positive_summary.positive_energy_reason = "可爱治愈"
+        positive_summary.positive_energy_reason_en = "Cute"
+        positive_summary.positive_energy_score = 0.92
+
+        html_path = renderer.render([], date(2026, 5, 8), positive_summaries=[positive_summary])
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+        tree = lxml_html.fromstring(html_path.read_text(encoding="utf-8"))
+
         assert payload["english_available"] is True
         assert payload["available_languages"] == ["zh", "en"]
         assert tree.xpath('//*[contains(@class, "language-toggle")]')
-        assert payload["positive_stories"][0]["positive_reason_en"] == "Cute"
-        assert "bilingual_text(c.positive_reason, c.positive_reason)" not in html
+        assert payload["positive_stories"][0]["headline"] == "志愿者救助可爱小狗"
 
     def test_day_selector_marks_current_and_missing_days(self, renderer, tmp_path):
         renderer.output_dir = tmp_path

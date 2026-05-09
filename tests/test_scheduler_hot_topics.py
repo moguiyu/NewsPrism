@@ -547,6 +547,65 @@ def test_select_hot_topic_families_suppresses_incoherent_hotspot_family():
     assert all(summary.cluster.is_hot_topic is False for summary in main_summaries)
 
 
+def test_select_hot_topic_families_does_not_bridge_unrelated_members_by_storyline_key_only():
+    cfg = _config(main_limit=6)
+    clusters = [
+        _cluster(
+            "Russia Ukraine ceasefire",
+            role="core",
+            membership_status="core",
+            storyline_key="noisy-geopolitics-family",
+            storyline_name="美伊制裁博弈",
+            anchor_labels=["俄乌停火"],
+        ),
+        _cluster(
+            "Iran oil tanker strike",
+            role="core",
+            membership_status="core",
+            storyline_key="noisy-geopolitics-family",
+            storyline_name="美伊制裁博弈",
+            anchor_labels=["伊朗油轮"],
+        ),
+        _cluster(
+            "Hantavirus cruise response",
+            role="core",
+            membership_status="core",
+            storyline_key="noisy-geopolitics-family",
+            storyline_name="美伊制裁博弈",
+            anchor_labels=["邮轮疫情"],
+        ),
+        _cluster(
+            "Nintendo Switch pricing",
+            role="spillover",
+            membership_status="spillover",
+            storyline_key="noisy-geopolitics-family",
+            storyline_name="美伊制裁博弈",
+            anchor_labels=["任天堂涨价"],
+        ),
+        _cluster(
+            "Space telescope image",
+            role="spillover",
+            membership_status="spillover",
+            storyline_key="noisy-geopolitics-family",
+            storyline_name="美伊制裁博弈",
+            anchor_labels=["太空望远镜"],
+        ),
+    ]
+    for cluster in clusters:
+        cluster.is_hot_topic = True
+        cluster.macro_topic_member_count = 5
+
+    summaries = [_summary(cluster, cluster.articles[0].title) for cluster in clusters]
+
+    hot_topics, focus_storylines, main_summaries = select_hot_topic_families(summaries, cfg)
+
+    assert hot_topics == []
+    assert focus_storylines == []
+    assert [summary.cluster.articles[0].title for summary in main_summaries] == [
+        cluster.articles[0].title for cluster in clusters
+    ]
+
+
 def test_select_hot_topic_families_keeps_largest_coherent_component_and_renames_it():
     cfg = _config(main_limit=6)
     coherent_clusters = [

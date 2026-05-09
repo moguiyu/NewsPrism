@@ -865,7 +865,8 @@ def _deduplicate_main_lane(summaries: list[ClusterSummary]) -> list[ClusterSumma
 def _summary_family_link(left: ClusterSummary, right: ClusterSummary) -> bool:
     if _summary_anchor_labels(left) & _summary_anchor_labels(right):
         return True
-    return _same_event_candidate(left, right)
+    signature_match, _reason, _confidence = _event_signature_duplicate(left, right)
+    return signature_match
 
 
 def _coherent_family_component(members: list[ClusterSummary]) -> list[ClusterSummary]:
@@ -1950,12 +1951,17 @@ class Scheduler:
                 positive_summaries,
             )
             english_cfg = self.cfg.output.get("english", {}) if isinstance(self.cfg.output, dict) else {}
-            if bool(english_cfg.get("enabled", False)):
+            english_enabled = bool(english_cfg.get("enabled", False))
+            if english_enabled:
                 self.summarizer.translate_report_content(
                     kept_summaries,
                     hot_topics=hot_topics,
                     focus_storylines=focus_storylines,
                 )
+            positive_summaries = self.summarizer.normalize_positive_energy_summaries(
+                positive_summaries,
+                include_english=english_enabled,
+            )
             focus_storyline_story_count = sum(
                 len(family.get("summaries", []))
                 for family in focus_storylines

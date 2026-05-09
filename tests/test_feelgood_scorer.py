@@ -192,6 +192,6 @@ def test_feelgood_scorer_sets_english_summary_and_bilingual_reason_for_english_s
         limit=1,
     )
 
-    assert selected[0].summary_en == selected[0].summary
+    assert selected[0].summary_en is None
     assert selected[0].positive_energy_reason == "可爱治愈、萌宠动物、救助故事"
     assert selected[0].positive_energy_reason_en == "Cute, Animals, Rescue story"
