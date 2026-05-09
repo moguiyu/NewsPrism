@@ -5,6 +5,8 @@ from datetime import date
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from newsprism.config import load_config
+from newsprism.runtime.publisher import TelegramPublisher
 from newsprism.runtime.scheduler import Scheduler
 
 
@@ -80,3 +82,50 @@ def test_push_schedules_retry_when_stage_not_ready(tmp_path):
     asyncio.run(scheduler.push(report_date=report_date))
 
     assert captured == ["push_retry_2026-04-22_1"]
+
+
+def test_publish_rendered_skips_untranslated_positive_items(tmp_path, monkeypatch):
+    data_path = tmp_path / "data.json"
+    data_path.write_text(
+        json.dumps(
+            {
+                "clusters": [
+                    {
+                        "topic": "World News",
+                        "headline": "中文主新闻",
+                        "summary": "这是一条中文摘要。",
+                    }
+                ],
+                "positive_stories": [
+                    {
+                        "topic": "Positive Energy",
+                        "headline": "Adorable puppy rescued by volunteers",
+                        "summary": "Adorable puppy rescued by volunteers and reunited with a family.",
+                        "positive_source": "BBC",
+                    },
+                    {
+                        "topic": "Positive Energy",
+                        "headline": "志愿者救助可爱小狗",
+                        "summary": "志愿者救下一只可爱小狗，并帮助它与新家庭团聚。",
+                        "positive_source": "BBC",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    publisher = TelegramPublisher(load_config())
+    captured: list[tuple[list[dict[str, str]], date]] = []
+
+    async def fake_publish_items(items, report_date):
+        captured.append((items, report_date))
+
+    monkeypatch.setattr(publisher, "_publish_items", fake_publish_items)
+
+    asyncio.run(publisher.publish_rendered(data_path, date(2026, 5, 9)))
+
+    assert [item["summary"] for item in captured[0][0]] == [
+        "**中文主新闻**\n\n这是一条中文摘要。",
+        "**志愿者救助可爱小狗**\n\n志愿者救下一只可爱小狗，并帮助它与新家庭团聚。",
+    ]

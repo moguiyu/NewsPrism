@@ -150,6 +150,84 @@ def test_translate_report_content_clears_partial_english_on_failure(monkeypatch)
     assert "storyline_name_en" not in focus_storylines[0]
 
 
+def test_normalize_positive_energy_summaries_translates_source_language_primary(monkeypatch):
+    summarizer = Summarizer(load_config())
+    summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Positive Energy",
+            articles=[
+                Article(
+                    url="https://guardian.example/positive",
+                    title="King Charles features in surprise birthday tribute",
+                    source_name="The Guardian",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Animals carry a centennial card to David Attenborough in a playful tribute.",
+                )
+            ],
+        ),
+        summary="**King Charles features in surprise birthday tribute**\n\nAnimals carry a centennial card to David Attenborough in a playful tribute.",
+        perspectives={},
+    )
+
+    def fake_json_completion(system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0.1) -> str:
+        assert "Normalize this 今日正能量" in user_prompt
+        return json.dumps(
+            {
+                "headline_zh": "英王为阿滕伯勒送上生日惊喜",
+                "body_zh": "一支轻松短片让动物接力送上百岁生日贺卡，向大卫·阿滕伯勒致意。",
+                "headline_en": "King Charles sends surprise birthday tribute to Attenborough",
+                "body_en": "A playful film shows animals relaying a centennial card to David Attenborough.",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(summarizer, "_json_completion", fake_json_completion)
+
+    normalized = summarizer.normalize_positive_energy_summaries([summary], include_english=True)
+
+    assert normalized == [summary]
+    assert summary.summary.startswith("**英王为阿滕伯勒送上生日惊喜**")
+    assert "轻松短片" in summary.summary
+    assert summary.summary_en == (
+        "**King Charles sends surprise birthday tribute to Attenborough**\n\n"
+        "A playful film shows animals relaying a centennial card to David Attenborough."
+    )
+
+
+def test_normalize_positive_energy_summaries_drops_untranslated_source_language(monkeypatch):
+    summarizer = Summarizer(load_config())
+    summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Positive Energy",
+            articles=[
+                Article(
+                    url="https://spidersweb.example/watch",
+                    title="Nie musisz wydawać fortuny",
+                    source_name="Spider's Web",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Polish source text.",
+                )
+            ],
+        ),
+        summary="**Nie musisz wydawać fortuny**\n\nPolish source text.",
+        perspectives={},
+    )
+
+    def fake_json_completion(system_prompt: str, user_prompt: str, max_tokens: int, temperature: float = 0.1) -> str:
+        return json.dumps(
+            {
+                "headline_zh": "Nie musisz wydawać fortuny",
+                "body_zh": "Polish source text.",
+                "headline_en": "You do not need to spend a fortune",
+                "body_en": "Polish source text.",
+            }
+        )
+
+    monkeypatch.setattr(summarizer, "_json_completion", fake_json_completion)
+
+    assert summarizer.normalize_positive_energy_summaries([summary], include_english=True) == []
+
+
 def test_classify_positive_energy_parses_json_with_wrapping(monkeypatch):
     summarizer = Summarizer(load_config())
     summary = _build_summary()

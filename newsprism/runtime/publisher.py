@@ -25,6 +25,7 @@ from telegram.constants import ParseMode
 
 from newsprism.config import Config
 from newsprism.runtime.renderer import _BROAD_CATEGORY_MAP, _CATEGORY_META, _DEFAULT_BROAD, _body_only, _extract_headline
+from newsprism.service.language import looks_like_chinese_text
 from newsprism.types import ClusterSummary
 
 logger = logging.getLogger(__name__)
@@ -84,18 +85,29 @@ class TelegramPublisher:
             for cluster in clusters
             if cluster.get("summary")
         ]
-        items.extend(
-            {
-                "topic_category": str(cluster.get("topic", "")),
-                "summary": (
-                    f"**{cluster.get('headline')}**\n\n{cluster.get('summary', '')}"
-                    if cluster.get("headline") and "**" not in str(cluster.get("summary", ""))
-                    else str(cluster.get("summary", ""))
-                ),
-            }
-            for cluster in positive_stories
-            if cluster.get("summary")
-        )
+        for cluster in positive_stories:
+            if not cluster.get("summary"):
+                continue
+            rendered_summary = (
+                f"**{cluster.get('headline')}**\n\n{cluster.get('summary', '')}"
+                if cluster.get("headline") and "**" not in str(cluster.get("summary", ""))
+                else str(cluster.get("summary", ""))
+            )
+            if not looks_like_chinese_text(
+                f"{cluster.get('headline', '')}\n{cluster.get('summary', '')}",
+            ):
+                logger.warning(
+                    "Skipping untranslated positive-energy Telegram item: headline=%s source=%s",
+                    cluster.get("headline", ""),
+                    cluster.get("positive_source", ""),
+                )
+                continue
+            items.append(
+                {
+                    "topic_category": str(cluster.get("topic", "")),
+                    "summary": rendered_summary,
+                }
+            )
         await self._publish_items(items, report_date)
 
     async def _publish_items(self, items: list[dict[str, str]], report_date: date) -> None:

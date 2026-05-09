@@ -18,6 +18,7 @@ import litellm
 from pydantic import BaseModel, Field
 
 from newsprism.config import Config
+from newsprism.service.language import looks_like_chinese_text
 from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup
 
@@ -100,6 +101,13 @@ class SummaryTranslation(BaseModel):
         default_factory=list,
         description="Perspective groups translated to English while preserving the exact source grouping.",
     )
+
+
+class PositiveSummaryTranslation(BaseModel):
+    headline_zh: str = Field(description="Simplified Chinese headline translated from the source-language positive story.")
+    body_zh: str = Field(description="Simplified Chinese body translated from the source-language positive story.")
+    headline_en: str = Field(description="English headline translated from the source-language positive story.")
+    body_en: str = Field(description="English body translated from the source-language positive story.")
 
 
 class LabelTranslation(BaseModel):
@@ -236,6 +244,40 @@ class Summarizer:
             logger.warning("English translation failed; rendering Chinese-only report: %s", exc)
             self._clear_translated_report_content(summaries, hot_topics, focus_storylines)
             return False
+
+    def normalize_positive_energy_summaries(
+        self,
+        summaries: list[ClusterSummary],
+        include_english: bool = False,
+    ) -> list[ClusterSummary]:
+        """Ensure positive-energy primary fields are Chinese; drop untranslatable source-language items."""
+        normalized: list[ClusterSummary] = []
+        for summary in summaries:
+            if self._summary_has_chinese_primary(summary):
+                if include_english and not summary.summary_en:
+                    try:
+                        self._translate_cluster_summary(summary)
+                    except Exception as exc:
+                        logger.warning(
+                            "Positive-energy English translation failed; keeping Chinese-only item '%s': %s",
+                            _extract_headline(summary.summary) or summary.cluster.topic_category,
+                            exc,
+                        )
+                normalized.append(summary)
+                continue
+
+            try:
+                self._translate_positive_energy_summary(summary, include_english=include_english)
+            except Exception as exc:
+                logger.warning(
+                    "Positive-energy story omitted because Chinese normalization failed: source=%s headline=%s error=%s",
+                    summary.cluster.sources[0] if summary.cluster.sources else "",
+                    _extract_headline(summary.summary) or summary.cluster.topic_category,
+                    exc,
+                )
+                continue
+            normalized.append(summary)
+        return normalized
 
     def classify_macro_topics(self, clusters: list[ArticleCluster]) -> list[dict[str, str | int | None]]:
         if not clusters:
@@ -558,6 +600,20 @@ class Summarizer:
                     return None
         return None
 
+    def _parse_positive_summary_translation_content(self, content: str) -> PositiveSummaryTranslation | None:
+        if not content.strip():
+            return None
+        try:
+            return PositiveSummaryTranslation.model_validate_json(content)
+        except Exception:
+            extracted = self._extract_json_object(content)
+            if extracted and extracted != content:
+                try:
+                    return PositiveSummaryTranslation.model_validate_json(extracted)
+                except Exception:
+                    return None
+        return None
+
     def _extract_json_object(self, content: str) -> str | None:
         start = content.find("{")
         end = content.rfind("}")
@@ -864,6 +920,70 @@ class Summarizer:
             summary.short_topic_name_en = self._clean_short_label(parsed.short_topic_name)
         elif summary.short_topic_name:
             summary.short_topic_name_en = self._translate_short_label(summary.short_topic_name)
+
+    def _summary_has_chinese_primary(self, summary: ClusterSummary) -> bool:
+        headline = _extract_headline(summary.summary)
+        body = _body_only(summary.summary)
+        return looks_like_chinese_text(f"{headline}\n{body}")
+
+    def _translate_positive_energy_summary(self, summary: ClusterSummary, include_english: bool) -> None:
+        headline = _extract_headline(summary.summary)
+        if not headline and summary.cluster.articles:
+            headline = summary.cluster.articles[0].title
+        body = _body_only(summary.summary)
+        if not body and summary.cluster.articles:
+            body = summary.cluster.articles[0].content
+        source_language = self._source_language_for_summary(summary)
+        prompt_payload = {
+            "source_language": source_language,
+            "headline": headline,
+            "body": body[:1200],
+            "source": summary.cluster.sources[0] if summary.cluster.sources else "",
+        }
+        prompt = (
+            "Normalize this 今日正能量 positive-highlight story for a bilingual Chinese report.\n"
+            "Return JSON with exactly these keys: headline_zh, body_zh, headline_en, body_en.\n"
+            "Rules:\n"
+            "1. headline_zh and body_zh must be Simplified Chinese.\n"
+            "2. headline_en and body_en must be natural English.\n"
+            "3. Preserve facts exactly; do not add context, claims, dates, names, or numbers.\n"
+            "4. Keep body_zh to 1-2 short sentences and under 120 Chinese characters.\n"
+            "5. Keep body_en to 1-2 short sentences.\n"
+            "6. Return compact JSON only.\n\n"
+            f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2)}"
+        )
+        content = self._json_completion(
+            system_prompt="You translate short positive news highlights without adding facts.",
+            user_prompt=prompt,
+            max_tokens=min(self.max_tokens, 700),
+            temperature=0.1,
+        )
+        parsed = self._parse_positive_summary_translation_content(content)
+        if parsed is None:
+            raise ValueError("Could not parse positive summary translation JSON")
+
+        headline_zh = self._clean_positive_text(parsed.headline_zh).strip("*")
+        body_zh = self._clean_positive_text(parsed.body_zh)
+        headline_en = self._clean_positive_text(parsed.headline_en).strip("*")
+        body_en = self._clean_positive_text(parsed.body_en)
+        if not headline_zh or not body_zh or not looks_like_chinese_text(f"{headline_zh}\n{body_zh}"):
+            raise ValueError("Translated positive summary does not contain a Chinese primary digest")
+        if include_english and (not headline_en or not body_en):
+            raise ValueError("Translated positive summary is missing English fields")
+
+        summary.summary = f"**{headline_zh}**\n\n{body_zh}"
+        summary.summary_en = f"**{headline_en}**\n\n{body_en}" if include_english else None
+
+    def _source_language_for_summary(self, summary: ClusterSummary) -> str:
+        source_languages = {source.name: source.language for source in self.cfg.sources}
+        for article in summary.cluster.articles:
+            language = source_languages.get(article.source_name)
+            if language:
+                return language
+        return "unknown"
+
+    def _clean_positive_text(self, text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip())
 
     def _align_translated_perspective_groups(
         self,

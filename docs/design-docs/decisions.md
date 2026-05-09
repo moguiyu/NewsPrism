@@ -5,6 +5,7 @@ For design rationale and principles, see [core-beliefs.md](core-beliefs.md).
 
 | Date | Decision | Rationale | Supersedes |
 |---|---|---|---|
+| 2026-05-09 | Require Chinese primary fields for `今日正能量` | The default report and Telegram push read `headline`/`summary` as Chinese; non-Chinese positive stories must be translated first or omitted to prevent mixed-language pushes | Source-language positive highlights in primary fields |
 | 2026-05-07 | Score `今日正能量` locally from existing collected sources only | Cheerful stories should stay within the same source provenance boundary as the main report while avoiding extra LLM token spend | LLM post-summary positive-energy classifier as default |
 | 2026-05-06 | Persist cluster quality reports, claims, and evidence | Trust signals need to survive beyond the summarizer prompt so audits, future reports, and UI provenance can inspect why a story was published, reviewed, or suppressed | Summary-only quality judgment |
 | 2026-05-06 | Add explicit storyline lifecycle state and timelines | Cross-day stories should show whether they are emerging, developing, correcting, or stabilizing instead of appearing as unrelated daily clusters | Hot-topic grouping without lifecycle state |
