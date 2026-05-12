@@ -172,11 +172,18 @@
     }
 
     .logo {
+      display: inline-block;
       font-size: 20px;
       font-weight: 800;
       color: var(--accent);
       letter-spacing: -0.5px;
       text-shadow: 0 2px 10px var(--accent-glow);
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .logo:hover {
+      color: var(--text);
     }
 
     .header-date {
@@ -238,6 +245,10 @@
       background: var(--cat-active-bg);
       color: var(--text);
       box-shadow: 0 4px 12px var(--accent-glow);
+    }
+
+    .theme-toggle button {
+      min-width: 38px;
     }
 
     .header-stat {
@@ -319,6 +330,39 @@
     }
 
     .day-link .date-part {
+      color: var(--text);
+    }
+
+    .footer-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .footer-nav .day-selector {
+      justify-content: flex-start;
+      max-width: none;
+    }
+
+    .back-to-top {
+      flex: 0 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--chip-bg);
+      color: var(--muted);
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.4;
+      padding: 5px 11px;
+      white-space: nowrap;
+    }
+
+    .back-to-top:hover {
+      border-color: var(--border-hover);
       color: var(--text);
     }
 
@@ -1132,6 +1176,12 @@
         flex: 0 0 auto;
       }
 
+      .theme-toggle button {
+        min-width: 36px;
+        padding-left: 9px;
+        padding-right: 9px;
+      }
+
       .header-date {
         display: inline-block;
         width: auto;
@@ -1168,6 +1218,22 @@
       .day-selector {
         flex: 0 0 auto;
         max-width: none;
+      }
+
+      .footer-nav {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .footer-nav .day-selector {
+        overflow-x: auto;
+      }
+
+      .back-to-top {
+        align-self: flex-start;
+        font-size: 11.5px;
+        padding: 4px 9px;
       }
 
       .day-link {
@@ -1447,6 +1513,11 @@
       text-shadow: none;
     }
 
+    .logo:hover {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
     .header-date,
     .header-stat,
     .day-link,
@@ -1481,6 +1552,7 @@
 
     .language-toggle,
     .day-link,
+    .back-to-top,
     .cat-tab,
     .overview-cta,
     .header-stat {
@@ -1514,6 +1586,7 @@
     }
 
     .language-toggle button.active,
+    .theme-toggle button.active,
     .cat-tab.active,
     .day-link.active {
       background: #000000;
@@ -1535,7 +1608,19 @@
       padding: 8px 12px;
     }
 
+    .back-to-top {
+      color: #000000;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      min-height: 40px;
+      padding: 8px 12px;
+      text-transform: uppercase;
+    }
+
     .day-link:hover,
+    .back-to-top:hover,
     .cat-tab:hover,
     .overview-cta:hover,
     .src-chip-link:hover,
@@ -1994,6 +2079,25 @@
       color: #ffffff;
     }
 
+    footer .day-link,
+    footer .back-to-top {
+      background: transparent;
+      border-color: #ffffff;
+      color: #ffffff;
+    }
+
+    footer .day-link:hover,
+    footer .back-to-top:hover {
+      color: #ffffff;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    footer .day-link.active {
+      background: #ffffff;
+      color: #1a1a1a;
+    }
+
     @media (max-width: 640px) {
       .mobile-brand-bar {
         background: #ffffff;
@@ -2238,6 +2342,7 @@
     .language-toggle button,
     .theme-toggle button,
     .day-link,
+    .back-to-top,
     .cat-tab,
     .overview-cta,
     .header-stat,
@@ -2306,6 +2411,7 @@
     .language-toggle,
     .theme-toggle,
     .day-link,
+    .back-to-top,
     .cat-tab,
     .overview-cta,
     .header-stat {
@@ -2325,12 +2431,13 @@
       cursor: pointer;
       font: inherit;
       font-family: var(--font-mono);
-      font-size: 12px;
+      font-size: 15px;
       font-weight: 700;
-      letter-spacing: 0.08em;
+      letter-spacing: 0;
       line-height: 1.2;
       min-height: 40px;
-      padding: 10px 12px;
+      min-width: 40px;
+      padding: 10px;
       text-transform: uppercase;
     }
 
@@ -2480,6 +2587,18 @@
       color: var(--theme-footer-ink);
     }
 
+    footer .day-link,
+    footer .back-to-top {
+      background: transparent;
+      border-color: var(--theme-footer-ink);
+      color: var(--theme-footer-ink);
+    }
+
+    footer .day-link.active {
+      background: var(--theme-footer-ink);
+      color: var(--theme-footer-bg);
+    }
+
     @media (max-width: 640px) {
       .mobile-brand-bar,
       .site-header {
@@ -2500,8 +2619,8 @@
 
 <body>
 
-  <div class="mobile-brand-bar" aria-hidden="true">
-    <span class="logo">NewsPrism</span>
+  <div class="mobile-brand-bar">
+    <a class="logo" href="./" aria-label="Refresh NewsPrism" title="Refresh NewsPrism" onclick="window.location.reload(); return false;">NewsPrism</a>
     <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
   </div>
 
@@ -2509,39 +2628,20 @@
     <div class="header-inner">
       <div class="header-top">
         <div class="header-brand">
-          <span class="logo">NewsPrism</span>
+          <a class="logo" href="./" aria-label="Refresh NewsPrism" title="Refresh NewsPrism" onclick="window.location.reload(); return false;">NewsPrism</a>
           <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
         </div>
         <div class="header-actions">
           <div class="header-tools">
             <div class="theme-toggle" aria-label="theme toggle">
-              <button type="button" class="theme-btn active" data-theme-choice="system" onclick="setTheme('system')">{{ bilingual_text('系统', 'System') }}</button>
-              <button type="button" class="theme-btn" data-theme-choice="light" onclick="setTheme('light')">{{ bilingual_text('明', 'Light') }}</button>
-              <button type="button" class="theme-btn" data-theme-choice="dark" onclick="setTheme('dark')">{{ bilingual_text('暗', 'Dark') }}</button>
+              <button type="button" class="theme-btn active" data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme('system')">🖥</button>
+              <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">☀️</button>
+              <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">🌙</button>
             </div>
           {% if english_available %}
             <div class="language-toggle" aria-label="language toggle">
-              <button type="button" class="lang-btn active" data-lang-choice="zh" onclick="setLanguage('zh')">中文</button>
-              <button type="button" class="lang-btn" data-lang-choice="en" onclick="setLanguage('en')">English</button>
-            </div>
-          {% endif %}
-          {% if day_links %}
-            <div class="day-selector" aria-label="report day selector">
-              {% for day in day_links %}
-                {% if day.available %}
-                <a class="day-link{% if day.active %} active{% endif %}" href="{{ day.href }}">
-                  <span>{{ bilingual_text(day.label, day.label_en) }}</span>
-                  {% if not day.active %}
-                  <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
-                  {% endif %}
-                </a>
-                {% else %}
-                <span class="day-link disabled" aria-disabled="true">
-                  <span>{{ bilingual_text(day.label, day.label_en) }}</span>
-                  <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
-                </span>
-                {% endif %}
-              {% endfor %}
+              <button type="button" class="lang-btn active" data-lang-choice="zh" onclick="setLanguage('zh')">汉</button>
+              <button type="button" class="lang-btn" data-lang-choice="en" onclick="setLanguage('en')">ENG</button>
             </div>
           {% endif %}
           </div>
@@ -2844,6 +2944,28 @@
   </main>
 
   <footer>
+    <div class="footer-nav">
+      {% if day_links %}
+      <div class="day-selector" aria-label="report day selector">
+        {% for day in day_links %}
+          {% if day.available %}
+          <a class="day-link{% if day.active %} active{% endif %}" href="{{ day.href }}">
+            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+            {% if not day.active %}
+            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+            {% endif %}
+          </a>
+          {% else %}
+          <span class="day-link disabled" aria-disabled="true">
+            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+          </span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      <button type="button" class="back-to-top" onclick="scrollToTop()">{{ bilingual_text('回到顶部', 'Back to Top') }}</button>
+    </div>
     <div class="footer-stats" aria-label="report stats">
       <span class="header-stat">{{ bilingual_markup('<strong>' ~ cluster_count ~ '</strong> 条常规追踪', '<strong>' ~ cluster_count ~ '</strong> regular stories') }}</span>
       {% if positive_story_count %}
@@ -2978,6 +3100,10 @@
       if (tab) {
         filterView(tab, 'hot', domId);
       }
+    }
+
+    function scrollToTop() {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     (function restoreTheme() {

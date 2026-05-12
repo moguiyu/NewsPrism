@@ -240,6 +240,8 @@ class TestPerspectivesContext:
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
         assert 'data-lang-choice="en"' in html
+        assert '>汉</button>' in html
+        assert '>ENG</button>' in html
         assert "English summary content." in html
         assert "localStorage.setItem('newsprism-language', lang)" in html
         assert payload["available_languages"] == ["zh", "en"]
@@ -984,7 +986,7 @@ class TestHotTopics:
         html = html_path.read_text(encoding="utf-8")
 
         assert "@media (max-width: 640px) {" in html
-        assert '<div class="mobile-brand-bar" aria-hidden="true">' in html
+        assert '<div class="mobile-brand-bar">' in html
         assert ".mobile-brand-bar {\n        position: sticky;" in html
         assert ".site-header {\n        background: transparent;" in html
         assert "position: static;" in html
@@ -997,10 +999,18 @@ class TestHotTopics:
         assert ".overview-anchors {\n        display: none;" in html
         assert '<div class="footer-stats" aria-label="report stats">' in html
         assert '<nav class="cat-tabs">' in html
-        assert '<span class="logo">NewsPrism</span>' in html
+        assert '<a class="logo" href="./" aria-label="Refresh NewsPrism" title="Refresh NewsPrism" onclick="window.location.reload(); return false;">NewsPrism</a>' in html
+        assert 'data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme(\'system\')">🖥</button>' in html
+        assert 'data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme(\'light\')">☀️</button>' in html
+        assert 'data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme(\'dark\')">🌙</button>' in html
+        assert 'class="back-to-top" onclick="scrollToTop()"' in html
         tree = lxml_html.fromstring(html)
         assert not tree.xpath('//*[@class="site-header"]//*[@aria-label="report stats"]')
         assert tree.xpath('//footer//*[@aria-label="report stats"]')
+        assert len(tree.xpath('//a[@class="logo" and @href="./" and contains(@onclick, "window.location.reload")]')) == 2
+        assert not tree.xpath('//*[@class="site-header"]//*[@aria-label="report day selector"]')
+        assert tree.xpath('//footer//*[@aria-label="report day selector"]')
+        assert tree.xpath('//footer//button[contains(@class, "back-to-top")]')
         assert not tree.xpath('//button[contains(@class, "positive-tab")]')
 
     def test_positive_section_renders_after_main_feed_before_focus_overview(self, renderer, tmp_path):
@@ -1202,7 +1212,8 @@ class TestHotTopics:
         assert payload["day_links"][1]["available"] is True
         assert payload["day_links"][2]["available"] is False
         assert tree.xpath('//a[contains(@class, "day-link") and contains(@class, "active") and @href="../2026-03-27/"]')
-        assert tree.xpath('//*[@class="header-tools"]//*[@aria-label="report day selector"]')
+        assert not tree.xpath('//*[@class="header-tools"]//*[@aria-label="report day selector"]')
+        assert tree.xpath('//footer//*[@aria-label="report day selector"]')
         assert not tree.xpath('//a[contains(@class, "day-link") and contains(@class, "active")]//*[contains(@class, "date-part")]')
         assert tree.xpath('//a[contains(@class, "day-link") and @href="../2026-03-26/"]')
         assert tree.xpath('//a[contains(@class, "day-link") and @href="../2026-03-26/"]//*[contains(@class, "date-part") and contains(., "03月26日")]')

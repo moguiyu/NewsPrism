@@ -8,7 +8,7 @@ Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Assess quality  ->  S
 
 This public repository supports both self-hosting with Docker and local development from source.
 
-Current major release: `v0.3.0`.
+Current major release: `v0.3.1`.
 
 ## Highlights
 
@@ -19,6 +19,7 @@ Current major release: `v0.3.0`.
 - Storyline lifecycle state and compact timelines for developing topics
 - Dedicated `今日正能量` lane selected locally from the existing source catalog with zero extra LLM tokens
 - WIRED-inspired static HTML reports with system/light/dark modes
+- Compact report controls with clickable refresh branding, footer date navigation, and a Back to Top action
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 
 ## Architecture
