@@ -2064,6 +2064,57 @@
       text-align: left;
     }
 
+    .footer-project {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 16px 24px;
+      border-top: 2px solid currentColor;
+      border-bottom: 1px solid currentColor;
+      margin-bottom: 18px;
+      padding: 18px 0;
+    }
+
+    .footer-project-kicker {
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.2;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .footer-project-copy {
+      font-size: 13px;
+      line-height: 1.55;
+      max-width: 680px;
+    }
+
+    .footer-project-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .footer-project-link {
+      border: 1px solid currentColor;
+      color: inherit;
+      display: inline-flex;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.2;
+      padding: 6px 9px;
+      text-decoration: none;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .footer-project-link:hover {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
     .footer-stats {
       justify-content: flex-start;
       margin-bottom: 16px;
@@ -2125,6 +2176,14 @@
       .cat-tabs {
         margin: 0 -16px;
         padding-left: 16px;
+      }
+
+      .footer-project {
+        grid-template-columns: 1fr;
+      }
+
+      .footer-project-links {
+        justify-content: flex-start;
       }
 
       .cat-tab {
@@ -2944,6 +3003,17 @@
   </main>
 
   <footer>
+    <div class="footer-project" aria-label="About NewsPrism">
+      <div>
+        <div class="footer-project-kicker">{{ bilingual_text('关于 NewsPrism', 'About NewsPrism') }}</div>
+        <p class="footer-project-copy">{{ bilingual_text('NewsPrism 被构建为比较不同来源如何叙述同一事件，而不只是罗列标题。', 'NewsPrism was built to compare how different sources frame the same event, not just list headlines.') }}</p>
+      </div>
+      <nav class="footer-project-links" aria-label="project links">
+        <a class="footer-project-link" href="https://github.com/moguiyu/NewsPrism" target="_blank" rel="noopener">{{ bilingual_text('源代码', 'Source') }}</a>
+        <a class="footer-project-link" href="https://github.com/moguiyu/NewsPrism/issues" target="_blank" rel="noopener">{{ bilingual_text('反馈建议', 'Feedback') }}</a>
+        <a class="footer-project-link" href="mailto:evoke-ahoy-liquefy@duck.com">{{ bilingual_text('邮件联系', 'Email') }}</a>
+      </nav>
+    </div>
     <div class="footer-nav">
       {% if day_links %}
       <div class="day-selector" aria-label="report day selector">
