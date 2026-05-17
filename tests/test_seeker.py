@@ -17,6 +17,7 @@ def mock_config():
     cfg = MagicMock(spec=Config)
     cfg.tavily_api_key = "test-tavily-key"
     cfg.brightdata_api_key = ""
+    cfg.brightdata_zone = "serp_api1"
     cfg.evaluator_model = "deepseek/deepseek-chat"
     cfg.litellm_api_key = "test-litellm-key"
     cfg.litellm_base_url = "https://api.deepseek.com"
@@ -152,6 +153,7 @@ class TestRegionConfig:
         cfg = MagicMock(spec=Config)
         cfg.tavily_api_key = "test-tavily-key"
         cfg.brightdata_api_key = ""
+        cfg.brightdata_zone = "serp_api1"
         cfg.evaluator_model = "deepseek/deepseek-chat"
         cfg.litellm_api_key = "test-litellm-key"
         cfg.litellm_base_url = "https://api.deepseek.com"
@@ -530,9 +532,11 @@ class TestSearchAndFetch:
 
     @patch("newsprism.service.seeker.ActiveSeeker._search_tavily")
     def test_search_rejects_unknown_freshness_for_non_official_results(self, mock_tavily, seeker):
+        # Use a domain NOT in the region's trusted_domains so the trusted-domain
+        # freshness exception does not kick in.
         mock_tavily.return_value = [
             {
-                "url": "https://nhk.or.jp/news/no-date",
+                "url": "https://random-blog.example/post/no-date",
                 "title": "Japan chip export controls response",
                 "content": "Japan chip export controls response and policy details." + "x" * 120,
                 "origin_region": "jp",
@@ -869,3 +873,148 @@ class TestTelemetryAndCaching:
                 "SELECT provider, request_type, account_id FROM search_request_events ORDER BY id"
             ).fetchall()
         assert rows == [("x", "user_timeline", "mofa-jp")]
+
+
+class TestTrustedDomainBackfill:
+    """A1: regions without configured RSS sources still get trusted_domains
+    populated from the curated _KNOWN_DOMAIN_REGIONS whitelist, so Tavily
+    searches for them are not unconstrained."""
+
+    def test_whitelist_backfills_search_only_region(self, seeker):
+        # ir has no configured RSS source but has whitelist entries
+        assert "presstv.ir" in seeker.region_config["ir"].trusted_domains
+        assert "tasnimnews.com" in seeker.region_config["ir"].trusted_domains
+
+    def test_whitelist_backfills_qatar(self, seeker):
+        assert "aljazeera.com" in seeker.region_config["qa"].trusted_domains
+
+    def test_configured_source_region_unchanged(self, seeker):
+        # jp has a configured source (nhk.or.jp); backfill must NOT clobber it.
+        # The whitelist has no jp entry so trusted_domains stays at configured value.
+        assert seeker.region_config["jp"].trusted_domains == ["nhk.or.jp"]
+
+    def test_region_without_whitelist_stays_empty(self, seeker):
+        # Switzerland has no whitelist entry and no configured source in fixture
+        assert seeker.region_config["ch"].trusted_domains == []
+
+
+class TestTrustedDomainFreshness:
+    """A2: unknown_freshness is forgiven when the result URL's domain is in
+    the search region's trusted_domains — these are outlets we already trust
+    as RSS sources or whitelist entries."""
+
+    def test_trusted_domain_for_region_matches_whitelist(self, seeker):
+        assert seeker._is_trusted_domain_for_region("https://www.presstv.ir/news/123", "ir") is True
+
+    def test_trusted_domain_for_region_matches_subdomain(self, seeker):
+        assert (
+            seeker._is_trusted_domain_for_region(
+                "https://m.presstv.ir/Detail/2026/05/17/123/", "ir"
+            )
+            is True
+        )
+
+    def test_trusted_domain_for_region_rejects_other_region(self, seeker):
+        # bbc.com is in trusted_domains for gb, not for ir
+        assert seeker._is_trusted_domain_for_region("https://bbc.com/news/123", "ir") is False
+
+    def test_trusted_domain_for_region_handles_none(self, seeker):
+        assert seeker._is_trusted_domain_for_region(None, "ir") is False
+        assert seeker._is_trusted_domain_for_region("https://presstv.ir/", None) is False
+
+    def test_rejection_reason_forgives_unknown_freshness_for_trusted(self, seeker):
+        cluster = ArticleCluster(topic_category="World", articles=[])
+        article = Article(
+            # Date-free URL so _parse_published_at returns None and freshness is "unknown"
+            url="https://www.presstv.ir/news/iran-statement-on-g7",
+            title="Iran responds to G7 statement",
+            source_name="PressTV",
+            published_at=None,
+            content="Body content " * 50,
+            origin_region="ir",
+            search_region="ir",
+        )
+        # Inject 'unknown' freshness via no published_at; trusted-domain rule must
+        # convert it to 'fresh_trusted_domain' instead of returning unknown_freshness.
+        # We need to bypass the event_match check, which is the gate after freshness.
+        with patch.object(seeker, "_passes_event_match", return_value=True), \
+             patch.object(seeker, "_adds_new_angle", return_value=True):
+            reason = seeker._result_rejection_reason(cluster, article, "Iran G7 response")
+        assert reason == ""
+        assert article.result_freshness_state == "fresh_trusted_domain"
+
+    def test_rejection_reason_still_rejects_unknown_freshness_for_untrusted(self, seeker):
+        cluster = ArticleCluster(topic_category="World", articles=[])
+        article = Article(
+            url="https://random-blog.example/post/iran-statement",
+            title="Some article",
+            source_name="Random Blog",
+            published_at=None,
+            content="Body content " * 50,
+            origin_region="ir",
+            search_region="ir",
+        )
+        with patch.object(seeker, "_passes_event_match", return_value=True):
+            reason = seeker._result_rejection_reason(cluster, article, "Iran G7 response")
+        assert reason == "unknown_freshness"
+
+
+class TestBrightDataPayload:
+    """B: BrightData call uses /request endpoint with zone parameter (the
+    previous /serp/google + zoneless payload returned HTTP 404 unconditionally)."""
+
+    def test_brightdata_skipped_without_zone(self, mock_config):
+        mock_config.brightdata_api_key = "k"
+        mock_config.brightdata_zone = ""
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._search_brightdata("us", "chip war") == []
+
+    def test_brightdata_skipped_without_key(self, seeker):
+        # fixture has brightdata_api_key=""
+        assert seeker._search_brightdata("us", "chip war") == []
+
+    def test_brightdata_payload_uses_zone_and_request_endpoint(self, mock_config):
+        mock_config.brightdata_api_key = "test-bd-key"
+        mock_config.brightdata_zone = "serp_api1"
+        seeker = ActiveSeeker(mock_config)
+
+        captured = {}
+        response = MagicMock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "organic": [
+                {
+                    "link": "https://www.presstv.ir/Detail/2026/05/17/1/iran-statement",
+                    "title": "Iran statement",
+                    "description": "Iran responds to ...",
+                    "date": None,
+                }
+            ]
+        }
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.__exit__.return_value = None
+
+        def _post(url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs.get("json")
+            captured["headers"] = kwargs.get("headers")
+            return response
+
+        client.post.side_effect = _post
+
+        with patch("newsprism.service.seeker.httpx.Client", return_value=client):
+            results = seeker._search_brightdata("ir", "Iran G7 statement")
+
+        assert captured["url"] == "https://api.brightdata.com/request"
+        assert captured["json"]["zone"] == "serp_api1"
+        assert captured["json"]["format"] == "raw"
+        assert "brd_json=1" in captured["json"]["url"]
+        assert "gl=ir" in captured["json"]["url"]
+        assert captured["headers"]["Authorization"] == "Bearer test-bd-key"
+
+        assert len(results) == 1
+        assert results[0]["url"] == "https://www.presstv.ir/Detail/2026/05/17/1/iran-statement"
+        assert results[0]["origin_region"] == "ir"
+        assert results[0]["searched_provider"] == "brightdata_serp"
