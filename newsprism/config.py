@@ -62,6 +62,7 @@ class Config:
     # Active Search
     tavily_api_key: str = field(default_factory=lambda: os.environ.get("TAVILY_API_KEY", ""))
     brightdata_api_key: str = field(default_factory=lambda: os.environ.get("BRIGHTDATA_API_KEY", ""))
+    brightdata_zone: str = field(default_factory=lambda: os.environ.get("BRIGHTDATA_ZONE", "serp_api1"))
     evaluator_model: str = field(default_factory=lambda: os.environ.get("EVALUATOR_MODEL", "deepseek/deepseek-chat"))
     x_bearer_token: str = field(default_factory=lambda: os.environ.get("X_BEARER_TOKEN", ""))
     youtube_api_key: str = field(default_factory=lambda: os.environ.get("YOUTUBE_API_KEY", ""))

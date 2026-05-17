@@ -539,6 +539,7 @@ class ActiveSeeker:
         self.cfg = cfg
         self.tavily_api_key = cfg.tavily_api_key
         self.brightdata_api_key = cfg.brightdata_api_key
+        self.brightdata_zone = cfg.brightdata_zone
         self.evaluator_model = cfg.evaluator_model
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
@@ -708,6 +709,19 @@ class ActiveSeeker:
                     geo_location=region,
                     trusted_domains=[],
                 )
+
+        # Backfill trusted_domains from the curated _KNOWN_DOMAIN_REGIONS whitelist
+        # for any region that still has none. Without this, Tavily searches for
+        # regions without a configured RSS source are unconstrained and almost
+        # always produce results from foreign-domain outlets that then fail the
+        # region_mismatch acceptance gate.
+        whitelist_by_region: dict[str, list[str]] = {}
+        for domain, region in self._KNOWN_DOMAIN_REGIONS.items():
+            whitelist_by_region.setdefault(region, []).append(domain)
+        for region, cfg_entry in self.region_config.items():
+            if cfg_entry.trusted_domains:
+                continue
+            cfg_entry.trusted_domains = list(whitelist_by_region.get(region, []))
 
     def enhance_clusters(self, clusters: list[ArticleCluster]) -> list[ArticleCluster]:
         can_search = bool(
@@ -1007,6 +1021,10 @@ class ActiveSeeker:
             self._parse_published_at(article.published_at, article.url),
             article.is_official_source,
         )
+        if freshness_state == "unknown" and self._is_trusted_domain_for_region(
+            article.url, article.search_region
+        ):
+            freshness_state = "fresh_trusted_domain"
         article.result_freshness_state = freshness_state  # type: ignore[attr-defined]
         if freshness_state == "unknown":
             return "unknown_freshness"
@@ -1020,6 +1038,20 @@ class ActiveSeeker:
 
     def _is_region_valid(self, article: Article) -> bool:
         return article.origin_region == article.search_region and article.search_region is not None
+
+    def _is_trusted_domain_for_region(self, url: str | None, region: str | None) -> bool:
+        if not url or not region:
+            return False
+        config = self.region_config.get(region)
+        if not config or not config.trusted_domains:
+            return False
+        domain = urllib.parse.urlparse(url).netloc.lower().replace("www.", "").strip(".")
+        if not domain:
+            return False
+        trusted = {d.lower().replace("www.", "").strip(".") for d in config.trusted_domains}
+        if domain in trusted:
+            return True
+        return any(domain.endswith("." + t) for t in trusted)
 
     def _passes_freshness(self, article: Article) -> bool:
         parsed = self._parse_published_at(article.published_at, article.url)
@@ -1595,9 +1627,12 @@ class ActiveSeeker:
         return self._build_english_query(region, keyword)
 
     def _search_brightdata(self, region: str, keyword: str) -> list[dict[str, Any]]:
-        """Geo-targeted SERP search via BrightData SERP API. Primary search provider.
+        """Geo-targeted SERP search via BrightData. Primary search provider.
 
-        Requires BRIGHTDATA_API_KEY env var. Returns Light JSON (organic results only).
+        Calls Bright Data's universal /request endpoint with a Google search URL.
+        Requires BRIGHTDATA_API_KEY and a SERP zone (BRIGHTDATA_ZONE, default
+        ``serp_api1``). The ``brd_json=1`` query flag asks Google (via Bright Data)
+        to return parsed JSON instead of HTML, which we then read directly.
         Falls through to Tavily if unavailable.
         """
         cache_key = ("brightdata_serp", region, keyword)
@@ -1605,7 +1640,7 @@ class ActiveSeeker:
             return self._web_search_cache[cache_key]
 
         config = self.region_config.get(region)
-        if not config or not self.brightdata_api_key:
+        if not config or not self.brightdata_api_key or not self.brightdata_zone:
             if region in self._BLOCKED_REGIONS and not self.brightdata_api_key:
                 logger.warning(
                     "BrightData not configured — geo-targeted search unavailable for restricted region %s. "
@@ -1615,18 +1650,22 @@ class ActiveSeeker:
             return []
 
         native_query = self._build_native_query(region, keyword)
+        num = max(self.max_results_per_region + 2, 4)
+        google_url = (
+            "https://www.google.com/search"
+            f"?q={urllib.parse.quote(native_query)}"
+            f"&gl={region}&hl={config.language}&num={num}&brd_json=1"
+        )
         try:
             payload: dict[str, Any] = {
-                "query": native_query,
-                "country": region,
-                "lang": config.language,
-                "num": max(self.max_results_per_region + 2, 4),
-                "output": "json_light",  # organic[]{url,title,description,date} only
+                "zone": self.brightdata_zone,
+                "url": google_url,
+                "format": "raw",
             }
             started = monotonic()
             with httpx.Client(timeout=30) as client:
                 resp = client.post(
-                    "https://api.brightdata.com/serp/google",
+                    "https://api.brightdata.com/request",
                     json=payload,
                     headers={"Authorization": f"Bearer {self.brightdata_api_key}"},
                 )
@@ -1636,7 +1675,7 @@ class ActiveSeeker:
 
             results: list[dict[str, Any]] = []
             for item in data.get("organic", []):
-                url = item.get("url") or item.get("link", "")
+                url = item.get("link") or item.get("url", "")
                 if not url:
                     continue
                 domain = urllib.parse.urlparse(url).netloc.replace("www.", "")
