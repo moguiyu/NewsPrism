@@ -39,6 +39,7 @@ collection:
     - 联合早报
     - 연합뉴스
     - Yonhap News EN
+    - Kyiv Independent
     - 朝日新聞
     - ITmedia NEWS
     - 卫星通讯社
@@ -887,6 +888,33 @@ sources:
     language: ru
     region: ru
     perspective: "俄罗斯独立消费科技媒体（1997），GPU/手机/AI产品/航天，企业IT已剥离至独立站"
+
+  # ════════════════════════════════════════════════════
+  # 🇺🇦 UKRAINE — 2 sources (en:1, uk:1)
+  # Independent + official, restores balance to ru/ua story space
+  # ════════════════════════════════════════════════════
+
+  - name: Kyiv Independent
+    name_en: Kyiv Independent
+    url: https://kyivindependent.com
+    rss_url: https://kyivindependent.com/news-archive/rss/    # ✓ verified (Ghost CMS, 15 items)
+    type: rss
+    weight: 0.9
+    language: en
+    region: ua
+    tier: editorial
+    perspective: "乌克兰独立英文媒体（2021年由原Kyiv Post记者团队创办），战时独立编辑视角，国际引用广泛"
+
+  - name: Ukrinform
+    name_en: Ukrinform
+    url: https://www.ukrinform.ua
+    rss_url: https://www.ukrinform.ua/rss/block-lastnews      # ✓ verified
+    type: rss
+    weight: 0.85
+    language: uk
+    region: ua
+    tier: editorial
+    perspective: "乌克兰国家通讯社（官方），基辅官方立场，与俄方Sputnik叙事形成对照"
 
   # ════════════════════════════════════════════════════
   # 🇸🇬 SINGAPORE — 1 source (zh)
