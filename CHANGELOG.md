@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.3.2 - 2026-05-17
+
+Ukraine coverage and small report polish release.
+
+### Added
+
+- Two Ukrainian news sources to restore Russia/Ukraine editorial balance and reduce dependence on the X/Twitter `active_search` fallback for `ua`:
+  - **Kyiv Independent** (en, editorial, weight 0.9) — independent voice, included in `delta_source_names` for the morning pre-publish run.
+  - **Ukrinform** (uk, editorial, weight 0.85) — official Ukrainian state news agency, native Ukrainian. Activates the `official_independent_contrast` editorial rule for Ukraine-origin stories.
+- Public-project note in the report footer.
+
+### Fixed
+
+- DeepSeek URL host check no longer trips on hosts that contain the substring twice.
+
+### Changed
+
+- Report header controls simplified.
+
+## v0.3.1 - 2026-05-09
+
+### Fixed
+
+- Positive-highlight language no longer drifts when a model response changes perspective grouping; source grouping stays stable and only the affected perspective falls back.
+
 ## v0.3.0 - 2026-05-08
 
 Positive lane recovery and local scoring release.
