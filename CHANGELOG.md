@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.3.3 - 2026-05-18
+
+Footer date navigation fix and small security hardening.
+
+### Fixed
+
+- Footer "N days ago" links no longer render as inert disabled spans when a past report exists. `_build_day_links` was probing the staging subdir for sibling reports, but past reports live in the production output dir; the availability check now targets the final output dir directly.
+
+### Changed
+
+- Past-day footer links use stable `/p/N/` aliases (`/p/1/`, `/p/2/`, …) backed by rotating symlinks under `output/p/`, instead of `../YYYY-MM-DD/` paths. Rendered HTML no longer exposes the date-keyed on-disk layout.
+- Today's redundant footer self-link is dropped; the day selector lists past days only.
+- Direct `/YYYY-MM-DD/` URLs remain reachable for back-compat with existing bookmarks and audits.
+
 ## v0.3.2 - 2026-05-17
 
 Ukraine coverage and small report polish release.
