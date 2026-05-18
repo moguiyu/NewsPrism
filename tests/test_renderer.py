@@ -1207,14 +1207,63 @@ class TestHotTopics:
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
         tree = lxml_html.fromstring(html_path.read_text(encoding="utf-8"))
 
-        assert [day["date"] for day in payload["day_links"]] == ["2026-03-27", "2026-03-26", "2026-03-25"]
-        assert payload["day_links"][0]["active"] is True
-        assert payload["day_links"][1]["available"] is True
+        # Past days only — today no longer self-links.
+        assert [day["date"] for day in payload["day_links"]] == ["2026-03-26", "2026-03-25", "2026-03-24"]
+        assert all(day["active"] is False for day in payload["day_links"])
+        assert payload["day_links"][0]["available"] is True
+        assert payload["day_links"][0]["href"] == "/p/1/"
+        assert payload["day_links"][1]["available"] is False
+        assert payload["day_links"][1]["href"] is None
         assert payload["day_links"][2]["available"] is False
-        assert tree.xpath('//a[contains(@class, "day-link") and contains(@class, "active") and @href="../2026-03-27/"]')
+
+        # Footer holds the selector; HTML never leaks the YYYY-MM-DD path.
         assert not tree.xpath('//*[@class="header-tools"]//*[@aria-label="report day selector"]')
         assert tree.xpath('//footer//*[@aria-label="report day selector"]')
-        assert not tree.xpath('//a[contains(@class, "day-link") and contains(@class, "active")]//*[contains(@class, "date-part")]')
-        assert tree.xpath('//a[contains(@class, "day-link") and @href="../2026-03-26/"]')
-        assert tree.xpath('//a[contains(@class, "day-link") and @href="../2026-03-26/"]//*[contains(@class, "date-part") and contains(., "03月26日")]')
+        assert tree.xpath('//a[contains(@class, "day-link") and @href="/p/1/"]')
+        assert tree.xpath('//a[contains(@class, "day-link") and @href="/p/1/"]//*[contains(@class, "date-part") and contains(., "03月26日")]')
         assert tree.xpath('//span[contains(@class, "day-link") and contains(@class, "disabled")]')
+        assert not tree.xpath('//a[contains(@href, "2026-")]/@href[contains(., "../")]')
+
+        # Symlink rotation: /p/1 must point to the existing past day, /p/2 must be skipped.
+        link_one = tmp_path / "p" / "1"
+        assert link_one.is_symlink()
+        import os
+        assert os.readlink(str(link_one)) == "../2026-03-26"
+        assert not (tmp_path / "p" / "2").exists()
+
+    def test_day_selector_uses_production_dir_when_rendering_to_staging(self, renderer, tmp_path):
+        # Regression: when render() is invoked with report_subdir (staging),
+        # past-day availability must be probed against the production output
+        # dir, not the staging subdir.
+        renderer.output_dir = tmp_path
+        previous = tmp_path / "2026-03-26"
+        previous.mkdir()
+        (previous / "index.html").write_text("previous", encoding="utf-8")
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/staging-day-selector",
+                        title="Staging day selector story",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Staging body.",
+                    )
+                ],
+            ),
+            summary="**暂存日期选择故事**\n\n内容。",
+            perspectives={},
+        )
+
+        html_path = renderer.render(
+            [summary],
+            date(2026, 3, 27),
+            report_subdir="staging",
+            update_latest=False,
+        )
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert payload["day_links"][0]["date"] == "2026-03-26"
+        assert payload["day_links"][0]["available"] is True
+        assert payload["day_links"][0]["href"] == "/p/1/"

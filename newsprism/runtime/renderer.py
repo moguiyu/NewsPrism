@@ -822,30 +822,69 @@ class HtmlRenderer:
             },
         )
 
-    def _build_day_links(self, report_base: Path, report_date: date, days: int = 3) -> list[dict[str, object]]:
+    def _build_day_links(self, report_date: date, days: int = 3) -> list[dict[str, object]]:
+        # Past-day footer links only — today is served at /, no self-link.
+        # Hrefs use stable /p/N/ aliases so the on-disk YYYY-MM-DD layout is
+        # not exposed in HTML; availability is probed against the final
+        # production output dir (not any staging subdir).
         links: list[dict[str, object]] = []
         day_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         day_names_en = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        for offset in range(max(1, days)):
+        for offset in range(1, max(1, days) + 1):
             current = report_date - timedelta(days=offset)
             date_str = current.isoformat()
-            report_dir = report_base / date_str
-            available = offset == 0 or (report_dir / "index.html").exists()
+            available = (self.output_dir / date_str / "index.html").exists()
             links.append(
                 {
                     "date": date_str,
-                    "label": "今天" if offset == 0 else f"{offset}天前",
-                    "label_en": "Today" if offset == 0 else f"{offset}d ago",
+                    "label": f"{offset}天前",
+                    "label_en": f"{offset}d ago",
                     "date_display": current.strftime("%m月%d日"),
                     "date_display_en": current.strftime("%b %d"),
                     "day_name": day_names[current.weekday()],
                     "day_name_en": day_names_en[current.weekday()],
-                    "href": f"../{date_str}/" if available else None,
+                    "href": f"/p/{offset}/" if available else None,
                     "available": available,
-                    "active": offset == 0,
+                    "active": False,
                 }
             )
         return links
+
+    def _promote_day_symlinks(self, report_date: date, days: int) -> None:
+        """Rotate output/p/N symlinks to point at the past-N-days reports.
+
+        Mirrors the safety posture of the `latest` symlink: any failure logs
+        a warning but never raises, so a transient FS issue can't break a
+        publish.
+        """
+        if days <= 0:
+            return
+        p_root = self.output_dir / "p"
+        try:
+            p_root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning("Failed to create %s for day symlinks", p_root, exc_info=True)
+            return
+        for offset in range(1, days + 1):
+            target_name = (report_date - timedelta(days=offset)).isoformat()
+            target_dir = self.output_dir / target_name
+            link = p_root / str(offset)
+            try:
+                if link.is_symlink() or link.is_file():
+                    link.unlink()
+                elif link.exists():
+                    # Directory (shouldn't happen, but recover defensively).
+                    import shutil
+                    shutil.rmtree(link)
+                if target_dir.exists():
+                    link.symlink_to(f"../{target_name}")
+            except OSError:
+                logger.warning(
+                    "Failed to rotate day symlink %s -> ../%s",
+                    link,
+                    target_name,
+                    exc_info=True,
+                )
 
     def render(
         self,
@@ -1111,7 +1150,7 @@ class HtmlRenderer:
             "english_available": english_available,
             "available_languages": ["zh", "en"] if english_available else ["zh"],
             "default_language": "zh",
-            "day_links": self._build_day_links(report_base, report_date, day_link_count),
+            "day_links": self._build_day_links(report_date, day_link_count),
         }
 
         template = self.env.get_template(self.template_file)
@@ -1158,6 +1197,7 @@ class HtmlRenderer:
                 latest.symlink_to(date_str)
             except OSError:
                 pass
+            self._promote_day_symlinks(report_date, day_link_count)
         elif update_latest:
             logger.info(
                 "HTML report has zero stories for %s — preserving existing latest symlink",
