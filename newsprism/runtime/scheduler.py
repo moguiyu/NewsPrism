@@ -1633,6 +1633,13 @@ class Scheduler:
         except OSError:
             logger.warning("Push promotion: failed to update latest symlink", exc_info=True)
 
+        cfg_output = getattr(getattr(self, "cfg", None), "output", None)
+        day_nav_cfg = cfg_output.get("day_navigation", {}) if isinstance(cfg_output, dict) else {}
+        day_link_count = int(day_nav_cfg.get("days", 3)) if isinstance(day_nav_cfg, dict) else 3
+        renderer = getattr(self, "renderer", None)
+        if renderer is not None:
+            renderer._promote_day_symlinks(report_date, day_link_count)
+
     def _schedule_push_retry(self, report_date: date, attempt: int) -> bool:
         if not self.push_retry_enabled or self._apscheduler is None:
             return False
