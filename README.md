@@ -8,7 +8,7 @@ Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Assess quality  ->  S
 
 This public repository supports both self-hosting with Docker and local development from source.
 
-Current major release: `v0.3.1`.
+Current major release: `v0.3.3`.
 
 ## Highlights
 
