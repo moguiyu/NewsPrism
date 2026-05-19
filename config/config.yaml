@@ -157,9 +157,9 @@ clustering:
   # should be treated as equivalent. Bidirectional and transitive.
   topic_equivalence:
     "World News": ["Geopolitics", "Regions", "Society"]
-    "Geopolitics": ["World News", "Regions", "Energy & Climate (English)", "Geopolitics - Extended (English for international sources)"]
+    "Geopolitics": ["World News", "Regions", "Geopolitics - Extended (English for international sources)"]
     "Tech-General": ["Tech Companies - International", "Tech Companies - China", "AI & LLM", "Smartphones & Electronics"]
-    "Energy & Climate (English)": ["Geopolitics", "Society"]
+    "Energy & Climate (English)": ["Society"]
 
 # ─── DEDUPLICATION ─────────────────────────────────────────────────────────────
 dedup:
@@ -577,6 +577,7 @@ sources:
     region: cn
     tier: editorial
     perspective: "上海官方媒体，深度报道，政策/科技/社会"
+    skip_body_fetch: true   # SPA: trafilatura extracts footer boilerplate; use newsnow hover field instead
 
   - name: 凤凰网
     name_en: iFeng
