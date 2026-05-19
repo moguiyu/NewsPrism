@@ -119,7 +119,11 @@ class LLMClusterer:
 
         raw_content = response.choices[0].message.content or ""
         try:
-            parsed = json.loads(raw_content)
+            text = (raw_content or "").strip()
+            if text.startswith("```"):
+                # Strip opening fence line and closing fence
+                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ValueError(f"LLM returned non-JSON content: {raw_content[:200]!r}") from exc
 
@@ -152,12 +156,11 @@ class LLMClusterer:
                 for a in cluster_articles
             }
 
+            logger.debug("LLM cluster label: %r (topic: %r)", label, topic_category)
             ac = ArticleCluster(
                 topic_category=topic_category,
                 articles=cluster_articles,
             )
-            # Attach label as summary headline placeholder (used by renderer)
-            ac.label = label  # type: ignore[attr-defined]
             result.append(ac)
 
         # Sort: most diverse (regions, sources, articles) first
