@@ -540,16 +540,23 @@ class Collector:
         for url in links[:25]:
             _rate_limit(url, self.rate_delay)
             try:
-                raw_html = self._fetch_raw_html(url)
-                if not raw_html:
+                raw_bytes = self._fetch_raw_bytes(url)
+                if not raw_bytes:
+                    continue
+                # load_html decodes bytes using the HTML <meta charset> declaration,
+                # which is authoritative for GBK/Shift-JIS pages.
+                tree = trafilatura.load_html(raw_bytes)
+                if tree is None:
                     continue
                 content = trafilatura.extract(
-                    raw_html, include_comments=False, include_tables=False, favor_recall=True
+                    tree, include_comments=False, include_tables=False, favor_recall=True
                 )
                 if not content or len(content) < 150:
                     continue
-                meta = trafilatura.extract_metadata(raw_html)
-                title = (meta.title if meta and meta.title else "") or _title_from_soup(raw_html)
+                meta = trafilatura.extract_metadata(tree)
+                title = (meta.title if meta and meta.title else "") or _title_from_soup(
+                    raw_bytes.decode("utf-8", errors="replace")
+                )
                 if not title:
                     continue
                 pub_dt = _parse_meta_date(meta) or datetime.now(tz=timezone.utc)
@@ -577,20 +584,46 @@ class Collector:
         return ""
 
     def _fetch_article_content(self, url: str) -> str:
-        raw = self._fetch_raw_html(url)
+        raw = self._fetch_raw_bytes(url)
         return trafilatura.extract(raw, include_comments=False, favor_recall=True) or "" if raw else ""
 
-    def _fetch_raw_html(self, url: str) -> str:
+    def _fetch_raw_bytes(self, url: str) -> bytes:
+        """Fetch a URL and return raw bytes.
+
+        Passes bytes directly to trafilatura so it can detect encoding from the
+        HTML <meta charset> tag — authoritative for GBK/GB2312 (Zaobao) and
+        Shift-JIS (ITmedia) pages, which would otherwise be mojibake-decoded
+        by httpx's ISO-8859-1 default.
+        """
         _rate_limit(url, self.rate_delay)
         try:
             with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
                 resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
                 resp.raise_for_status()
-                # Fallback to utf-8 if the server doesn't provide a charset
-                # httpx defaults to ISO-8859-1/latin-1 for text/html without charset,
-                # which causes mojibake on Chinese sites like Zaobao.
-                if not resp.charset_encoding:
-                    resp.encoding = 'utf-8'
+                return resp.content
+        except Exception as exc:
+            logger.debug("Fetch failed %s: %s", url, exc)
+            return b""
+
+    def _fetch_raw_html(self, url: str) -> str:
+        """Fetch a URL and return decoded HTML text (used by BeautifulSoup paths).
+
+        Falls back to UTF-8 when httpx would otherwise default to ISO-8859-1/
+        latin-1 (its implicit default for text/html with no explicit charset
+        header), which causes mojibake on CJK sites.
+        """
+        _rate_limit(url, self.rate_delay)
+        try:
+            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                # httpx defaults charset_encoding to 'iso-8859-1' for text/html
+                # with no explicit charset — that is never intentionally declared
+                # by real sites, so override it to UTF-8.
+                enc = (resp.charset_encoding or "").lower()
+                if enc in ("", "iso-8859-1", "latin-1"):
+                    resp.encoding = "utf-8"
+                    logger.debug("Encoding fallback utf-8 applied for %s (was %r)", url, enc or None)
                 return resp.text
         except Exception as exc:
             logger.debug("Fetch failed %s: %s", url, exc)
