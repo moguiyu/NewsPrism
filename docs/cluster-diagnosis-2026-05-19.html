@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NewsPrism · 集群污染诊断报告 · 2026-05-19</title>
+<style>
+  :root {
+    --bg: #f8f7f3;
+    --ink: #1a1a18;
+    --muted: #6b6b65;
+    --rule: #d8d6cf;
+    --accent: #057dbc;
+    --red: #c0392b;
+    --orange: #d35400;
+    --green: #27ae60;
+    --yellow: #e67e22;
+    --code-bg: #efede6;
+    --max: 860px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16150f;
+      --ink: #e8e6df;
+      --muted: #9a9890;
+      --rule: #302e27;
+      --accent: #4daee8;
+      --code-bg: #1e1c15;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Georgia", "Noto Serif SC", serif;
+    font-size: 17px;
+    line-height: 1.65;
+    padding: 48px 24px 96px;
+  }
+  .container { max-width: var(--max); margin: 0 auto; }
+  h1 { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 4px; }
+  .dateline { font-size: 0.82rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 32px; }
+  hr { border: none; border-top: 1px solid var(--rule); margin: 40px 0; }
+  h2 { font-size: 1.2rem; font-weight: 700; margin: 36px 0 12px; border-bottom: 2px solid var(--ink); padding-bottom: 4px; }
+  h3 { font-size: 1rem; font-weight: 700; margin: 24px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-family: "Helvetica Neue", sans-serif; }
+  p { margin-bottom: 14px; }
+  ul, ol { margin: 0 0 14px 22px; }
+  li { margin-bottom: 5px; }
+  code {
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 0.82em;
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  pre {
+    background: var(--code-bg);
+    border-left: 3px solid var(--rule);
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 0.82em;
+    font-family: "Menlo", "Consolas", monospace;
+    line-height: 1.5;
+    margin-bottom: 14px;
+  }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 20px; font-size: 0.88rem; }
+  th { text-align: left; padding: 7px 12px; background: var(--code-bg); font-family: sans-serif; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid var(--rule); }
+  td { padding: 7px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-family: sans-serif;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge-red    { background: #fde8e6; color: var(--red); }
+  .badge-orange { background: #fdefd9; color: var(--orange); }
+  .badge-green  { background: #e6f7ec; color: var(--green); }
+  .badge-blue   { background: #e3f2fb; color: var(--accent); }
+  @media (prefers-color-scheme: dark) {
+    .badge-red    { background: #3b1210; color: #e87f72; }
+    .badge-orange { background: #3b2510; color: #e8a072; }
+    .badge-green  { background: #0f2e1a; color: #72e89a; }
+    .badge-blue   { background: #0d2030; color: #72c8e8; }
+  }
+  .sim-high { color: var(--red); font-weight: 700; }
+  .sim-ok   { color: var(--green); }
+  .callout {
+    border-left: 4px solid var(--accent);
+    padding: 10px 16px;
+    background: var(--code-bg);
+    margin-bottom: 16px;
+    font-size: 0.92rem;
+  }
+  .callout-red  { border-color: var(--red); }
+  .callout-green { border-color: var(--green); }
+  .fix-table td:first-child { font-family: "Menlo", monospace; font-size: 0.8em; white-space: nowrap; }
+  .toc { font-size: 0.88rem; margin-bottom: 36px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc li { margin-bottom: 3px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <p class="dateline">NewsPrism · 诊断报告 · 2026-05-19</p>
+  <h1>集群污染根因分析</h1>
+  <p style="color:var(--muted);font-size:0.92rem;">报告日期 2026-05-19 第 3 条新闻（Cluster ID 3652）包含日本 EV 巴士、中国学术争议、中俄合作、俄方导弹批评四个完全不相干的话题。本文记录完整根因链路与已实施的修复。</p>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#symptom">问题现象</a></li>
+      <li><a href="#evidence">证据链</a></li>
+      <li><a href="#rc1">根因 RC-1：联合早报编码损坏</a></li>
+      <li><a href="#rc2">根因 RC-2：ITmedia 编码损坏</a></li>
+      <li><a href="#rc3">根因 RC-3：澎湃新闻内容提取失败</a></li>
+      <li><a href="#rc4">根因 RC-4：Seeker 放大误差</a></li>
+      <li><a href="#rc5">根因 RC-5：话题等价链过宽</a></li>
+      <li><a href="#fixes">已实施修复（6项）</a></li>
+      <li><a href="#opts">1M Context 优化</a></li>
+    </ol>
+  </nav>
+
+  <hr>
+
+  <!-- ── SYMPTOM ── -->
+  <h2 id="symptom">1 · 问题现象</h2>
+
+  <p>报告第 3 条 (<code>display_rank=3</code>，Cluster DB ID <code>3652</code>) 的标题由 LLM 自动生成为：</p>
+  <div class="callout callout-red">
+    <strong>多国媒体报道中俄合作、日本EV巴士及学术争议</strong>
+  </div>
+  <p>LLM 在标题中直接承认了三个不同话题被混入同一集群。集群内四篇文章来源与主题如下：</p>
+
+  <table>
+    <thead><tr><th>文章 ID</th><th>来源</th><th>标题（摘要）</th><th>话题</th><th>发布时间</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>128757</td>
+        <td>联合早报</td>
+        <td>普京访华前 习近平评价中俄各领域合作成果丰硕</td>
+        <td><span class="badge badge-blue">World News</span></td>
+        <td>05-17 05:20</td>
+      </tr>
+      <tr>
+        <td>130586</td>
+        <td>澎湃新闻</td>
+        <td>开麦丨耿同学之剑，凭什么斩向学术圈的"皇帝新装"？</td>
+        <td><span class="badge badge-blue">World News</span></td>
+        <td>05-18 18:15</td>
+      </tr>
+      <tr>
+        <td>131528</td>
+        <td>ITmedia NEWS</td>
+        <td>転用を断念したEVバス100台超　大阪メトロが移動開始</td>
+        <td><span class="badge badge-orange">Energy &amp; Climate</span></td>
+        <td>05-19 03:20</td>
+      </tr>
+      <tr>
+        <td>131671</td>
+        <td>РБК</td>
+        <td>полным фиаско» из-за способных бить по суше ракет</td>
+        <td><span class="badge badge-red">（空）</span></td>
+        <td>05-19 10:00 <span class="badge badge-orange">searched</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <!-- ── EVIDENCE ── -->
+  <h2 id="evidence">2 · 证据链：相似度异常</h2>
+
+  <p>聚类算法使用余弦相似度门槛：<code>sem_threshold=0.72</code>，<code>strong_threshold=0.82</code>。当相似度 ≥ strong_threshold 时，标题 n-gram 连贯性检查被跳过。</p>
+
+  <table>
+    <thead><tr><th>文章对</th><th>余弦相似度</th><th>通过门槛</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>中俄合作 (128757) ↔ 学术争议 (130586)</td>
+        <td><span class="sim-high">0.8950</span></td>
+        <td><span class="badge badge-red">强相似 ✓（绕过连贯性检查）</span></td>
+      </tr>
+      <tr>
+        <td>中俄合作 (128757) ↔ EV 巴士 (131528)</td>
+        <td><span class="sim-high">0.8621</span></td>
+        <td><span class="badge badge-red">强相似 ✓（绕过连贯性检查）</span></td>
+      </tr>
+      <tr>
+        <td>学术争议 (130586) ↔ EV 巴士 (131528)</td>
+        <td><span class="sim-high">0.8333</span></td>
+        <td><span class="badge badge-red">强相似 ✓（绕过连贯性检查）</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>三篇完全不相关的文章两两相似度均超过 0.82，形成完整连通分量，进入同一集群。根因在于 Embedding 输入为垃圾内容。</p>
+
+  <hr>
+
+  <!-- ── RC-1 ── -->
+  <h2 id="rc1">3 · 根因 RC-1：联合早报编码损坏 <span class="badge badge-red">主要</span></h2>
+
+  <p><code>newsprism/service/collector.py</code> 的 <code>_fetch_raw_html</code> 有以下防护：</p>
+  <pre>if not resp.charset_encoding:
+    resp.encoding = 'utf-8'</pre>
+
+  <p>问题：<code>zaochenbao.com</code> 的 HTTP 响应头不声明 charset，但 httpx 会将 <code>text/html</code> 的默认 <code>charset_encoding</code> 设为 <code>'iso-8859-1'</code>（truthy），导致 <code>if not</code> 条件永远不触发，GBK 字节被以 Latin-1 解码，产生乱码。</p>
+
+  <p><strong>实际存储内容（DB 抽查）：</strong></p>
+  <pre>ID=128757 [联合早报]
+content: 'ж������ͳ�������ڷû��س̴˿վ…'
+         ↑ GBK字节被以Latin-1解码，输入Embedding的是500字符乱码</pre>
+
+  <p>乱码 token 通过均值池化主导 Embedding 向量，使该文章与其他乱码文章余弦距离异常接近。</p>
+
+  <hr>
+
+  <!-- ── RC-2 ── -->
+  <h2 id="rc2">4 · 根因 RC-2：ITmedia NEWS 编码损坏 <span class="badge badge-red">主要</span></h2>
+
+  <p>同一机制。<code>itmedia.co.jp</code> 使用 Shift-JIS 编码，HTTP 头无显式 charset 声明时 httpx 默认 Latin-1，日文字节被存储为 Latin-1 乱码。</p>
+
+  <pre>ID=131528 [ITmedia NEWS]
+content: 'ITmedia NEWS >\n\x81\x4a\x86\xf0\x82\x50\x82\x54…'
+         ↑ Shift-JIS字节以Latin-1存储</pre>
+
+  <hr>
+
+  <!-- ── RC-3 ── -->
+  <h2 id="rc3">5 · 根因 RC-3：澎湃新闻内容提取失败 <span class="badge badge-red">主要</span></h2>
+
+  <p>澎湃新闻 (<code>thepaper.cn</code>) 为 SPA 架构，<code>trafilatura</code> 无法提取正文，转而提取了网站页脚样板文本：</p>
+
+  <pre>ID=130586 [澎湃新闻]
+content: '- +1\n查看更多\n澎湃矩阵\n新闻报料\n- 报料热线: 021-962866\n
+          - 报料邮箱: news@thepaper.cn\n互联网新闻信息服务许可证：31120170006…'
+         （共 277 字符，全为网站导航/版权信息）</pre>
+
+  <p>Embedding 输入为标题 + 版权模板，语义信息几乎为零，向量漂移至通用"新闻类"方向。</p>
+
+  <hr>
+
+  <!-- ── RC-4 ── -->
+  <h2 id="rc4">6 · 根因 RC-4：Seeker 放大误差 <span class="badge badge-orange">次要</span></h2>
+
+  <p>坏集群形成后，<code>seeker._enrich_cluster</code> 将集群标题发给 LLM 识别缺失地区视角。LLM 从混合标题中识别出"俄罗斯"关联，发起 <code>ru</code> 地区搜索，找到了 РБК 关于日本远程导弹的报道（边缘相关），将其追加至集群。</p>
+
+  <ul>
+    <li>第 4 篇文章加入后，<code>selection_score</code> 因 <code>perspectives:+8.0</code> 提升，集群被优先排入报告。</li>
+    <li>Seeker 本身无过错——它只是忠实执行了对一个已经坏掉的集群的补充逻辑。</li>
+  </ul>
+
+  <hr>
+
+  <!-- ── RC-5 ── -->
+  <h2 id="rc5">7 · 根因 RC-5：话题等价链过宽 <span class="badge badge-orange">贡献因素</span></h2>
+
+  <p><code>config/config.yaml</code> 的 <code>topic_equivalence</code> 通过传递扩展产生了以下等价链：</p>
+
+  <pre>World News → Geopolitics → Energy & Climate (English) → Geopolitics → World News</pre>
+
+  <p>结果：<code>World News</code> ≡ <code>Energy & Climate</code>（传递等价）。EV 巴士文章 (131528) 的话题 <code>Energy &amp; Climate</code> 与中俄合作文章 (128757) 的话题 <code>World News</code> 被视为等价，通过话题门槛进入相似度比较阶段。</p>
+
+  <p>注：即使没有编码错误，该等价链也可能在未来导致合法内容（能源政策 ↔ 地缘政治话题）被误聚类。</p>
+
+  <hr>
+
+  <!-- ── FIXES ── -->
+  <h2 id="fixes">8 · 已实施修复（6项）</h2>
+
+  <table class="fix-table">
+    <thead><tr><th>#</th><th>文件</th><th>修复内容</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Fix 1</td>
+        <td>collector.py</td>
+        <td>
+          将 <code>_fetch_article_content</code> 改为传递原始字节（<code>resp.content</code>）给 trafilatura，由 trafilatura 自行通过 HTML <code>&lt;meta charset&gt;</code> 标签检测编码（lxml/chardet），彻底解决 GBK/Shift-JIS 乱码问题。同时收紧 charset_encoding 防护：httpx 默认值 <code>'iso-8859-1'</code> 也触发 UTF-8 回退。
+        </td>
+        <td><span class="badge badge-green">已合并</span></td>
+      </tr>
+      <tr>
+        <td>Fix 2</td>
+        <td>clusterer.py</td>
+        <td>
+          新增 <code>_embedding_text(article)</code> 方法：在 Embedding 前检测乱码（Latin-1 范围字符 &gt;25%）和样板文本（&lt;120字符且无句子结束符），自动降级为仅标题 Embedding。防御历史 DB 中的坏数据。
+        </td>
+        <td><span class="badge badge-green">已合并</span></td>
+      </tr>
+      <tr>
+        <td>Fix 3</td>
+        <td>config/config.yaml</td>
+        <td>
+          从 <code>Geopolitics</code> 等价列表中移除 <code>Energy &amp; Climate (English)</code>；从 <code>Energy &amp; Climate</code> 等价列表中移除 <code>Geopolitics</code>（保留 <code>Society</code>）。打断导致话题过度等价的传递链。
+        </td>
+        <td><span class="badge badge-green">已合并</span></td>
+      </tr>
+      <tr>
+        <td>Fix 4</td>
+        <td>config.yaml + collector.py + config.py</td>
+        <td>
+          新增 <code>skip_body_fetch: bool</code> source 配置项。澎湃新闻设为 <code>true</code>，跳过正文抓取，直接使用 newsnow 的 <code>hover</code> 字段（真实导语文本）作为内容。
+        </td>
+        <td><span class="badge badge-green">已合并</span></td>
+      </tr>
+      <tr>
+        <td>OPT-1</td>
+        <td>service/llm_clusterer.py（新增）+ scheduler.py + config.py</td>
+        <td>
+          新增 <code>LLMClusterer</code>：通过单次 LLM 调用（~25K tokens）对所有文章进行事件级聚类，替代 Embedding 余弦相似度。LLM 明确区分同一真实事件与话题相近但独立的新闻，并通过 <code>unclustered</code> 字段拒绝噪声文章。Embedding Clusterer 保留为兜底回退。<code>use_llm_clustering: true</code> 可通过 config 关闭。
+        </td>
+        <td><span class="badge badge-green">已合并</span></td>
+      </tr>
+      <tr>
+        <td>OPT-2</td>
+        <td>service/summarizer.py + scheduler.py</td>
+        <td>
+          新增 <code>summarize_all_batch()</code>：将原来的 12 次串行 LLM 摘要调用合并为 1 次批量调用，输出包含所有集群摘要的 JSON 数组。预期延迟从 ~36秒 降至 ~10秒。原 <code>summarize_all()</code> 保留为回退。
+        </td>
+        <td><span class="badge badge-green">已合并</span></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>修复效果：误聚类触发路径被多层阻断</h3>
+  <div class="callout callout-green">
+    <strong>Fix 1</strong> — 新采集文章内容编码正确 → Embedding 输入有效<br>
+    <strong>Fix 2</strong> — 历史乱码文章降级为标题 Embedding → 余弦相似度回归真实语义<br>
+    <strong>Fix 3</strong> — 话题等价链收窄 → EV 巴士类文章不再与地缘政治话题文章进入同一比较池<br>
+    <strong>Fix 4</strong> — 澎湃新闻使用真实导语 → 摘要和 Embedding 语义准确<br>
+    <strong>OPT-1</strong> — LLM 聚类直接判断"同一真实事件" → 从根本上绕过 Embedding 相似度的局限性
+  </div>
+
+  <hr>
+
+  <!-- ── OPTS ── -->
+  <h2 id="opts">9 · 1M Context 优化（deepseek-v4-flash）</h2>
+
+  <table>
+    <thead><tr><th>优化</th><th>原来</th><th>现在</th><th>收益</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>OPT-1</strong><br>LLM 聚类</td>
+        <td>~200篇文章 → Embedding 余弦相似度 → 图连通分量</td>
+        <td>所有文章标题+摘要 (~25K tokens) → 单次 LLM 调用 → 事件组</td>
+        <td>聚类质量大幅提升；消除编码敏感性；LLM 可理解跨语言事件同一性</td>
+      </tr>
+      <tr>
+        <td><strong>OPT-2</strong><br>批量摘要</td>
+        <td>~12次串行 LLM 调用，每次 ~3s，合计 ~36s</td>
+        <td>1次批量调用，所有集群 (~20K tokens input)，合计 ~10s</td>
+        <td>发布延迟降低 ~65%；API 调用次数从 12 降至 1</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p style="color:var(--muted);font-size:0.85rem;margin-top:32px;">
+    Branch: <code>feat/llm-pipeline-and-encoding-fix</code> · Commits: f22225c → 4bec90a → [topic equiv] → [skip_body_fetch] → [llm_clusterer] → [batch_summarizer]
+  </p>
+
+</div>
+</body>
+</html>
