@@ -2,6 +2,7 @@
 from datetime import date, datetime, timezone
 import json
 import os
+from pathlib import Path
 
 from lxml import html as lxml_html
 import pytest
@@ -1267,3 +1268,35 @@ class TestHotTopics:
         assert payload["day_links"][0]["date"] == "2026-03-26"
         assert payload["day_links"][0]["available"] is True
         assert payload["day_links"][0]["href"] == "/p/1/"
+
+
+def test_render_copies_fonts_to_output(tmp_path):
+    """Renderer copies static/fonts/ to output/fonts/ on render."""
+    static_fonts = Path(__file__).resolve().parent.parent / "newsprism" / "static" / "fonts"
+    if not (static_fonts / "fonts.css").exists():
+        pytest.skip("Font files not downloaded yet — run scripts/download_fonts.py")
+
+    renderer = HtmlRenderer(output_dir=str(tmp_path), template_dir="templates")
+    summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                Article(
+                    url="https://example.com/font-test",
+                    title="Font copy test",
+                    source_name="BBC",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Font copy test body.",
+                )
+            ],
+        ),
+        summary="**Font copy test**\n\nBody.",
+        perspectives={},
+    )
+    renderer.render([summary], date(2026, 5, 19), update_latest=False)
+
+    output_fonts = tmp_path / "fonts"
+    assert output_fonts.is_dir()
+    assert (output_fonts / "fonts.css").exists()
+    woff2_files = list(output_fonts.glob("*.woff2"))
+    assert len(woff2_files) > 0
