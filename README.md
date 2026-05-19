@@ -1,6 +1,8 @@
 # NewsPrism
 
-NewsPrism is a multilingual news monitor that collects articles from 38 sources across 11 countries, clusters same-event coverage, and publishes a Chinese digest with cross-source framing, focus maps, and strict positive highlights.
+NewsPrism is a self-hosted news analysis tool built around one idea: the same event, read from many directions, gets you closer to what actually happened.
+
+It collects the same stories from 46 sources across 12 countries and languages, groups them by real-world event, and surfaces how different outlets — state media, independent press, tech reporters, regional correspondents — choose to frame the same facts. The daily report is a Chinese digest designed for readers who want calibrated perspective, not just headlines.
 
 ```text
 Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Assess quality  ->  Summarize angles  ->  Render HTML / publish
@@ -8,18 +10,19 @@ Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Assess quality  ->  S
 
 This public repository supports both self-hosting with Docker and local development from source.
 
-Current major release: `v0.3.3`.
+Current major release: `v0.4.0`.
 
 ## Highlights
 
-- Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
-- Event-level clustering with same-day and cross-day deduplication
-- Perspective-seeking for missing regional angles
+- Groups the same event across multiple sources and shows how each outlet frames it differently — state media, independent press, regional correspondents, tech reporters
+- Active perspective-seeking: if a major story is missing a regional voice, the pipeline searches for it and adds it to the cluster
+- LLM-driven event clustering (single API call) groups articles by real-world event identity, not just topic overlap; falls back to embedding-based clustering automatically
 - Cluster quality gates with claim/evidence tracking, source reliability scoring, and audit counters
 - Storyline lifecycle state and compact timelines for developing topics
+- Batch summarisation processes all stories in one LLM call (~36 s → ~10 s per publish cycle)
+- Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
 - Dedicated `今日正能量` lane selected locally from the existing source catalog with zero extra LLM tokens
-- WIRED-inspired static HTML reports with system/light/dark modes
-- Compact report controls with clickable refresh branding, footer date navigation, and a Back to Top action
+- WIRED-inspired static HTML reports with system/light/dark modes and self-hosted fonts
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 
 ## Architecture
@@ -29,7 +32,7 @@ newsprism/
 ├── types.py          Shared dataclasses and typed records
 ├── config.py         YAML + environment loader
 ├── repo/             SQLite persistence
-├── service/          collect, filter, dedup, cluster, summarize
+├── service/          collect, filter, dedup, cluster (LLM + embedding fallback), summarize
 └── runtime/          schedule, render, publish
 ```
 
@@ -127,6 +130,7 @@ Common examples:
 - enable the English report toggle under `output.english.enabled`
 - edit `schedule.collect_cron` and `schedule.publish_cron`
 - tighten or broaden topic matching in `config/keywords.txt` and `filter.min_topic_score`
+- set `clustering.use_llm_clustering: false` to use embedding-only clustering (no LLM API call for clustering)
 
 ## CLI Commands
 
@@ -177,7 +181,7 @@ NewsPrism is an independent project inspired by [TrendRadar](https://github.com/
 
 NewsPrism also relies on the self-hosted [NewsNow](https://github.com/ourongxing/newsnow) project for stronger coverage of difficult Chinese news sources. Thanks to that project and its author for making that workflow practical.
 
-Development assistance for recent quality, deployment, and release work was provided by OpenAI Codex.
+Development assistance for recent quality, deployment, and release work was provided by [Claude Code](https://claude.ai/claude-code) (Anthropic).
 
 ## Deployment Notes
 
