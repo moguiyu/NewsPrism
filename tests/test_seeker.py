@@ -1216,3 +1216,180 @@ class TestComprehensiveCountryCoverage:
         }
         missing = tier1 - set(ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES)
         assert not missing, f"Tier-1 UN regions missing from _DEFAULT_REGION_SEARCH_LANGUAGES: {sorted(missing)}"
+
+
+class TestCurrentRegionUrlInference:
+    """Verify that organic article URLs are used to infer region coverage before searching.
+
+    Root cause: _analyze_missing_perspectives built current_regions only from _get_source_region
+    (config-based lookup) and article.origin_region (only set on searched articles). Organic
+    articles from outlets not in source config (Bloomberg, WSJ, CNBC…) never contributed
+    to current_regions, causing redundant searches even when US coverage already existed.
+    """
+
+    def _make_organic_article(self, url: str, source_name: str = "Unknown Source") -> Article:
+        return Article(
+            url=url,
+            title=f"Article from {source_name}",
+            source_name=source_name,
+            published_at=datetime.now(tz=timezone.utc),
+            content="Article content here.",
+            is_searched=False,
+        )
+
+    def _make_cluster_with_organic(self, url: str, source_name: str = "Unknown Source") -> ArticleCluster:
+        return ArticleCluster(
+            topic_category="Tech / Legal",
+            articles=[self._make_organic_article(url, source_name)],
+        )
+
+    def test_bloomberg_in_known_domain_regions(self):
+        assert ActiveSeeker._KNOWN_DOMAIN_REGIONS["bloomberg.com"] == "us"
+
+    def test_wsj_in_known_domain_regions(self):
+        assert ActiveSeeker._KNOWN_DOMAIN_REGIONS["wsj.com"] == "us"
+
+    def test_ft_in_known_domain_regions(self):
+        assert ActiveSeeker._KNOWN_DOMAIN_REGIONS["ft.com"] == "gb"
+
+    def test_lemonde_in_known_domain_regions(self):
+        assert ActiveSeeker._KNOWN_DOMAIN_REGIONS["lemonde.fr"] == "fr"
+
+    def test_spiegel_in_known_domain_regions(self):
+        assert ActiveSeeker._KNOWN_DOMAIN_REGIONS["spiegel.de"] == "de"
+
+    @patch("newsprism.service.seeker.litellm.completion")
+    def test_bloomberg_url_prevents_us_search(self, mock_completion, mock_config):
+        """Organic bloomberg.com article → 'us' in current_regions → no search fired for 'us'."""
+        mock_completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content='{"central_countries": ["us", "cn"], "search_query": "openai musk verdict"}'
+            ))]
+        )
+        seeker = ActiveSeeker(mock_config)
+        cluster = self._make_cluster_with_organic("https://bloomberg.com/news/articles/musk-openai-verdict")
+
+        with (
+            patch.object(seeker, "_is_perspective_missing") as mock_missing,
+            patch.object(seeker, "_search_and_fetch", return_value=([], "")) as mock_search,
+        ):
+            seeker._enrich_cluster(cluster)
+
+        searched_regions = [call.args[1] for call in mock_search.call_args_list]
+        assert "us" not in searched_regions, (
+            "Should not search 'us' when bloomberg.com organic article is already in cluster"
+        )
+        missing_regions_checked = [call.args[1] for call in mock_missing.call_args_list]
+        assert "us" not in missing_regions_checked, (
+            "_is_perspective_missing should not be called for 'us' — URL inference already covers it"
+        )
+
+    @patch("newsprism.service.seeker.litellm.completion")
+    def test_wsj_url_prevents_us_search(self, mock_completion, mock_config):
+        """Organic wsj.com article → 'us' in current_regions → no search for 'us'."""
+        mock_completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content='{"central_countries": ["us"], "search_query": "wsj test"}'
+            ))]
+        )
+        seeker = ActiveSeeker(mock_config)
+        cluster = self._make_cluster_with_organic("https://wsj.com/articles/musk-openai-ruling")
+
+        with patch.object(seeker, "_search_and_fetch", return_value=([], "")) as mock_search:
+            seeker._enrich_cluster(cluster)
+
+        searched_regions = [call.args[1] for call in mock_search.call_args_list]
+        assert "us" not in searched_regions
+
+    @patch("newsprism.service.seeker.litellm.completion")
+    def test_ft_url_prevents_gb_search(self, mock_completion, mock_config):
+        """Organic ft.com article → 'gb' in current_regions → no search for 'gb'."""
+        mock_completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content='{"central_countries": ["gb", "us"], "search_query": "ft test"}'
+            ))]
+        )
+        seeker = ActiveSeeker(mock_config)
+        cluster = self._make_cluster_with_organic("https://ft.com/content/openai-article")
+
+        with patch.object(seeker, "_search_and_fetch", return_value=([], "")) as mock_search:
+            seeker._enrich_cluster(cluster)
+
+        searched_regions = [call.args[1] for call in mock_search.call_args_list]
+        assert "gb" not in searched_regions
+
+    @patch("newsprism.service.seeker.litellm.completion")
+    def test_lemonde_url_prevents_fr_search(self, mock_completion, mock_config):
+        """Organic lemonde.fr article → 'fr' in current_regions → no search for 'fr'."""
+        mock_completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content='{"central_countries": ["fr", "de"], "search_query": "lemonde test"}'
+            ))]
+        )
+        seeker = ActiveSeeker(mock_config)
+        cluster = self._make_cluster_with_organic("https://lemonde.fr/article/openai")
+
+        with patch.object(seeker, "_search_and_fetch", return_value=([], "")) as mock_search:
+            seeker._enrich_cluster(cluster)
+
+        searched_regions = [call.args[1] for call in mock_search.call_args_list]
+        assert "fr" not in searched_regions
+
+    @patch("newsprism.service.seeker.litellm.completion")
+    def test_organic_nytimes_skips_is_perspective_missing(self, mock_completion, mock_config):
+        """Organic nytimes.com article (already in _KNOWN_DOMAIN_REGIONS) → _is_perspective_missing
+        must not be called for 'us'."""
+        mock_completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content='{"central_countries": ["us", "cn"], "search_query": "openai test"}'
+            ))]
+        )
+        seeker = ActiveSeeker(mock_config)
+        cluster = self._make_cluster_with_organic("https://nytimes.com/2026/05/openai-musk.html")
+
+        with (
+            patch.object(seeker, "_is_perspective_missing") as mock_missing,
+            patch.object(seeker, "_search_and_fetch", return_value=([], "")),
+        ):
+            seeker._enrich_cluster(cluster)
+
+        checked = [call.args[1] for call in mock_missing.call_args_list]
+        assert "us" not in checked
+
+    @patch("newsprism.service.seeker.litellm.completion")
+    def test_searched_article_url_not_used_for_current_regions(self, mock_completion, mock_config):
+        """Searched (is_searched=True) bloomberg.com article must NOT suppress a fresh 'us' search.
+        The URL inference loop must only apply to organic articles."""
+        mock_completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(
+                content='{"central_countries": ["us"], "search_query": "test"}'
+            ))]
+        )
+        seeker = ActiveSeeker(mock_config)
+        searched_article = Article(
+            url="https://bloomberg.com/news/searched",
+            title="Searched Bloomberg article",
+            source_name="Bloomberg",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Content",
+            is_searched=True,          # NOT organic
+            search_region="us",
+            origin_region="us",        # already set — this alone covers 'us' via origin_region path
+        )
+        # Use a purely hypothetical scenario where origin_region is also None to isolate the URL path
+        searched_article.origin_region = None
+        cluster = ArticleCluster(topic_category="Test", articles=[searched_article])
+
+        with (
+            patch.object(seeker, "_is_perspective_missing", return_value=True),
+            patch.object(seeker, "_search_and_fetch", return_value=([], "")) as mock_search,
+        ):
+            seeker._enrich_cluster(cluster)
+
+        # 'us' should be in potentially_missing because the is_searched article's URL
+        # was correctly excluded from the URL inference loop
+        searched_regions = [call.args[1] for call in mock_search.call_args_list]
+        assert "us" in searched_regions, (
+            "Searched article URL must NOT be used for current_regions inference — "
+            "only organic articles should prevent re-search via URL"
+        )

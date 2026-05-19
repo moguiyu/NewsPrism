@@ -586,6 +586,19 @@ class ActiveSeeker:
         "reuters.com": "gb", "bbc.com": "gb", "theguardian.com": "gb",
         "apnews.com": "us", "nytimes.com": "us", "washingtonpost.com": "us",
         "cnn.com": "us", "france24.com": "fr", "dw.com": "de",
+        # Major US business / politics / general news (not in source config)
+        "bloomberg.com": "us", "wsj.com": "us", "cnbc.com": "us",
+        "axios.com": "us", "politico.com": "us", "theatlantic.com": "us",
+        "foreignpolicy.com": "us", "foreignaffairs.com": "us",
+        "npr.org": "us", "pbs.org": "us", "vox.com": "us", "slate.com": "us",
+        # Major UK outlets
+        "ft.com": "gb", "economist.com": "gb", "spectator.co.uk": "gb",
+        "euractiv.com": "gb",
+        # Major German outlets
+        "spiegel.de": "de", "faz.net": "de",
+        "sueddeutsche.de": "de", "handelsblatt.com": "de",
+        # Major French outlets
+        "lemonde.fr": "fr", "lefigaro.fr": "fr", "liberation.fr": "fr",
         # DR Congo
         "radiookapi.net": "cd", "actualite.cd": "cd", "7sur7.cd": "cd",
         # Uganda
@@ -887,6 +900,13 @@ class ActiveSeeker:
         current_regions.update(
             article.origin_region for article in cluster.articles if article.origin_region
         )
+        # Infer region from organic article URLs — catches outlets absent from source config
+        # (e.g. bloomberg.com, wsj.com) so we never re-search a region already covered organically
+        for article in cluster.articles:
+            if not article.is_searched:
+                inferred = self._infer_region_from_url(article.url)
+                if inferred and inferred != "unknown":
+                    current_regions.add(inferred)
         current_regions.discard("unknown")
         current_regions.discard(None)
 
