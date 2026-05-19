@@ -44,6 +44,7 @@ from newsprism.repo import (
 from newsprism.runtime.publisher import TelegramPublisher
 from newsprism.runtime.renderer import HtmlRenderer, _body_only, _extract_headline
 from newsprism.service.clusterer import Clusterer
+from newsprism.service.llm_clusterer import LLMClusterer
 from newsprism.service.collector import Collector
 from newsprism.service.dedup import Deduplicator
 from newsprism.service.feelgood_scorer import FeelgoodScorer
@@ -1495,7 +1496,7 @@ class Scheduler:
         self.feelgood_scorer = FeelgoodScorer(cfg)
         self.tagger = TopicTagger(cfg)
         self.deduplicator = Deduplicator(cfg)
-        self.clusterer = Clusterer(cfg)
+        self.clusterer = LLMClusterer(cfg) if cfg.use_llm_clustering else Clusterer(cfg)
         self.cluster_validator = EventClusterValidator(cfg)
         self.seeker = ActiveSeeker(cfg)
         self.summarizer = Summarizer(cfg)
