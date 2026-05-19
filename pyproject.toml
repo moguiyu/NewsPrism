@@ -5,13 +5,13 @@ build-backend = "hatchling.build"
 [project]
 name = "newsprism"
 version = "0.4.0"
-description = "Multilingual event-centric news monitor that publishes Chinese cross-source digests with focus maps and positive highlights"
+description = "Self-hosted news analysis tool that groups the same event across 46 sources and surfaces how different outlets frame the same facts"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [
     { name = "NewsPrism contributors" },
-    { name = "OpenAI Codex" },
+    { name = "Claude Code (Anthropic)" },
 ]
 keywords = [
     "news",
