@@ -1018,3 +1018,201 @@ class TestBrightDataPayload:
         assert results[0]["url"] == "https://www.presstv.ir/Detail/2026/05/17/1/iran-statement"
         assert results[0]["origin_region"] == "ir"
         assert results[0]["searched_provider"] == "brightdata_serp"
+
+
+class TestSeekerThrottling:
+    """RC-1: max_regions_per_cluster caps how many missing regions are searched
+    per cluster, preventing unbounded injection on large geopolitical stories."""
+
+    def test_enrich_cluster_respects_max_regions_per_cluster(self, mock_config):
+        mock_config.active_search = {
+            **mock_config.active_search,
+            "max_regions_per_cluster": 2,
+        }
+        seeker = ActiveSeeker(mock_config)
+
+        cluster = ArticleCluster(
+            topic_category="Geopolitics",
+            articles=[
+                Article(
+                    url=f"https://reuters.com/{i}",
+                    title=f"Headline {i}",
+                    source_name="Reuters",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Content",
+                )
+                for i in range(5)
+            ],
+        )
+
+        searched_regions: list[str] = []
+
+        def _fake_search(cluster, region, keyword, queries=None):
+            searched_regions.append(region)
+            return [], ""
+
+        with (
+            patch.object(
+                seeker,
+                "_analyze_missing_perspectives",
+                return_value=(["us", "cn", "jp", "de", "fr"], "test event"),
+            ),
+            patch.object(seeker, "_search_and_fetch", side_effect=_fake_search),
+        ):
+            seeker._enrich_cluster(cluster)
+
+        assert len(searched_regions) == 2, (
+            f"Expected exactly 2 regions searched (max_regions_per_cluster=2), got {searched_regions}"
+        )
+
+    def test_enrich_cluster_skips_seek_when_cluster_has_many_organic_sources(self, mock_config):
+        """RC-3: seeker does not run at all when organic source count >= min_organic_sources_to_skip."""
+        mock_config.active_search = {
+            **mock_config.active_search,
+            "min_organic_sources_to_skip": 5,
+        }
+        seeker = ActiveSeeker(mock_config)
+
+        cluster = ArticleCluster(
+            topic_category="Geopolitics",
+            articles=[
+                Article(
+                    url=f"https://reuters.com/{i}",
+                    title=f"Headline {i}",
+                    source_name=f"Source{i}",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Content",
+                )
+                for i in range(6)  # 6 organic articles >= threshold of 5
+            ],
+        )
+
+        with patch.object(seeker, "_analyze_missing_perspectives") as mock_analyze:
+            seeker._enrich_cluster(cluster)
+
+        mock_analyze.assert_not_called()
+
+    @patch("newsprism.service.seeker.litellm.completion")
+    def test_analyze_missing_perspectives_samples_twelve_articles(self, mock_completion, mock_config):
+        """RC-2: perspective analysis must sample up to 12 article titles, not just 5,
+        so large clusters don't falsely mark already-covered regions as missing."""
+        mock_completion.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content='{"central_countries": [], "search_query": "test"}'))]
+        )
+
+        seeker = ActiveSeeker(mock_config)
+        cluster = ArticleCluster(
+            topic_category="Geopolitics",
+            articles=[
+                Article(
+                    url=f"https://source{i}.com/article",
+                    title=f"Unique headline number {i}",
+                    source_name=f"Source{i}",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Content",
+                )
+                for i in range(15)
+            ],
+        )
+
+        seeker._analyze_missing_perspectives(cluster)
+
+        prompt = mock_completion.call_args.kwargs["messages"][0]["content"]
+        # Article at index 11 (the 12th) must appear in the prompt
+        assert "Unique headline number 11" in prompt, (
+            "Expected article #11 (12th) in LLM prompt — only 5 articles were sampled instead of 12"
+        )
+        # Article at index 5 must also appear (was excluded when sampling only 5)
+        assert "Unique headline number 5" in prompt, (
+            "Expected article #5 (6th) in LLM prompt — only 5 articles were sampled instead of 12"
+        )
+
+
+class TestComprehensiveCountryCoverage:
+    """Verify that all high-priority UN member states are registered in seeker's region maps.
+
+    These tests guard against the class of bug where a country is identified as a central
+    country by the LLM but then has all search results rejected with region_mismatch because
+    its region code is absent from _DEFAULT_REGION_SEARCH_LANGUAGES or _CCTLD_REGION_MAP.
+    """
+
+    # ── Language assignment tests ────────────────────────────────────────────────
+
+    def test_ps_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["ps"] == "ar"
+
+    def test_cd_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["cd"] == "fr"
+
+    def test_ug_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["ug"] == "en"
+
+    def test_se_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["se"] == "sv"
+
+    def test_mm_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["mm"] == "my"
+
+    def test_kp_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["kp"] == "ko"
+
+    def test_et_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["et"] == "am"
+
+    def test_nz_in_default_region_languages(self):
+        assert ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES["nz"] == "en"
+
+    # ── ccTLD mapping tests ──────────────────────────────────────────────────────
+
+    def test_cd_cctld_maps_to_cd_region(self):
+        assert ActiveSeeker._CCTLD_REGION_MAP["cd"] == "cd"
+
+    def test_ug_cctld_maps_to_ug_region(self):
+        assert ActiveSeeker._CCTLD_REGION_MAP["ug"] == "ug"
+
+    def test_ps_cctld_maps_to_ps_region(self):
+        assert ActiveSeeker._CCTLD_REGION_MAP["ps"] == "ps"
+
+    def test_mm_cctld_maps_to_mm_region(self):
+        assert ActiveSeeker._CCTLD_REGION_MAP["mm"] == "mm"
+
+    # ── _infer_region_from_url tests ─────────────────────────────────────────────
+
+    def test_infer_region_from_radiookapi_url(self, mock_config):
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._infer_region_from_url("https://radiookapi.net/2026/05/ebola") == "cd"
+
+    def test_infer_region_from_monitor_ug_url(self, mock_config):
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._infer_region_from_url("https://www.monitor.co.ug/article") == "ug"
+
+    def test_infer_region_from_irrawaddy_url(self, mock_config):
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._infer_region_from_url("https://irrawaddy.com/news/burma") == "mm"
+
+    def test_infer_region_from_alquds_url(self, mock_config):
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._infer_region_from_url("https://alquds.com/article") == "ps"
+
+    def test_infer_region_from_thelocal_se_url(self, mock_config):
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._infer_region_from_url("https://thelocal.se/20260101/article") == "se"
+
+    def test_infer_region_from_yle_fi_url(self, mock_config):
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._infer_region_from_url("https://yle.fi/uutiset/article") == "fi"
+
+    def test_infer_region_from_civil_ge_url(self, mock_config):
+        seeker = ActiveSeeker(mock_config)
+        assert seeker._infer_region_from_url("https://civil.ge/archives/article") == "ge"
+
+    # ── Tier-1 coverage regression guard ────────────────────────────────────────
+
+    def test_all_un_tier1_regions_have_language(self):
+        tier1 = {
+            "ps", "cd", "ug", "se", "no", "dk", "fi", "mm", "kp", "et",
+            "gh", "tz", "kz", "nz", "gr", "at", "cz", "ro", "hu", "bg",
+            "rs", "pt", "ie", "dz", "tn", "bh", "sd", "cu", "ge", "am",
+        }
+        missing = tier1 - set(ActiveSeeker._DEFAULT_REGION_SEARCH_LANGUAGES)
+        assert not missing, f"Tier-1 UN regions missing from _DEFAULT_REGION_SEARCH_LANGUAGES: {sorted(missing)}"

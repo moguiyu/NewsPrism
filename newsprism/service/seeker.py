@@ -455,6 +455,65 @@ class ActiveSeeker:
         "vn": "vi",
         "ye": "ar",
         "za": "en",
+        # ── Europe (extended coverage) ─────────────────────────────────────────
+        "al": "sq",   # Albania
+        "at": "de",   # Austria
+        "ba": "bs",   # Bosnia-Herzegovina
+        "bg": "bg",   # Bulgaria
+        "cz": "cs",   # Czech Republic
+        "dk": "da",   # Denmark
+        "ee": "et",   # Estonia
+        "fi": "fi",   # Finland
+        "gr": "el",   # Greece
+        "hr": "hr",   # Croatia
+        "hu": "hu",   # Hungary
+        "ie": "en",   # Ireland
+        "lt": "lt",   # Lithuania
+        "lv": "lv",   # Latvia
+        "no": "no",   # Norway
+        "pt": "pt",   # Portugal
+        "ro": "ro",   # Romania
+        "rs": "sr",   # Serbia
+        "se": "sv",   # Sweden
+        "si": "sl",   # Slovenia
+        "sk": "sk",   # Slovakia
+        # ── Middle East / North Africa (gaps) ──────────────────────────────────
+        "bh": "ar",   # Bahrain
+        "dz": "ar",   # Algeria
+        "ps": "ar",   # Palestine
+        "sd": "ar",   # Sudan
+        "tn": "ar",   # Tunisia
+        # ── Sub-Saharan Africa ─────────────────────────────────────────────────
+        "ao": "pt",   # Angola
+        "cd": "fr",   # DR Congo
+        "ci": "fr",   # Côte d'Ivoire
+        "cm": "fr",   # Cameroon
+        "et": "am",   # Ethiopia
+        "gh": "en",   # Ghana
+        "mg": "fr",   # Madagascar
+        "ml": "fr",   # Mali
+        "mz": "pt",   # Mozambique
+        "rw": "fr",   # Rwanda
+        "sn": "fr",   # Senegal
+        "so": "so",   # Somalia
+        "tz": "sw",   # Tanzania
+        "ug": "en",   # Uganda
+        "zm": "en",   # Zambia
+        "zw": "en",   # Zimbabwe
+        # ── Asia (gaps) ────────────────────────────────────────────────────────
+        "af": "fa",   # Afghanistan
+        "am": "hy",   # Armenia
+        "ge": "ka",   # Georgia
+        "hk": "zh",   # Hong Kong
+        "kh": "km",   # Cambodia
+        "kp": "ko",   # North Korea
+        "kz": "ru",   # Kazakhstan
+        "lk": "en",   # Sri Lanka
+        "mm": "my",   # Myanmar
+        "nz": "en",   # New Zealand
+        "uz": "uz",   # Uzbekistan
+        # ── Americas (gaps) ────────────────────────────────────────────────────
+        "cu": "es",   # Cuba
     }
 
     # ccTLD → ISO alpha-2 region code.
@@ -482,6 +541,12 @@ class ActiveSeeker:
         "uk": "gb",  # .uk ccTLD → GB (ISO alpha-2 for United Kingdom)
         "us": "us", "uz": "uz", "ve": "ve", "vn": "vn", "ye": "ye",
         "zw": "zw",
+        # Africa — previously missing
+        "cd": "cd", "ug": "ug", "tz": "tz", "so": "so", "sd": "sd",
+        "ci": "ci", "cm": "cm", "sn": "sn", "ml": "ml", "mg": "mg",
+        "mz": "mz", "rw": "rw", "zm": "zm",
+        # Asia — previously missing
+        "ps": "ps", "mm": "mm",
     }
 
     # Domains that use .com/.net/.org but have a clear geo-identity.
@@ -521,6 +586,31 @@ class ActiveSeeker:
         "reuters.com": "gb", "bbc.com": "gb", "theguardian.com": "gb",
         "apnews.com": "us", "nytimes.com": "us", "washingtonpost.com": "us",
         "cnn.com": "us", "france24.com": "fr", "dw.com": "de",
+        # DR Congo
+        "radiookapi.net": "cd", "actualite.cd": "cd", "7sur7.cd": "cd",
+        # Uganda
+        "monitor.co.ug": "ug", "newvision.co.ug": "ug", "chimp.ug": "ug",
+        # East Africa / Pan-African (.com outlets)
+        "theeastafrican.co.ke": "ke", "nation.africa": "ke",
+        "theafricareport.com": "ke",
+        # Ethiopia
+        "addisfortune.com": "et", "thereporterethiopia.com": "et",
+        # West Africa
+        "graphic.com.gh": "gh", "myjoyonline.com": "gh",
+        "punchng.com": "ng", "pulse.ng": "ng",
+        # Palestine
+        "alquds.com": "ps", "maannews.net": "ps", "wafa.ps": "ps",
+        # Myanmar
+        "irrawaddy.com": "mm", "mizzima.com": "mm", "myanmar-now.org": "mm",
+        # Central Asia
+        "inform.kz": "kz", "zakon.kz": "kz", "gazeta.uz": "uz",
+        # Caucasus
+        "agenda.ge": "ge", "civil.ge": "ge", "azatutyun.am": "am",
+        # Nordic (.com domains needing explicit pinning)
+        "thelocal.se": "se", "thelocal.no": "no", "thelocal.dk": "dk",
+        "yle.fi": "fi",
+        # Cuba
+        "14ymedio.com": "cu",
     }
 
     # Countries where native internet is heavily restricted/geo-blocked.
@@ -553,6 +643,8 @@ class ActiveSeeker:
         self.result_max_age_h = self.active_search.get("result_max_age_hours", 72)
         self.min_content_chars = self.active_search.get("min_content_chars", 150)
         self.max_results_per_region = max(1, int(self.active_search.get("max_results_per_region", 1)))
+        self.max_regions_per_cluster = int(self.active_search.get("max_regions_per_cluster", 999))
+        self.min_organic_sources_to_skip = int(self.active_search.get("min_organic_sources_to_skip", 999))
         self.min_query_token_overlap = self.active_search.get("min_query_token_overlap", 0.34)
         self.min_cluster_title_overlap = self.active_search.get("min_cluster_title_overlap", 0.08)
         self.max_existing_title_overlap = self.active_search.get("max_existing_title_overlap", 0.82)
@@ -751,10 +843,19 @@ class ActiveSeeker:
         return clusters
 
     def _enrich_cluster(self, cluster: ArticleCluster, provider_counts: dict[str, int] | None = None) -> None:
+        organic_count = sum(1 for a in cluster.articles if not a.is_searched)
+        if organic_count >= self.min_organic_sources_to_skip:
+            logger.debug(
+                "Skipping seek for cluster '%s': %d organic articles >= threshold %d",
+                cluster.topic_category, organic_count, self.min_organic_sources_to_skip,
+            )
+            return
+
         missing_regions, search_keyword = self._analyze_missing_perspectives(cluster)
         if not missing_regions or not search_keyword:
             return
 
+        missing_regions = missing_regions[:self.max_regions_per_cluster]
         for region in missing_regions:
             search_queries = self._build_search_queries(cluster, region, search_keyword)
             logger.info(
@@ -789,7 +890,7 @@ class ActiveSeeker:
         current_regions.discard("unknown")
         current_regions.discard(None)
 
-        context = "\n".join(f"- {article.title}" for article in cluster.articles[:5])
+        context = "\n".join(f"- {article.title}" for article in cluster.articles[:12])
         prompt = (
             f"Here are the headlines for a news event:\n{context}\n\n"
             "Analyze these headlines and output a JSON object with these fields:\n"
@@ -844,7 +945,7 @@ class ActiveSeeker:
         context = "\n".join(
             f"- [{article.source_name} / {article.origin_region or self._get_source_region(article.source_name)}] "
             f"{article.title}"
-            for article in cluster.articles[:5]
+            for article in cluster.articles[:12]
         )
         prompt = (
             f"Here are headlines from articles about a news event, with source outlet and outlet region:\n{context}\n\n"
