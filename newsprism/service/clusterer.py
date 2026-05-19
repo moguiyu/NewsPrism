@@ -193,12 +193,35 @@ class Clusterer:
         kept_indices.sort(key=lambda idx: articles[idx].published_at, reverse=True)
         return [articles[idx] for idx in kept_indices]
 
+    def _embedding_text(self, article: Article) -> str:
+        """Return sanitized embedding text, falling back to title-only on bad content."""
+        content = article.content or ""
+        fallback_reason: str | None = None
+        if content:
+            # Detect mojibake: Latin-1 surrogate range chars dominate what should be CJK text
+            sample = content[:200]
+            latin1_count = sum(1 for c in sample if 0x80 <= ord(c) <= 0xFF)
+            if latin1_count > len(sample) * 0.25:
+                fallback_reason = "mojibake"
+                content = ""
+            # Detect boilerplate: very short with no sentence-ending punctuation
+            elif len(content) < 120 and not any(c in content for c in '。？！.?!\n'):
+                fallback_reason = "boilerplate"
+                content = ""
+        if fallback_reason is not None:
+            logger.debug(
+                "Embedding fallback to title-only for article '%s' (content: %s)",
+                article.title[:40],
+                fallback_reason,
+            )
+        return f"{article.title} {content[:500]}".strip() if content else article.title
+
     def _ensure_embeddings(self, articles: list[Article]) -> None:
         needs_embedding = [a for a in articles if a.embedding is None]
         if not needs_embedding:
             return
         model = _get_model()
-        texts = [f"{a.title} {a.content[:500]}" for a in needs_embedding]
+        texts = [self._embedding_text(a)[:600] for a in needs_embedding]
         embs = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
         for article, emb in zip(needs_embedding, embs):
             article.embedding = emb.tolist()
