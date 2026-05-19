@@ -221,6 +221,8 @@ active_search:
   result_max_age_hours: 72
   min_content_chars: 150
   max_results_per_region: 1
+  max_regions_per_cluster: 3        # cap missing regions searched per cluster (RC-1)
+  min_organic_sources_to_skip: 8   # skip seeker when cluster already has this many organic articles (RC-3)
   min_query_token_overlap: 0.34
   min_cluster_title_overlap: 0.08
   max_existing_title_overlap: 0.82
@@ -321,13 +323,129 @@ active_search:
       language: es
     co:
       language: es
-    # Africa
+    # Africa (original)
     ng:
       language: en
     eg:
       language: ar
     za:
       language: en
+    # Africa (extended)
+    cd:
+      language: fr
+    ug:
+      language: en
+    tz:
+      language: sw
+    et:
+      language: am
+    gh:
+      language: en
+    ao:
+      language: pt
+    cm:
+      language: fr
+    sn:
+      language: fr
+    ci:
+      language: fr
+    ml:
+      language: fr
+    mg:
+      language: fr
+    mz:
+      language: pt
+    rw:
+      language: fr
+    zm:
+      language: en
+    zw:
+      language: en
+    so:
+      language: so
+    sd:
+      language: ar
+    # Middle East gaps
+    ps:
+      language: ar
+    bh:
+      language: ar
+    tn:
+      language: ar
+    dz:
+      language: ar
+    # Europe (extended)
+    se:
+      language: sv
+    no:
+      language: no
+    dk:
+      language: da
+    fi:
+      language: fi
+    ie:
+      language: en
+    pt:
+      language: pt
+    gr:
+      language: el
+    at:
+      language: de
+    cz:
+      language: cs
+    sk:
+      language: sk
+    ro:
+      language: ro
+    hu:
+      language: hu
+    bg:
+      language: bg
+    rs:
+      language: sr
+    hr:
+      language: hr
+    si:
+      language: sl
+    ee:
+      language: et
+    lv:
+      language: lv
+    lt:
+      language: lt
+    ba:
+      language: bs
+    al:
+      language: sq
+    # Asia gaps
+    kp:
+      language: ko
+      x_final_fallback: true
+    mm:
+      language: my
+    af:
+      language: fa
+      x_final_fallback: true
+    kz:
+      language: ru
+    uz:
+      language: uz
+    ge:
+      language: ka
+    am:
+      language: hy
+    lk:
+      language: en
+    kh:
+      language: km
+    nz:
+      language: en
+    hk:
+      language: zh
+    # Americas gaps
+    cu:
+      language: es
+      x_final_fallback: true
   official_web_sources:
     cn:
       - platform: static_html
