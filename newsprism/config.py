@@ -30,6 +30,7 @@ class SourceConfig:
     rss_fallback: str | None = None  # Secondary RSS fallback URL
     newsnow_id: str | None = None    # newsnow source ID — tried first for Chinese sources
     enabled: bool = True
+    skip_body_fetch: bool = False    # skip article body fetch; rely on newsnow hover field (for SPAs)
 
 
 @dataclass
@@ -137,6 +138,7 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
             rss_fallback=s.get("rss_fallback"),
             newsnow_id=s.get("newsnow_id"),
             enabled=bool(s.get("enabled", True)),
+            skip_body_fetch=bool(s.get("skip_body_fetch", False)),
         )
         for s in raw.get("sources", [])
         if s.get("enabled", True)

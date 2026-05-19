@@ -394,15 +394,17 @@ class Collector:
             extra = item.get("extra") or {}
             hover = extra.get("hover", "")   # description field (36kr-renqi only)
 
-            content = self._fetch_article_content(url)
-
-            if not content or len(content) < 150:
-                # Use description from newsnow if available (better than title alone)
+            if src.skip_body_fetch:
                 content = hover or title
-                # Chinese headlines are information-dense at 10–20 chars; 30 was too strict
-                if len(content) < 10:
-                    continue
-                logger.debug("[%s] Using snippet content for: %s", src.name, title[:60])
+            else:
+                content = self._fetch_article_content(url)
+                if not content or len(content) < 150:
+                    # Use description from newsnow if available (better than title alone)
+                    content = hover or title
+                    # Chinese headlines are information-dense at 10–20 chars; 30 was too strict
+                    if len(content) < 10:
+                        continue
+                    logger.debug("[%s] Using snippet content for: %s", src.name, title[:60])
 
             articles.append(RawArticle(
                 url=url,
