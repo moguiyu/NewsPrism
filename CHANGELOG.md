@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.0 - 2026-05-19
+
+LLM-driven clustering and batch summarisation release.
+
+### Added
+
+- `LLMClusterer`: groups articles by real-world event identity via a single LLM call, with automatic fallback to the embedding-based clusterer on failure or sparse output. Controlled by `clustering.use_llm_clustering` in `config.yaml` (default: `true`).
+- `Summarizer.summarize_all_batch` / `_batch_summarize`: builds a single multi-cluster prompt for all clusters, parses a `BatchSummaryResponse`, and falls back to per-cluster calls for any missing index or on total failure.
+
+### Fixed
+
+- LLM clusterer now strips ` ``` `-fenced JSON before parsing — prevents `json.loads` failures when models wrap their response in a markdown code block.
+- Removed dynamic `label` attribute assignment on `ArticleCluster` (not declared on the dataclass); label is now logged at DEBUG level only.
+
 ## v0.3.3 - 2026-05-18
 
 Footer date navigation fix and small security hardening.
