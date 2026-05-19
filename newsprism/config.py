@@ -52,6 +52,9 @@ class Config:
     # Topic equivalence: canonical topic → list of equivalent topics
     topic_equivalence: dict[str, list[str]] = field(default_factory=dict)
 
+    # Feature flags
+    use_llm_clustering: bool = True
+
     # From env
     litellm_api_key: str = field(default_factory=lambda: os.environ.get("LITELLM_API_KEY", ""))
     litellm_model: str = field(default_factory=lambda: os.environ.get("LITELLM_MODEL", "deepseek/deepseek-chat"))
@@ -165,4 +168,5 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         editorial_values=editorial_values,
         feelgood_keywords=feelgood_keywords,
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
+        use_llm_clustering=bool(raw.get("clustering", {}).get("use_llm_clustering", True)),
     )
