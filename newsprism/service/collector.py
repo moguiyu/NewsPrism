@@ -332,13 +332,6 @@ class Collector:
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=15))
     def _fetch_newsnow(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
-        """
-        Query newsnow /api/s?id={newsnow_id} — returns article title + URL list.
-        Then fetch full content for each article via trafilatura.
-
-        newsnow handles: anti-bot headers, GB2312 encoding, undocumented JSON APIs,
-        adaptive caching (5–30 min TTL per source type).
-        """
         api_url = f"{self.newsnow_base}/api/s?id={src.newsnow_id}"
         _rate_limit(api_url, 1.0)  # newsnow is our own service; lighter rate limit
         logger.info("newsnow: %s → %s", src.name, api_url)
@@ -588,13 +581,7 @@ class Collector:
         return trafilatura.extract(raw, include_comments=False, favor_recall=True) or "" if raw else ""
 
     def _fetch_raw_bytes(self, url: str) -> bytes:
-        """Fetch a URL and return raw bytes.
-
-        Passes bytes directly to trafilatura so it can detect encoding from the
-        HTML <meta charset> tag — authoritative for GBK/GB2312 (Zaobao) and
-        Shift-JIS (ITmedia) pages, which would otherwise be mojibake-decoded
-        by httpx's ISO-8859-1 default.
-        """
+        # raw bytes let trafilatura read <meta charset> for GBK/Shift-JIS pages
         _rate_limit(url, self.rate_delay)
         try:
             with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
@@ -604,30 +591,6 @@ class Collector:
         except Exception as exc:
             logger.debug("Fetch failed %s: %s", url, exc)
             return b""
-
-    def _fetch_raw_html(self, url: str) -> str:
-        """Fetch a URL and return decoded HTML text (used by BeautifulSoup paths).
-
-        Falls back to UTF-8 when httpx would otherwise default to ISO-8859-1/
-        latin-1 (its implicit default for text/html with no explicit charset
-        header), which causes mojibake on CJK sites.
-        """
-        _rate_limit(url, self.rate_delay)
-        try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-                resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-                resp.raise_for_status()
-                # httpx defaults charset_encoding to 'iso-8859-1' for text/html
-                # with no explicit charset — that is never intentionally declared
-                # by real sites, so override it to UTF-8.
-                enc = (resp.charset_encoding or "").lower()
-                if enc in ("", "iso-8859-1", "latin-1"):
-                    resp.encoding = "utf-8"
-                    logger.debug("Encoding fallback utf-8 applied for %s (was %r)", url, enc or None)
-                return resp.text
-        except Exception as exc:
-            logger.debug("Fetch failed %s: %s", url, exc)
-            return ""
 
     def _extract_article_links(self, soup: BeautifulSoup, domain: str, base_url: str) -> list[str]:
         selector = ARTICLE_LINK_SELECTORS.get(domain)
