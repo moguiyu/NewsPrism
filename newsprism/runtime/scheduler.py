@@ -1854,7 +1854,7 @@ class Scheduler:
                 today,
             )
 
-            summaries = self.summarizer.summarize_all(selected_clusters)
+            summaries = self.summarizer.summarize_all_batch(selected_clusters)
             for summary in summaries:
                 self.quality_assessor.postcheck_summary(summary)
 

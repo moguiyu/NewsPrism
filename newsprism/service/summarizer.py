@@ -90,6 +90,19 @@ class StructuredSummary(BaseModel):
     )
 
 
+class BatchSummaryItem(BaseModel):
+    index: int = Field(description="Zero-based index of the cluster in the batch.")
+    headline: str
+    body: str
+    short_topic_name: str | None = None
+    topic_icon_key: str | None = None
+    perspective_groups: list[PerspectiveGroupItem] = Field(default_factory=list)
+
+
+class BatchSummaryResponse(BaseModel):
+    clusters: list[BatchSummaryItem]
+
+
 class SummaryTranslation(BaseModel):
     headline: str = Field(description="English headline translated from the Chinese digest headline.")
     body: str = Field(description="English body translated from the Chinese digest body.")
@@ -193,6 +206,129 @@ class Summarizer:
                 results.append(result)
             except Exception as exc:
                 logger.error("Summarization failed for cluster '%s': %s", cluster.topic_category, exc)
+        return results
+
+    def summarize_all_batch(self, clusters: list[ArticleCluster]) -> list[ClusterSummary]:
+        """Summarise all clusters in a single LLM call. Falls back to summarize_all on failure."""
+        if not clusters:
+            return []
+        try:
+            return self._batch_summarize(clusters)
+        except Exception as exc:
+            logger.error("Batch summarisation failed (%s) — falling back to per-cluster", exc)
+            return self.summarize_all(clusters)
+
+    def _batch_summarize(self, clusters: list[ArticleCluster]) -> list[ClusterSummary]:
+        """Build one prompt for all clusters and parse BatchSummaryResponse."""
+        cluster_blocks: list[str] = []
+        for i, cluster in enumerate(clusters):
+            articles_block = self._format_articles(cluster)
+            quality_block = self._quality_prompt_block(cluster)
+            sources_joined = "、".join(cluster.sources)
+            block_parts = [f"== 集群 {i} | {cluster.topic_category} | 来源：{sources_joined} =="]
+            if quality_block:
+                block_parts.append(quality_block)
+            block_parts.append(articles_block)
+            cluster_blocks.append("\n".join(block_parts))
+
+        separator = "\n\n---\n\n"
+        clusters_text = separator.join(cluster_blocks)
+
+        prompt = (
+            f"为以下 {len(clusters)} 个新闻事件集群分别生成摘要。\n\n"
+            "输出 JSON 格式：\n"
+            "{\"clusters\": [{\"index\": 0, \"headline\": \"...\", \"body\": \"...\", "
+            "\"short_topic_name\": \"...\", \"topic_icon_key\": \"...\", \"perspective_groups\": [...]}, ...]}\n\n"
+            "每个集群的规则与单集群模式完全相同（多视角时填充 perspective_groups，单来源时 perspective_groups 为 []）。\n"
+            "index 字段必须与输入顺序一致（从 0 开始）。\n"
+            "只输出 JSON，不要解释。\n\n"
+            "---\n\n"
+            f"{clusters_text}"
+        )
+
+        response = litellm.completion(
+            model=self.model,
+            api_key=self.api_key,
+            api_base=self.base_url,
+            messages=[
+                {"role": "system", "content": self.style_guide},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=self.temperature,
+            max_tokens=min(len(clusters) * 800, 16000),
+            response_format={"type": "json_object"},
+            **self.completion_compat_kwargs,
+        )
+
+        content = response.choices[0].message.content or ""
+        batch_result = BatchSummaryResponse.model_validate_json(content)
+
+        items_by_index = {item.index: item for item in batch_result.clusters}
+
+        results: list[ClusterSummary] = []
+        for i, cluster in enumerate(clusters):
+            item = items_by_index.get(i)
+            if item is None:
+                logger.warning(
+                    "Batch response missing index %d ('%s'); falling back to per-cluster call",
+                    i,
+                    cluster.topic_category,
+                )
+                try:
+                    results.append(self._summarize_cluster(cluster))
+                except Exception as exc:
+                    logger.error(
+                        "Per-cluster fallback also failed for '%s': %s",
+                        cluster.topic_category,
+                        exc,
+                    )
+                continue
+
+            headline_clean = item.headline.strip().strip("*")
+            summary_text = f"**{headline_clean}**\n\n{item.body}"
+            grouped_perspectives = self._normalize_perspective_groups(
+                cluster,
+                item.perspective_groups,
+                [],
+            )
+            perspectives = {
+                source_name: group.perspective
+                for group in grouped_perspectives
+                for source_name in group.sources
+            }
+            parsed_short = item.short_topic_name
+            parsed_icon = item.topic_icon_key
+
+            results.append(
+                ClusterSummary(
+                    cluster=cluster,
+                    summary=summary_text,
+                    perspectives=perspectives,
+                    grouped_perspectives=grouped_perspectives,
+                    short_topic_name=parsed_short,
+                    topic_icon_key=parsed_icon,
+                    storyline_key=cluster.storyline_key,
+                    storyline_name=cluster.storyline_name,
+                    storyline_role=cluster.storyline_role,
+                    storyline_confidence=cluster.storyline_confidence,
+                    storyline_state=cluster.storyline_state,
+                    storyline_timeline=list(cluster.storyline_timeline),
+                    storyline_membership_status=cluster.storyline_membership_status,
+                    storyline_anchor_labels=list(cluster.storyline_anchor_labels),
+                    macro_topic_key=cluster.macro_topic_key,
+                    macro_topic_name=cluster.macro_topic_name,
+                    macro_topic_icon_key=cluster.macro_topic_icon_key,
+                    macro_topic_member_count=cluster.macro_topic_member_count,
+                    quality_report=cluster.quality_report,
+                    quality_status=cluster.quality_report.status if cluster.quality_report else "unknown",
+                    quality_score=cluster.quality_report.overall_score if cluster.quality_report else 0.0,
+                    quality_flags=list(cluster.quality_report.flags) if cluster.quality_report else [],
+                    confirmed_claims=list(cluster.quality_report.confirmed_claims) if cluster.quality_report else [],
+                    contested_claims=list(cluster.quality_report.contested_claims) if cluster.quality_report else [],
+                    evidence_summary=cluster.quality_report.evidence_summary if cluster.quality_report else "",
+                )
+            )
+
         return results
 
     def translate_report_content(
