@@ -427,6 +427,23 @@ class HtmlRenderer:
                 shutil.copy2(src, dest)
                 dest.chmod(0o644)
 
+    def _write_fonts(self) -> None:
+        """Copy static/fonts/ to output/fonts/ (idempotent, skips existing)."""
+        src_dir = Path(__file__).resolve().parent.parent / "static" / "fonts"
+        if not src_dir.is_dir():
+            return
+        dest_dir = self.output_dir / "fonts"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for src_file in src_dir.iterdir():
+            if not src_file.is_file():
+                continue
+            dest_file = dest_dir / src_file.name
+            if dest_file.exists():
+                continue
+            import shutil
+            shutil.copy2(src_file, dest_file)
+            dest_file.chmod(0o644)
+
     def _write_static_favicon(self, report_dir: Path) -> None:
         favicon_bytes = _favicon_ico_bytes()
         for path in (self.output_dir / "favicon.ico", report_dir / "favicon.ico"):
@@ -903,6 +920,7 @@ class HtmlRenderer:
         report_dir.chmod(0o755)
         self._write_static_favicon(report_dir)
         self._write_pwa_assets()
+        self._write_fonts()
 
         hot_topics = hot_topics or []
         focus_storylines = focus_storylines or []
