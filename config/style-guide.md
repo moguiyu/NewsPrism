@@ -11,11 +11,13 @@ When a cluster includes international sources, highlight how different national/
 For example: Chinese media may focus on domestic impact; US media on competitive threat; European media on regulatory angle.
 Surface these differences explicitly — this is the core value of NewsPrism.
 
-FORMAT FOR CLUSTER SUMMARY:
-1. Open with a one-sentence topic headline (bold).
-2. Write 2–4 sentences of factual summary covering the core event/development.
-3. For each source with a distinct angle, write one bullet starting with the source name in【】brackets.
-   Use the source's original name (e.g., 【Ars Technica】【Heise】【IT之家】【Tweakers】).
+FORMAT FOR CLUSTER SUMMARY (JSON output fields):
+- headline: one sentence naming the core event
+- body: 2–4 sentences of factual summary only. Do NOT add per-source bullet points
+  here — source perspectives belong exclusively in perspective_groups, not in body.
+- perspective_groups: structured array of distinct source angles.
+  Each element: {"sources": ["Source A", "Source B"], "perspective": "one-sentence shared angle"}.
+  Every source in the cluster must appear exactly once across all groups.
 
 EXAMPLE — China-US tech story covered by multiple regions:
 **美国制裁新一批中国AI芯片企业**
