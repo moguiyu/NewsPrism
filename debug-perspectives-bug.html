@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NewsPrism — Perspectives Bug Analysis (2026-05-20)</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --paper: #f9f7f4;
+    --rule: #c8c0b4;
+    --accent: #057dbc;
+    --warn: #c0392b;
+    --ok: #27ae60;
+    --code-bg: #f0ede8;
+    --label-bg: #e8e0d4;
+    --mono: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace;
+    --serif: Georgia, 'Times New Roman', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.65;
+    padding: 2rem 1rem;
+  }
+
+  .page { max-width: 860px; margin: 0 auto; }
+
+  /* ─── masthead ─── */
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 0.75rem;
+    margin-bottom: 2rem;
+  }
+  .masthead h1 {
+    font-family: var(--serif);
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .masthead .meta {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 0.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  /* ─── section ─── */
+  section { margin-bottom: 2.5rem; }
+
+  h2 {
+    font-family: var(--serif);
+    font-size: 1.25rem;
+    font-weight: 700;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.35rem;
+    margin-bottom: 1rem;
+  }
+
+  h3 {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #555;
+    margin: 1.25rem 0 0.5rem;
+  }
+
+  p { margin-bottom: 0.8rem; }
+
+  /* ─── verdict chips ─── */
+  .verdict {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    vertical-align: middle;
+    margin-left: 0.5rem;
+  }
+  .verdict.bug   { background: #fde8e6; color: var(--warn); }
+  .verdict.cause { background: #fdf3e6; color: #c0760a; }
+  .verdict.fix   { background: #e6f7ec; color: var(--ok); }
+
+  /* ─── callout box ─── */
+  .callout {
+    border-left: 3px solid var(--ink);
+    background: var(--code-bg);
+    padding: 0.75rem 1rem;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.ok   { border-left-color: var(--ok); }
+  .callout.info { border-left-color: var(--accent); }
+
+  /* ─── code ─── */
+  pre, code {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    overflow-x: auto;
+    line-height: 1.5;
+    margin: 0.75rem 0;
+    border: 1px solid var(--rule);
+  }
+  pre code { background: none; padding: 0; }
+
+  /* ─── diff ─── */
+  .diff-del { background: #fde8e6; color: var(--warn); display: block; }
+  .diff-add { background: #e6f7ec; color: #145c2c; display: block; }
+  .diff-ctx { display: block; color: #666; }
+
+  /* ─── evidence screenshot ─── */
+  .evidence-box {
+    border: 1px solid var(--rule);
+    padding: 1rem;
+    margin: 1rem 0;
+    background: #fff;
+  }
+  .evidence-box .caption {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 0.5rem;
+    font-style: italic;
+  }
+
+  /* ─── fake browser chrome ─── */
+  .browser-chrome {
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 1rem 0;
+  }
+  .browser-bar {
+    background: #e8e4df;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    color: #555;
+    border-bottom: 1px solid var(--rule);
+    font-family: var(--mono);
+  }
+  .browser-body {
+    padding: 1rem;
+    background: #fff;
+  }
+
+  /* ─── perspective simulation ─── */
+  .persp-bad {
+    border-left: 3px solid var(--warn);
+    padding: 0.5rem 0.75rem;
+    background: #fff8f7;
+    margin: 0.5rem 0;
+    font-size: 0.88rem;
+    color: #666;
+    font-style: italic;
+  }
+  .persp-good {
+    border-left: 3px solid var(--ok);
+    padding: 0.5rem 0.75rem;
+    background: #f7fff8;
+    margin: 0.5rem 0;
+    font-size: 0.88rem;
+  }
+  .persp-src {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #555;
+    margin-bottom: 2px;
+  }
+
+  /* ─── flow diagram ─── */
+  .flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 1rem 0;
+  }
+  .flow-step {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+  }
+  .flow-node {
+    background: var(--label-bg);
+    border: 1px solid var(--rule);
+    padding: 0.5rem 0.9rem;
+    font-size: 0.82rem;
+    font-family: var(--mono);
+    flex: 1;
+  }
+  .flow-node.bad { background: #fde8e6; border-color: var(--warn); }
+  .flow-node.result { background: #fdf3e6; border-color: #c0760a; font-weight: 700; }
+  .flow-arrow {
+    writing-mode: horizontal-tb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 0;
+    font-size: 0.7rem;
+    color: #888;
+  }
+
+  /* ─── comparison table ─── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin: 1rem 0;
+  }
+  th {
+    background: var(--label-bg);
+    font-weight: 700;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--rule);
+  }
+  td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  td.missing { background: #fde8e6; }
+  td.present { background: #e6f7ec; }
+
+  /* ─── phase header ─── */
+  .phase-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .phase-badge {
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 3px 8px;
+    flex-shrink: 0;
+  }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1rem;
+    margin-top: 3rem;
+    font-size: 0.75rem;
+    color: #888;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ─── masthead ─── -->
+  <header class="masthead">
+    <h1>NewsPrism — Perspectives Bug Analysis</h1>
+    <div class="meta">Systematic Debugging Report &nbsp;·&nbsp; 2026-05-20 &nbsp;·&nbsp; Branch: main</div>
+  </header>
+
+  <!-- ─── summary ─── -->
+  <section>
+    <h2>Summary</h2>
+    <p>
+      Every multi-source cluster on the live report (192.168.10.5:8080) shows the
+      identical perspective text for every source:
+    </p>
+    <div class="callout warn">
+      <strong>视角差异：</strong>该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。
+      / 该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。
+    </div>
+    <p>
+      This is <code>_fallback_perspective_text()</code> — the string used when the LLM
+      returns no perspective data for a source. The OPT-2 batch summarisation feature
+      shipped with a prompt that tells the LLM <em>"same rules as single-cluster mode"</em>
+      but never actually includes those rules, so the LLM always returns
+      <code>perspective_groups: []</code> and every source falls back.
+    </p>
+  </section>
+
+  <!-- ─── phase 1: evidence ─── -->
+  <section>
+    <div class="phase-header">
+      <span class="phase-badge">Phase 1</span>
+      <h2 style="border:none;margin:0">Evidence</h2>
+    </div>
+
+    <h3>Live report — what it looks like now</h3>
+    <div class="browser-chrome">
+      <div class="browser-bar">http://192.168.10.5:8080</div>
+      <div class="browser-body">
+        <div style="font-size:0.9rem;font-weight:700;margin-bottom:0.5rem">
+          1. 北约战机在爱沙尼亚上空击落疑似乌克兰无人机
+        </div>
+        <div class="persp-bad">
+          <div class="persp-src">BBC NEWS &nbsp;·&nbsp; THE GUARDIAN &nbsp;·&nbsp; UKRINFORM</div>
+          该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。
+          / 该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。
+          <em style="font-size:0.75rem;color:#c0392b;display:block;margin-top:4px">
+            ← same fallback text for every source (8 sources, all identical)
+          </em>
+        </div>
+        <div style="font-size:0.9rem;font-weight:700;margin:1rem 0 0.5rem">
+          3. 英国允许进口第三国用俄石油生产的柴油和航空燃料
+        </div>
+        <div class="persp-bad">
+          <div class="persp-src">UKRINFORM &nbsp;·&nbsp; 연합뉴스 &nbsp;·&nbsp; 卫星通讯社</div>
+          该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。
+          / 该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。
+          <em style="font-size:0.75rem;color:#c0392b;display:block;margin-top:4px">
+            ← same fallback text for every source
+          </em>
+        </div>
+      </div>
+    </div>
+
+    <h3>What it should look like</h3>
+    <div class="browser-chrome">
+      <div class="browser-bar">http://192.168.10.5:8080 (after fix)</div>
+      <div class="browser-body">
+        <div style="font-size:0.9rem;font-weight:700;margin-bottom:0.5rem">
+          1. 北约战机在爱沙尼亚上空击落疑似乌克兰无人机
+        </div>
+        <div class="persp-good">
+          <div class="persp-src">BBC NEWS &nbsp;·&nbsp; THE GUARDIAN</div>
+          英美媒体关注北约成员国防空识别区事件的联盟回应机制与信号意涵。
+        </div>
+        <div class="persp-good">
+          <div class="persp-src">UKRINFORM</div>
+          乌克兰媒体聚焦外交部回应及俄罗斯电子干扰作为触发因素的说法。
+        </div>
+      </div>
+    </div>
+
+    <h3>Data flow trace</h3>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="flow-node"><code>_batch_summarize(clusters)</code> — builds one LLM call for all clusters</div>
+      </div>
+      <div class="flow-arrow">↓ sends prompt (missing perspective rules)</div>
+      <div class="flow-step">
+        <div class="flow-node bad">LLM returns <code>perspective_groups: []</code> for every cluster</div>
+      </div>
+      <div class="flow-arrow">↓ parses BatchSummaryResponse</div>
+      <div class="flow-step">
+        <div class="flow-node"><code>_normalize_perspective_groups(cluster, [], [])</code></div>
+      </div>
+      <div class="flow-arrow">↓ no raw_groups match any source → fallback loop fires</div>
+      <div class="flow-step">
+        <div class="flow-node result">Every source → <code>_fallback_perspective_text()</code> → identical string</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── phase 2: root cause ─── -->
+  <section>
+    <div class="phase-header">
+      <span class="phase-badge">Phase 2</span>
+      <h2 style="border:none;margin:0">Root Cause</h2>
+    </div>
+
+    <p>
+      There are two issues working together. The primary one is in the batch prompt;
+      the secondary one is a stale style guide that compounds it.
+    </p>
+
+    <h3>Primary — batch prompt missing perspective_groups rules</h3>
+    <p>
+      <strong>Single-cluster prompt</strong> (<code>summarizer.py:1313–1327</code>, <code>_build_prompt()</code>)
+      tells the LLM exactly what to do:
+    </p>
+    <pre><code>- perspective_groups: 数组，包含去重后的 distinct perspective groups。
+  每个元素为 {sources: ['来源A', '来源B'], perspective: '一句话共享视角'}
+额外要求：
+1. headline 和 body 只负责概括事件事实，不要在 body 里重复列举来源视角。
+2. 所有来源必须且只能在 perspective_groups 中出现一次。
+3. 当多个来源的视角实质相同，即使来自不同国家，也应合并到同一 group。
+4. 只有明显不同的立场、强调点或国家视角，才拆成不同 group。</code></pre>
+
+    <p>
+      <strong>Batch prompt</strong> (<code>summarizer.py:237–247</code>, <code>_batch_summarize()</code>)
+      has only one line about perspectives:
+    </p>
+    <pre><code class="diff-del">- "每个集群的规则与单集群模式完全相同（多视角时填充 perspective_groups，单来源时 perspective_groups 为 []）。\n"</code></pre>
+    <p>
+      The phrase "same rules as single-cluster mode" is meaningless in context — the
+      LLM does not know what those rules are. The format example in the prompt shows
+      <code>"perspective_groups": [...]</code> but never shows what goes inside the array.
+    </p>
+
+    <h3>Secondary — style guide describes the old bullet format <span class="verdict cause">compounding</span></h3>
+    <p>
+      <code>config/style-guide.md</code> (loaded as the system prompt for every LLM call)
+      still instructs:
+    </p>
+    <pre><code>FORMAT FOR CLUSTER SUMMARY:
+3. For each source with a distinct angle, write one bullet starting with
+   the source name in【】brackets.</code></pre>
+    <p>
+      The single-cluster user prompt explicitly overrides this by saying
+      <em>"body 只负责概括事件事实，不要在 body 里重复列举来源视角"</em>.
+      The batch prompt never overrides it. So the LLM correctly follows the system
+      prompt — puts perspectives as bullet text in <code>body</code> — and returns
+      <code>perspective_groups: []</code> because it received no instruction to fill it.
+    </p>
+
+    <h3>Side-by-side comparison</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Instruction</th>
+          <th>Single-cluster prompt</th>
+          <th>Batch prompt (before fix)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>perspective_groups item format</td>
+          <td class="present"><code>{sources: [...], perspective: "..."}</code> shown explicitly</td>
+          <td class="missing">Not shown — <code>[...]</code> only</td>
+        </tr>
+        <tr>
+          <td>All sources must appear exactly once</td>
+          <td class="present">Rule 2: "所有来源必须且只能在 perspective_groups 中出现一次"</td>
+          <td class="missing">Absent</td>
+        </tr>
+        <tr>
+          <td>body must not repeat perspectives</td>
+          <td class="present">Rule 1: "不要在 body 里重复列举来源视角"</td>
+          <td class="missing">Absent — style guide says opposite</td>
+        </tr>
+        <tr>
+          <td>Merge vs. split rule</td>
+          <td class="present">Rules 3–4: merge when same, split only on distinct stance</td>
+          <td class="missing">Absent</td>
+        </tr>
+        <tr>
+          <td>Style guide override</td>
+          <td class="present">Explicit JSON-only instruction overrides old bullet format</td>
+          <td class="missing">No override; LLM follows old bullet format in body</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ─── phase 3: fix ─── -->
+  <section>
+    <div class="phase-header">
+      <span class="phase-badge">Phase 3</span>
+      <h2 style="border:none;margin:0">Fix</h2>
+    </div>
+
+    <h3>Fix 1 — summarizer.py lines 237–247 <span class="verdict fix">primary fix</span></h3>
+    <p>
+      Replace the vague single-line in <code>_batch_summarize()</code> with the full
+      perspective_groups rules, mirroring <code>_build_prompt()</code>:
+    </p>
+    <pre><code><span class="diff-ctx"> prompt = (
+     f"为以下 {len(clusters)} 个新闻事件集群分别生成摘要。\n\n"
+     "输出 JSON 格式：\n"
+</span><span class="diff-del">-    "{\"clusters\": [{\"index\": 0, \"headline\": \"...\", \"body\": \"...\", "
+-    "\"short_topic_name\": \"...\", \"topic_icon_key\": \"...\", \"perspective_groups\": [...]}, ...]}\n\n"
+-    "每个集群的规则与单集群模式完全相同（多视角时填充 perspective_groups，单来源时 perspective_groups 为 []）。\n"
+-    "index 字段必须与输入顺序一致（从 0 开始）。\n"
+-    "只输出 JSON，不要解释。\n\n"
+</span><span class="diff-add">+    "{\"clusters\": [{\"index\": 0, \"headline\": \"...\", \"body\": \"...\", "
++    "\"short_topic_name\": \"...\", \"topic_icon_key\": \"...\", "
++    "\"perspective_groups\": [{\"sources\": [\"来源A\", \"来源B\"], \"perspective\": \"一句话共享视角\"}, ...]}, ...]}\n\n"
++    "每个集群的规则：\n"
++    "- headline: 一句话点明核心事件\n"
++    "- body: 2–4句客观事实总结，不要在 body 里列举来源视角\n"
++    "- short_topic_name: 4-10个中文字符的短专题名\n"
++    f"- topic_icon_key: 只能从以下列表中选择：{', '.join(self.topic_icon_allowlist)}\n"
++    "- perspective_groups: 去重后的视角分组数组。"
++    "每个元素为 {\"sources\": [\"来源A\"], \"perspective\": \"一句话视角\"}\n"
++    "额外要求：\n"
++    "1. 所有来源必须且只能在 perspective_groups 中出现一次。\n"
++    "2. 当多个来源视角实质相同，合并到同一 group；只有明显不同的立场才拆成不同 group。\n"
++    "3. 单一来源的集群 perspective_groups 为 []。\n"
++    "4. index 字段必须与输入顺序一致（从 0 开始）。\n"
++    "5. 只输出 JSON，不要解释。\n\n"
+</span><span class="diff-ctx">     "---\n\n"
+     f"{clusters_text}"
+ )</span></code></pre>
+
+    <h3>Fix 2 — config/style-guide.md lines 14–18 <span class="verdict fix">secondary fix</span></h3>
+    <p>
+      Replace the old bullet format instruction with a clarification that perspectives
+      are output as structured <code>perspective_groups</code> in JSON — not bullets in body:
+    </p>
+    <pre><code><span class="diff-del">- FORMAT FOR CLUSTER SUMMARY:
+- 1. Open with a one-sentence topic headline (bold).
+- 2. Write 2–4 sentences of factual summary covering the core event/development.
+- 3. For each source with a distinct angle, write one bullet starting with the source
+-    name in【】brackets.
+-    Use the source's original name (e.g., 【Ars Technica】【Heise】【IT之家】【Tweakers】).
+</span><span class="diff-add">+ FORMAT FOR CLUSTER SUMMARY (JSON output fields):
++ - headline: one sentence naming the core event (bold)
++ - body: 2–4 sentences of factual summary only — do NOT include per-source
++   perspective bullets here; perspectives go exclusively in perspective_groups
++ - perspective_groups: structured array — each element is
++   {"sources": ["Source A", "Source B"], "perspective": "one-sentence shared angle"}
++   All sources must appear exactly once across all groups.
+</span></code></pre>
+
+  </section>
+
+  <!-- ─── verification ─── -->
+  <section>
+    <div class="phase-header">
+      <span class="phase-badge">Verify</span>
+      <h2 style="border:none;margin:0">Verification Steps</h2>
+    </div>
+    <ol style="margin-left:1.5rem;font-size:0.9rem;line-height:2">
+      <li>Run local tests: <code>.venv/bin/pytest tests/test_renderer.py tests/test_scheduler_hot_topics.py -v</code></li>
+      <li>Deploy to fnOS: <code>bash scripts/deploy.sh</code></li>
+      <li>Trigger a publish: <code>docker exec newsprism python -m newsprism publish</code></li>
+      <li>Check 192.168.10.5:8080 — each multi-source cluster should show <strong>distinct</strong> per-source perspective lines, not the fallback string.</li>
+    </ol>
+    <div class="callout info" style="margin-top:1rem">
+      <strong>Success criterion:</strong> No cluster perspective panel should contain the text
+      "该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角" for more than one source —
+      that text should only appear for genuinely undifferentiated sources, not every source in every cluster.
+    </div>
+  </section>
+
+  <!-- ─── affected files ─── -->
+  <section>
+    <h2>Affected Files</h2>
+    <table>
+      <thead>
+        <tr><th>File</th><th>Lines</th><th>Change</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>newsprism/service/summarizer.py</code></td>
+          <td>237–247</td>
+          <td>Replace vague batch prompt with explicit perspective_groups rules</td>
+        </tr>
+        <tr>
+          <td><code>config/style-guide.md</code></td>
+          <td>14–18</td>
+          <td>Remove old bullet format; clarify body = facts only, perspectives = perspective_groups</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    Generated by systematic debugging analysis &nbsp;·&nbsp; NewsPrism v0.4.0 &nbsp;·&nbsp; 2026-05-20
+  </footer>
+
+</div>
+</body>
+</html>
