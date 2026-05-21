@@ -7,6 +7,7 @@ from pathlib import Path
 from lxml import html as lxml_html
 import pytest
 
+from newsprism.config import load_config
 from newsprism.runtime.renderer import HtmlRenderer, _REGION_FLAG
 from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
 
@@ -143,6 +144,141 @@ class TestPerspectivesContext:
         assert mofa_p["searched_provider"] == "x_user_timeline"
         assert mofa_p["provenance_label"] == "官方X"
         assert mofa_p["represented_region"] == "jp"
+
+    def test_repeated_source_perspective_links_follow_article_order(self, renderer):
+        articles = [
+            Article(
+                url="https://www.thehindu.com/cuba",
+                title="U.S. indicts former Cuban President",
+                source_name="The Hindu",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Cuba indictment body.",
+            ),
+            Article(
+                url="https://www.thehindu.com/oil",
+                title="Britain eases sanctions on Russian oil",
+                source_name="The Hindu",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Oil sanctions body.",
+            ),
+            Article(
+                url="https://www.theguardian.com/cuba",
+                title="US indicts former Cuban president",
+                source_name="The Guardian",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Guardian Cuba body.",
+            ),
+            Article(
+                url="https://www.theguardian.com/war-powers",
+                title="Senate advances Iran war powers resolution",
+                source_name="The Guardian",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Guardian war powers body.",
+            ),
+        ]
+        summary = ClusterSummary(
+            cluster=ArticleCluster(topic_category="World News", articles=articles),
+            summary="**Merged story**\n\nBody text here.",
+            grouped_perspectives=[
+                PerspectiveGroup(sources=["The Hindu"], perspective="Cuba indictment angle."),
+                PerspectiveGroup(sources=["The Hindu"], perspective="Oil sanctions angle."),
+                PerspectiveGroup(sources=["The Guardian"], perspective="Guardian Cuba angle."),
+                PerspectiveGroup(sources=["The Guardian"], perspective="Guardian war powers angle."),
+            ],
+        )
+
+        grouped = renderer._build_grouped_perspectives(summary)
+
+        assert grouped[0]["sources"][0]["url"] == "https://www.thehindu.com/cuba"
+        assert grouped[1]["sources"][0]["url"] == "https://www.thehindu.com/oil"
+        assert grouped[2]["sources"][0]["url"] == "https://www.theguardian.com/cuba"
+        assert grouped[3]["sources"][0]["url"] == "https://www.theguardian.com/war-powers"
+
+    def test_repeated_source_perspective_exhaustion_avoids_wrong_link(self, renderer):
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://www.ithome.com/0/1.htm",
+                        title="Google Antigravity update",
+                        source_name="IT之家",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Antigravity body.",
+                    ),
+                    Article(
+                        url="https://www.ithome.com/0/2.htm",
+                        title="Google Wear OS update",
+                        source_name="IT之家",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Wear OS body.",
+                    ),
+                    Article(
+                        url="https://reuters.com/google",
+                        title="Google updates AI products",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Reuters body.",
+                    ),
+                ],
+            ),
+            summary="**Ambiguous source story**\n\nBody text here.",
+            grouped_perspectives=[
+                PerspectiveGroup(sources=["IT之家"], perspective="Antigravity perspective."),
+                PerspectiveGroup(sources=["IT之家"], perspective="Wear OS perspective."),
+                PerspectiveGroup(sources=["IT之家"], perspective="Extra ambiguous perspective."),
+            ],
+        )
+
+        grouped = renderer._build_grouped_perspectives(summary)
+
+        assert grouped[0]["sources"][0]["url"] == "https://www.ithome.com/0/1.htm"
+        assert grouped[1]["sources"][0]["url"] == "https://www.ithome.com/0/2.htm"
+        assert grouped[2]["sources"][0]["url"] is None
+        assert grouped[2]["sources"][0]["ambiguous_url_count"] == 2
+
+    def test_zaobao_mirror_links_are_labeled_as_mirror(self, renderer):
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://www.zaochenbao.com/news/china/202605/2072227.html",
+                        title="俄军人被指在华秘密接受训练后 投入乌克兰战场",
+                        source_name="联合早报",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Zaobao mirror body.",
+                    ),
+                    Article(
+                        url="https://reuters.com/china-training",
+                        title="China secretly trained Russian soldiers",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Reuters body.",
+                    ),
+                ],
+            ),
+            summary="**Story**\n\nBody text here.",
+            grouped_perspectives=[
+                PerspectiveGroup(sources=["联合早报"], perspective="新加坡中文报道角度。"),
+                PerspectiveGroup(sources=["Reuters"], perspective="路透社报道角度。"),
+            ],
+        )
+
+        grouped = renderer._build_grouped_perspectives(summary)
+        zaobao = grouped[0]["sources"][0]
+
+        assert zaobao["url"] == "https://www.zaochenbao.com/news/china/202605/2072227.html"
+        assert zaobao["provenance_label"] == "转载镜像"
+        assert zaobao["provenance_label_en"] == "Mirror"
+        assert grouped[0]["label"] == "联合早报 · 转载镜像"
+
+    def test_zaobao_prefers_configured_rss_over_newsnow_mirror(self):
+        cfg = load_config()
+        zaobao = next(source for source in cfg.sources if source.name == "联合早报")
+
+        assert zaobao.newsnow_id is None
+        assert zaobao.rss_url == "https://www.zaobao.com.sg/rss/china"
 
     def test_render_without_perspectives_stays_readable(self, renderer, tmp_path):
         renderer.output_dir = tmp_path

@@ -1043,7 +1043,7 @@ sources:
   - name: 联合早报
     name_en: Zaobao
     url: https://www.zaobao.com.sg
-    newsnow_id: zaobao                                        # ✓ newsnow: scrapes zaochenbao.com (GB2312)
+    # newsnow_id intentionally disabled: its zaobao route emits zaochenbao.com mirror URLs.
     rss_url: https://www.zaobao.com.sg/rss/china             # fallback if newsnow unavailable
     rss_fallback: https://feedx.net/rss/zaobao.xml
     type: rss

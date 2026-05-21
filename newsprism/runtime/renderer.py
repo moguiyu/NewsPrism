@@ -13,6 +13,7 @@ import struct
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
@@ -482,29 +483,65 @@ class HtmlRenderer:
             return "搜索补充" if lang == "zh" else "Search supplement"
         return None
 
-    def _article_meta(self, summary: ClusterSummary) -> dict[str, dict]:
-        return {
-            article.source_name: {
-                "url": article.url,
-                "is_searched": article.is_searched,
-                "search_region": article.search_region,
-                "source_kind": article.source_kind,
-                "platform": article.platform,
-                "is_official_source": article.is_official_source,
-                "origin_region": article.origin_region,
-                "searched_provider": article.searched_provider,
-            }
-            for article in summary.cluster.articles
-        }
+    def _article_meta(self, summary: ClusterSummary) -> dict[str, list[dict]]:
+        by_source: dict[str, list[dict]] = defaultdict(list)
+        for article in summary.cluster.articles:
+            by_source[article.source_name].append(
+                {
+                    "url": article.url,
+                    "is_searched": article.is_searched,
+                    "search_region": article.search_region,
+                    "source_kind": article.source_kind,
+                    "platform": article.platform,
+                    "is_official_source": article.is_official_source,
+                    "origin_region": article.origin_region,
+                    "searched_provider": article.searched_provider,
+                }
+            )
+        return dict(by_source)
 
-    def _build_source_entry(self, source_name: str, article_meta: dict[str, dict]) -> dict:
-        meta = article_meta.get(source_name, {})
+    def _select_source_meta(
+        self,
+        source_name: str,
+        article_meta: dict[str, list[dict]],
+        source_cursors: dict[str, int] | None = None,
+    ) -> dict:
+        entries = article_meta.get(source_name, [])
+        if not entries:
+            return {}
+        if len(entries) == 1:
+            return entries[0]
+        if source_cursors is None:
+            ambiguous = dict(entries[-1])
+            ambiguous["ambiguous_url_count"] = len(entries)
+            return ambiguous
+        index = source_cursors.get(source_name, 0)
+        if index < len(entries):
+            source_cursors[source_name] = index + 1
+            return entries[index]
+        ambiguous = dict(entries[-1])
+        ambiguous["url"] = None
+        ambiguous["ambiguous_url_count"] = len(entries)
+        return ambiguous
+
+    def _build_source_entry(
+        self,
+        source_name: str,
+        article_meta: dict[str, list[dict]],
+        source_cursors: dict[str, int] | None = None,
+    ) -> dict:
+        meta = self._select_source_meta(source_name, article_meta, source_cursors)
         is_searched = meta.get("is_searched", False)
         search_region = meta.get("search_region")
         source_kind = meta.get("source_kind", "news")
         platform = meta.get("platform")
         provenance_label = self._provenance_label(source_kind, platform, is_searched, lang="zh")
         provenance_label_en = self._provenance_label(source_kind, platform, is_searched, lang="en")
+        url = meta.get("url")
+        url_domain = urlparse(url).netloc.lower().removeprefix("www.") if isinstance(url, str) else ""
+        if source_name == "联合早报" and url_domain == "zaochenbao.com" and not is_searched:
+            provenance_label = "转载镜像"
+            provenance_label_en = "Mirror"
         compact_label = source_name
         compact_label_en = source_name
         if is_searched:
@@ -526,7 +563,8 @@ class HtmlRenderer:
             "searched_provider": meta.get("searched_provider"),
             "provenance_label": provenance_label,
             "provenance_label_en": provenance_label_en,
-            "url": meta.get("url", "#"),
+            "url": url,
+            "ambiguous_url_count": meta.get("ambiguous_url_count", 0),
             "compact_label": compact_label,
             "compact_label_en": compact_label_en,
         }
@@ -588,11 +626,12 @@ class HtmlRenderer:
         perspectives_list: list[dict] = []
         rendered_perspectives: dict[str, str] = {}
         rendered_source_names: list[str] = []
+        source_cursors: dict[str, int] = defaultdict(int)
         suppressed_group_count = 0
 
         for sources, perspective in group_definitions:
             source_entries = [
-                self._build_source_entry(source_name, article_meta)
+                self._build_source_entry(source_name, article_meta, source_cursors)
                 for source_name in sources
             ]
             if not source_entries:

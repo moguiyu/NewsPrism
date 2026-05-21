@@ -49,10 +49,12 @@ rsync -av \
   --exclude output \
   --exclude __pycache__ \
   --exclude .pytest_cache \
+  --exclude .playwright-mcp \
   --exclude .worktrees \
   --exclude .claude \
   --exclude .env \
   --exclude .env.production \
+  --exclude 'eval-report-*.png' \
   "$ROOT/" aiagent@192.168.10.5:"$REMOTE_PATH/"
 
 # ── 3. Rebuild & restart ──────────────────────────────────────────────────────
