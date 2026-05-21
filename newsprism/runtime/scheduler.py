@@ -202,6 +202,15 @@ _EVENT_TOKEN_STOPWORDS = {
     "november",
     "december",
 }
+_HUMAN_INTEREST_OUTLIER_TERMS = (
+    "重逢",
+    "偶遇",
+    "男孩",
+    "女孩",
+    "reunion",
+    "reunited",
+    "human interest",
+)
 
 
 def _normalize_storyline_name(name: str | None, summary: ClusterSummary | None, max_chars: int) -> str:
@@ -482,11 +491,20 @@ def _normalized_event_text(value: str) -> str:
     return re.sub(r"\s+", "", value.lower())
 
 
-def _event_analysis_text(summary: ClusterSummary) -> str:
+def _event_core_text(summary: ClusterSummary) -> str:
     headline = _extract_headline(summary.summary) or ""
     body = _body_only(summary.summary)
+    return f"{headline} {body}".strip()
+
+
+def _event_analysis_text(summary: ClusterSummary) -> str:
+    core = _event_core_text(summary)
     titles = " ".join(article.title for article in summary.cluster.articles)
-    return f"{headline} {body} {titles}".strip()
+    return f"{core} {titles}".strip()
+
+
+def _article_event_text(article: Article) -> str:
+    return f"{article.title} {article.content}".strip()
 
 
 def _expand_event_aliases(text: str) -> str:
@@ -575,6 +593,16 @@ def _event_signature(summary: ClusterSummary) -> dict[str, list[str]]:
     return signature
 
 
+def _article_event_signature(article: Article) -> dict[str, list[str]]:
+    text = _article_event_text(article)
+    return {
+        "entities": sorted(_event_entities(text)),
+        "actions": sorted(_event_actions(text)),
+        "times": sorted(_event_time_anchors(text)),
+        "contexts": sorted(_event_context_anchors(text)),
+    }
+
+
 def _summary_event_signature(summary: ClusterSummary) -> dict[str, list[str]]:
     existing = getattr(summary, "event_signature", None)
     if isinstance(existing, dict):
@@ -588,6 +616,121 @@ def _event_token_overlap_ratio(left: ClusterSummary, right: ClusterSummary) -> f
     if not left_tokens or not right_tokens:
         return 0.0
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _event_core_token_overlap_ratio(left: ClusterSummary, right: ClusterSummary) -> float:
+    left_tokens = _event_token_set(_event_core_text(left))
+    right_tokens = _event_token_set(_event_core_text(right))
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _article_to_text_overlap_ratio(article: Article, text: str) -> float:
+    left_tokens = _event_token_set(article.title)
+    right_tokens = _event_token_set(text)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _article_has_strong_event_overlap(
+    article: Article,
+    rest_articles: list[Article],
+    article_sig: dict[str, list[str]],
+    rest_sig: dict[str, list[str]],
+) -> bool:
+    shared_entities = set(article_sig["entities"]) & set(rest_sig["entities"])
+    shared_actions = set(article_sig["actions"]) & set(rest_sig["actions"])
+    shared_contexts = set(article_sig["contexts"]) & set(rest_sig["contexts"])
+    rest_title_text = " ".join(rest.title for rest in rest_articles)
+    title_overlap = _article_to_text_overlap_ratio(article, rest_title_text)
+
+    if len(shared_entities) >= 3:
+        return True
+    if shared_actions and len(shared_entities) >= 2:
+        return True
+    if shared_contexts == {"nasa-moon"} and shared_entities:
+        return True
+    if shared_contexts and shared_actions and len(shared_entities) >= 2 and title_overlap >= 0.12:
+        return True
+    if title_overlap >= 0.22 and shared_entities:
+        return True
+    if title_overlap >= 0.16 and shared_actions:
+        return True
+    return False
+
+
+def _article_is_clear_human_interest_shift(
+    article: Article,
+    rest_articles: list[Article],
+    article_sig: dict[str, list[str]],
+    rest_sig: dict[str, list[str]],
+) -> bool:
+    article_text = _article_event_text(article).lower()
+    if not any(term in article_text for term in _HUMAN_INTEREST_OUTLIER_TERMS):
+        return False
+    shared_entities = set(article_sig["entities"]) & set(rest_sig["entities"])
+    shared_actions = set(article_sig["actions"]) & set(rest_sig["actions"])
+    rest_title_text = " ".join(rest.title for rest in rest_articles)
+    title_overlap = _article_to_text_overlap_ratio(article, rest_title_text)
+    return not shared_actions and 0 < len(shared_entities) <= 2 and title_overlap < 0.05
+
+
+def _cluster_signature_from_articles(articles: list[Article]) -> dict[str, list[str]]:
+    text = " ".join(_article_event_text(article) for article in articles)
+    return {
+        "entities": sorted(_event_entities(text)),
+        "actions": sorted(_event_actions(text)),
+        "times": sorted(_event_time_anchors(text)),
+        "contexts": sorted(_event_context_anchors(text)),
+    }
+
+
+def _split_disjoint_event_articles(cluster: ArticleCluster) -> list[ArticleCluster]:
+    if len(cluster.articles) < 3:
+        return [cluster]
+
+    outliers: list[Article] = []
+    retained: list[Article] = []
+    signatures = {id(article): _article_event_signature(article) for article in cluster.articles}
+    for article in cluster.articles:
+        article_sig = signatures[id(article)]
+        if not article_sig["entities"] and not article_sig["actions"]:
+            retained.append(article)
+            continue
+
+        rest_articles = [candidate for candidate in cluster.articles if candidate is not article]
+        rest_sig = _cluster_signature_from_articles(rest_articles)
+        if _article_is_clear_human_interest_shift(article, rest_articles, article_sig, rest_sig):
+            outliers.append(article)
+        elif _article_has_strong_event_overlap(article, rest_articles, article_sig, rest_sig):
+            retained.append(article)
+        else:
+            retained.append(article)
+
+    if not outliers or not retained:
+        return [cluster]
+
+    logger.info(
+        "Pre-summary event splitter separated %d disjoint article(s) from '%s': %s",
+        len(outliers),
+        cluster.topic_category,
+        ", ".join(article.title for article in outliers[:3]),
+    )
+    split_clusters = [ArticleCluster(topic_category=cluster.topic_category, articles=retained)]
+    split_clusters.extend(
+        ArticleCluster(topic_category=article.topics[0] if article.topics else cluster.topic_category, articles=[article])
+        for article in outliers
+    )
+    return split_clusters
+
+
+def split_disjoint_event_articles(clusters: list[ArticleCluster]) -> list[ArticleCluster]:
+    split_clusters: list[ArticleCluster] = []
+    for cluster in clusters:
+        split_clusters.extend(_split_disjoint_event_articles(cluster))
+    return split_clusters
 
 
 def _shared_article_domains(left: ClusterSummary, right: ClusterSummary) -> int:
@@ -606,23 +749,69 @@ def _shared_article_domains(left: ClusterSummary, right: ClusterSummary) -> int:
     return len(left_domains & right_domains)
 
 
-def _event_signature_duplicate(left: ClusterSummary, right: ClusterSummary) -> tuple[bool, str, float]:
-    left_sig = _summary_event_signature(left)
-    right_sig = _summary_event_signature(right)
+def _signature_from_frozen(
+    summary: ClusterSummary,
+    frozen_signatures: dict[int, dict[str, list[str]]] | None,
+) -> dict[str, list[str]]:
+    if frozen_signatures is not None:
+        frozen = frozen_signatures.get(_summary_display_identity(summary))
+        if frozen is not None:
+            return frozen
+    return _summary_event_signature(summary)
+
+
+def _strong_duplicate_anchor(
+    left: ClusterSummary,
+    right: ClusterSummary,
+    left_sig: dict[str, list[str]],
+    right_sig: dict[str, list[str]],
+) -> tuple[bool, str, float]:
+    if _article_title_overlap(left, right) >= 1 and _source_overlap(left, right) >= 1:
+        return True, "shared_article_title", 0.9
+
     shared_entities = set(left_sig["entities"]) & set(right_sig["entities"])
     shared_actions = set(left_sig["actions"]) & set(right_sig["actions"])
     shared_times = set(left_sig["times"]) & set(right_sig["times"])
     shared_contexts = set(left_sig["contexts"]) & set(right_sig["contexts"])
+    core_overlap = _event_core_token_overlap_ratio(left, right)
+    broad_overlap = _event_token_overlap_ratio(left, right)
+
+    if _summary_anchor_labels(left) & _summary_anchor_labels(right) and core_overlap >= 0.34:
+        return True, "shared_anchor_label", 0.86
+    if shared_contexts == {"nasa-moon"} and shared_entities and shared_actions:
+        return True, "shared_context:nasa-moon", 0.84
+    if len(shared_entities) >= 3 and shared_actions and (shared_times or core_overlap >= 0.2):
+        return True, "entity_action_core_overlap", 0.82
+    if len(shared_entities) >= 2 and shared_actions and core_overlap >= 0.26:
+        return True, "entity_action_core_overlap", 0.8
+    if shared_contexts and len(shared_entities) >= 2 and shared_actions and core_overlap >= 0.24:
+        return True, f"shared_context:{','.join(sorted(shared_contexts))}", 0.78
+    if core_overlap >= 0.38 and shared_entities:
+        return True, "high_core_text_similarity", 0.78
+    if broad_overlap >= 0.48 and len(shared_entities) >= 2 and shared_actions:
+        return True, "high_text_similarity_with_entities", 0.76
+    return False, "", max(0.0, min(0.74, max(core_overlap, broad_overlap)))
+
+
+def _event_signature_duplicate(
+    left: ClusterSummary,
+    right: ClusterSummary,
+    frozen_signatures: dict[int, dict[str, list[str]]] | None = None,
+) -> tuple[bool, str, float]:
+    left_sig = _signature_from_frozen(left, frozen_signatures)
+    right_sig = _signature_from_frozen(right, frozen_signatures)
+    shared_entities = set(left_sig["entities"]) & set(right_sig["entities"])
+    shared_actions = set(left_sig["actions"]) & set(right_sig["actions"])
+    shared_times = set(left_sig["times"]) & set(right_sig["times"])
     overlap_ratio = _event_token_overlap_ratio(left, right)
 
-    if shared_contexts and shared_actions and len(shared_entities) >= 2:
-        return True, f"shared_context:{','.join(sorted(shared_contexts))}", 0.88
-    if len(shared_entities) >= 3 and shared_actions and (shared_times or overlap_ratio >= 0.22):
+    anchored, reason, confidence = _strong_duplicate_anchor(left, right, left_sig, right_sig)
+    if anchored:
+        return True, reason, confidence
+    if len(shared_entities) >= 3 and shared_actions and shared_times and overlap_ratio >= 0.3:
         return True, "entity_action_time_overlap", 0.82
-    if overlap_ratio >= 0.36 and len(shared_entities) >= 2:
+    if overlap_ratio >= 0.46 and len(shared_entities) >= 2 and shared_actions:
         return True, "high_text_similarity_with_entities", 0.78
-    if (_source_overlap(left, right) or _shared_article_domains(left, right)) and len(shared_entities) >= 2 and shared_actions:
-        return True, "shared_source_or_domain_with_entities", 0.76
     return False, "", max(0.0, min(0.74, overlap_ratio))
 
 
@@ -756,7 +945,6 @@ def _merge_duplicate_summary(target: ClusterSummary, duplicate: ClusterSummary, 
     duplicate.duplicate_action = "suppressed"  # type: ignore[attr-defined]
     duplicate.duplicate_reason = reason  # type: ignore[attr-defined]
     duplicate.duplicate_confidence = round(confidence, 4)  # type: ignore[attr-defined]
-    target.event_signature = _event_signature(target)  # type: ignore[attr-defined]
 
 
 def _summary_display_identity(summary: ClusterSummary) -> int:
@@ -805,8 +993,9 @@ def resolve_display_duplicates(
     positive_summaries: list[ClusterSummary],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary], list[ClusterSummary]]:
     displayed = _flatten_display_summaries(hot_topics, focus_storylines, regular_summaries, positive_summaries)
+    frozen_signatures: dict[int, dict[str, list[str]]] = {}
     for summary in displayed:
-        _event_signature(summary)
+        frozen_signatures[_summary_display_identity(summary)] = _event_signature(summary)
         summary.duplicate_action = "kept"  # type: ignore[attr-defined]
         summary.duplicate_reason = ""  # type: ignore[attr-defined]
         summary.duplicate_confidence = 0.0  # type: ignore[attr-defined]
@@ -818,7 +1007,7 @@ def resolve_display_duplicates(
         for right in displayed[left_index + 1:]:
             if _summary_display_identity(right) in suppressed_ids:
                 continue
-            duplicate, reason, confidence = _event_signature_duplicate(left, right)
+            duplicate, reason, confidence = _event_signature_duplicate(left, right, frozen_signatures)
             if not duplicate:
                 continue
             preferred = _prefer_summary(left, right)
@@ -1773,6 +1962,8 @@ class Scheduler:
 
             clusters = self.cluster_validator.validate(clusters)
             logger.info("Event cluster validation stage: %d clusters after validation", len(clusters))
+            clusters = split_disjoint_event_articles(clusters)
+            logger.info("Pre-summary disjoint event split stage: %d clusters after splitting", len(clusters))
 
             hot_cfg = self.cfg.output.get("hot_topics", {}) if isinstance(self.cfg.output, dict) else {}
             candidate_window = hot_cfg.get(

@@ -8,6 +8,7 @@ from newsprism.runtime.scheduler import (
     select_hot_topic_families,
     select_positive_energy_summaries,
     select_report_clusters,
+    split_disjoint_event_articles,
     split_positive_energy_lane,
 )
 from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
@@ -406,6 +407,201 @@ def test_display_duplicate_resolver_keeps_same_company_different_actions():
     assert regular == [wwdc, maps]
     assert wwdc.duplicate_action == "kept"
     assert maps.duplicate_action == "kept"
+
+
+def test_display_duplicate_resolver_keeps_cuba_and_iran_adjacent_events_separate():
+    cuba = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                _article("The Hindu", "U.S. indicts former Cuban President as pressure builds"),
+                _article("The Guardian", "US indicts former Cuban president Raul Castro as it seeks to oust regime"),
+            ],
+        ),
+        summary="**美国以谋杀罪起诉古巴前领导人劳尔·卡斯特罗**\n\n美国司法部以1996年民用飞机击落事件起诉劳尔·卡斯特罗，古巴政府称此举带有政治动机。",
+        perspectives={"The Hindu": "分析起诉背景。", "The Guardian": "聚焦特朗普政府对古巴施压。"},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["The Hindu"], perspective="分析起诉背景。"),
+            PerspectiveGroup(sources=["The Guardian"], perspective="聚焦特朗普政府对古巴施压。"),
+        ],
+    )
+    uk_oil = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                _article("The Hindu", "Ukraine ally Britain eases sanctions on Russian oil as fuel prices surge over Iran conflict"),
+                _article("The Guardian", "UK delays some sanctions on Russian oil and gas amid Middle East conflict"),
+            ],
+        ),
+        summary="**英国因中东能源危机放松对俄罗斯石油制裁**\n\n英国为应对伊朗冲突带来的燃料价格压力，临时放宽部分俄罗斯石油产品相关制裁。",
+        perspectives={"The Hindu": "关注乌克兰盟友立场。", "The Guardian": "关注能源价格压力。"},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["The Hindu"], perspective="关注乌克兰盟友立场。"),
+            PerspectiveGroup(sources=["The Guardian"], perspective="关注能源价格压力。"),
+        ],
+    )
+    aircraft = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                _article("The Hindu", "U.S. lost 42 aircraft, including fighter jets, MQ-9 Reaper drones in Iran war: report"),
+                _article("中国新闻网", "外媒：美国在对伊朗行动中战损飞行器达42架"),
+            ],
+        ),
+        summary="**美国国会报告：美军在伊朗行动中损失42架飞行器**\n\n美国国会报告称，美军在对伊朗军事行动中损失多型飞机和无人机。",
+        perspectives={"The Hindu": "关注报告细节。", "中国新闻网": "列出具体机型损失。"},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["The Hindu"], perspective="关注报告细节。"),
+            PerspectiveGroup(sources=["中国新闻网"], perspective="列出具体机型损失。"),
+        ],
+    )
+    powers = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                _article("The Hindu", "Senate advances bill aimed at ending Iran war as Cassidy flips to support it"),
+                _article("The Guardian", "US Senate votes to advance resolution to curb Trump's Iran war powers"),
+            ],
+        ),
+        summary="**美国参议院推进法案限制特朗普对伊朗动武权力**\n\n美国参议院推进限制总统对伊朗动武权力的决议，国会战争授权争议升温。",
+        perspectives={"The Hindu": "关注关键投票变化。", "The Guardian": "强调参议院首次推进该决议。"},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["The Hindu"], perspective="关注关键投票变化。"),
+            PerspectiveGroup(sources=["The Guardian"], perspective="强调参议院首次推进该决议。"),
+        ],
+    )
+
+    _hot_topics, _focus_storylines, regular, _positive = resolve_display_duplicates(
+        [],
+        [],
+        [cuba, uk_oil, aircraft, powers],
+        [],
+    )
+
+    assert regular == [cuba, uk_oil, aircraft, powers]
+    assert all(summary.duplicate_action == "kept" for summary in regular)
+
+
+def test_display_duplicate_resolver_keeps_google_product_events_separate():
+    search = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="AI & LLM",
+            articles=[
+                _article("Techzine", "Grootste update Google-zoekmachine in 25 jaar: wat verandert er?"),
+                _article("3DNews", "Google представила крупнейшее обновление поиска за более чем 25 лет"),
+            ],
+        ),
+        summary="**谷歌搜索迎来25年来最大更新，全面AI化**\n\n谷歌将搜索改造为AI模式，加入智能体和生成式界面。",
+        perspectives={"Techzine": "关注搜索变化。", "3DNews": "关注搜索AI化。"},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["Techzine"], perspective="关注搜索变化。"),
+            PerspectiveGroup(sources=["3DNews"], perspective="关注搜索AI化。"),
+        ],
+    )
+    wear_os = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Smartphones & Electronics",
+            articles=[
+                _article("IT之家", "谷歌发布 Wear OS 7：智能手表续航最高提升 10%，新增 Gemini 智能入口"),
+                _article("The Verge", "Google announces Wear OS 7 with Gemini features"),
+            ],
+        ),
+        summary="**谷歌发布Wear OS 7，续航提升并集成Gemini AI**\n\nWear OS 7面向智能手表推出续航优化和Gemini入口。",
+        perspectives={"IT之家": "关注续航提升。", "The Verge": "关注手表系统更新。"},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["IT之家"], perspective="关注续航提升。"),
+            PerspectiveGroup(sources=["The Verge"], perspective="关注手表系统更新。"),
+        ],
+    )
+    glasses = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Smartphones & Electronics",
+            articles=[
+                _article("IT之家", "谷歌携手三星展示 2 款智能眼镜：整合 Gemini AI"),
+                _article("3DNews", "Google пообещала выпустить умные очки на Android XR уже осенью"),
+            ],
+        ),
+        summary="**谷歌与三星合作推出智能眼镜，今秋上市**\n\n谷歌展示搭载Android XR和Gemini的智能眼镜。",
+        perspectives={"IT之家": "关注眼镜功能。", "3DNews": "关注Android XR。"},
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["IT之家"], perspective="关注眼镜功能。"),
+            PerspectiveGroup(sources=["3DNews"], perspective="关注Android XR。"),
+        ],
+    )
+
+    _hot_topics, _focus_storylines, regular, _positive = resolve_display_duplicates(
+        [],
+        [],
+        [search, wear_os, glasses],
+        [],
+    )
+
+    assert regular == [search, wear_os, glasses]
+    assert all(summary.duplicate_action == "kept" for summary in regular)
+
+
+def test_display_duplicate_resolver_keeps_putin_visit_neighbor_events_separate():
+    visit = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                _article("联合早报", "普京结束访华飞离北京 张国清送机"),
+                _article("卫星通讯社", "习近平：中俄关系已经迈上新起点"),
+            ],
+        ),
+        summary="**普京结束访华飞离北京，中俄元首茶叙**\n\n普京结束访华行程，中俄元首会晤强调双边关系。",
+        perspectives={"联合早报": "关注送机规格。", "卫星通讯社": "关注中俄关系表述。"},
+    )
+    north_korea = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                _article("联合早报", "韩联社：习近平最早可能下周访问朝鲜"),
+                _article("卫星通讯社", "韩联社：习近平或于下周访问朝鲜"),
+            ],
+        ),
+        summary="**韩联社：习近平最早可能下周访问朝鲜**\n\n韩国媒体称习近平可能访问朝鲜，韩国总统府希望中方发挥建设性作用。",
+        perspectives={"联合早报": "关注韩国总统府表态。", "卫星通讯社": "关注朝鲜半岛调停可能。"},
+    )
+    reunion = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="Society",
+            articles=[
+                _article("联合早报", "时隔26年 普京在北京重逢当年北海公园偶遇的中国男孩"),
+                _article("卫星通讯社", "被普京抱过的中国男孩时隔26年将再见普京"),
+            ],
+        ),
+        summary="**普京在北京与26年前偶遇的中国男孩重逢**\n\n普京访华期间与当年在北海公园偶遇的中国男孩再次见面。",
+        perspectives={"联合早报": "关注重逢过程。", "卫星通讯社": "强调人文情谊。"},
+    )
+
+    _hot_topics, _focus_storylines, regular, _positive = resolve_display_duplicates(
+        [],
+        [],
+        [visit, north_korea, reunion],
+        [],
+    )
+
+    assert regular == [visit, north_korea, reunion]
+    assert all(summary.duplicate_action == "kept" for summary in regular)
+
+
+def test_pre_summary_splitter_separates_putin_reunion_from_visit_cluster():
+    visit_articles = [
+        _article("凤凰网", "特朗普回应中俄元首会晤"),
+        _article("澎湃新闻", "俄罗斯总统普京访华期间两国元首会晤成果文件清单"),
+        _article("BBC News", "Rosenberg: Putin enjoys Xi's Chinese welcome but heads home without pipeline deal"),
+        _article("中国新闻网", "新华图讯｜俄罗斯总统普京结束访华离开北京"),
+        _article("卫星通讯社", "习近平：中俄关系已经迈上新起点"),
+    ]
+    reunion = _article("联合早报", "时隔26年 普京在北京重逢当年北海公园偶遇的中国男孩")
+    cluster = ArticleCluster(topic_category="World News", articles=[reunion, *visit_articles])
+
+    split_clusters = split_disjoint_event_articles([cluster])
+
+    assert len(split_clusters) == 2
+    assert [article.title for article in split_clusters[0].articles] == [article.title for article in visit_articles]
+    assert [article.title for article in split_clusters[1].articles] == [reunion.title]
 
 
 def test_selection_score_prefers_distinct_perspectives_over_same_angle_pileup():

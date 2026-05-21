@@ -2780,9 +2780,15 @@
             <div class="source-row">
               <div class="source-chips">
                 {% for src in c.footer_sources %}
+                {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
                   <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
+                {% else %}
+                <span class="src-chip">
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                </span>
+                {% endif %}
                 {% endfor %}
               </div>
               {% if c.has_expandable_perspectives %}
@@ -2802,9 +2808,13 @@
               <div class="persp-line">
                 <span class="persp-src">
                   {% for src in group.sources %}
+                  {% if src.url %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
                     {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
+                  {% else %}
+                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  {% endif %}
                   {% endfor %}
                 </span>
                 <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
@@ -2846,9 +2856,15 @@
             <div class="source-row">
               <div class="source-chips">
                 {% for src in c.footer_sources %}
+                {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
                   <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
+                {% else %}
+                <span class="src-chip">
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                </span>
+                {% endif %}
                 {% endfor %}
               </div>
               {% if c.has_expandable_perspectives %}
@@ -2868,9 +2884,13 @@
               <div class="persp-line">
                 <span class="persp-src">
                   {% for src in group.sources %}
+                  {% if src.url %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
                     {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
+                  {% else %}
+                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  {% endif %}
                   {% endfor %}
                 </span>
                 <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
@@ -2908,9 +2928,15 @@
             <div class="source-row">
               <div class="source-chips">
                 {% for src in c.footer_sources %}
+                {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
                   <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
+                {% else %}
+                <span class="src-chip">
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                </span>
+                {% endif %}
                 {% endfor %}
               </div>
             </div>
@@ -2976,11 +3002,15 @@
               <div class="persp-item">
                 <div class="persp-line">
                   <span class="persp-src">
-                    {% for src in group.sources %}
-                    <a href="{{ src.url }}" target="_blank" rel="noopener">
-                      {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
-                    </a>
-                    {% endfor %}
+                  {% for src in group.sources %}
+                  {% if src.url %}
+                  <a href="{{ src.url }}" target="_blank" rel="noopener">
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  </a>
+                  {% else %}
+                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  {% endif %}
+                  {% endfor %}
                   </span>
                   <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
                 </div>
