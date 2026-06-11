@@ -16,39 +16,70 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_markdown_headline(summary_text: str) -> str:
-    first = summary_text.strip().splitlines()[0] if summary_text.strip() else ""
-    return first.strip("*# ").strip()
+    for line in summary_text.splitlines():
+        match = re.match(r"\*\*(.+?)\*\*", line.strip())
+        if match:
+            return match.group(1)
+    return ""
 
 
 def _body_only_text(summary_text: str) -> str:
-    lines = summary_text.splitlines()
-    return "\n".join(lines[1:]).strip()
+    result: list[str] = []
+    headline_consumed = False
+    for line in summary_text.splitlines():
+        stripped = line.strip()
+        if not headline_consumed and re.match(r"\*\*(.+?)\*\*", stripped):
+            headline_consumed = True
+            continue
+        if re.match(r"[•·\-\*]\s*【.+?】", stripped):
+            continue
+        result.append(line)
+    while result and not result[0].strip():
+        result.pop(0)
+    while result and not result[-1].strip():
+        result.pop()
+    return "\n".join(result)
 
 
 class EditorialPlanner:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
 
-    def plan(
+    def base_plan(self, kept_summaries: list[ClusterSummary]) -> EditorialReportPlan:
+        hot_topics, focus_storylines, regular_summaries = select_hot_topic_families(kept_summaries, self.cfg)
+        return EditorialReportPlan(
+            hot_topics=hot_topics,
+            focus_storylines=focus_storylines,
+            regular_summaries=regular_summaries,
+            positive_summaries=[],
+        )
+
+    def finalize(
         self,
-        kept_summaries: list[ClusterSummary],
-        local_positive_summaries: list[ClusterSummary] | None = None,
+        base_plan: EditorialReportPlan,
+        positive_summaries: list[ClusterSummary] | None = None,
     ) -> EditorialReportPlan:
-        hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
-        positive_summaries = filter_local_positive_summaries(local_positive_summaries or [], self.cfg)
-        regular_summaries = split_positive_energy_lane(main_summaries, positive_summaries)
-        hot_topics, focus_storylines, regular_summaries, positive_summaries = resolve_display_duplicates(
-            hot_topics,
-            focus_storylines,
+        filtered_positive_summaries = filter_local_positive_summaries(positive_summaries or [], self.cfg)
+        regular_summaries = split_positive_energy_lane(base_plan.regular_summaries, filtered_positive_summaries)
+        hot_topics, focus_storylines, regular_summaries, filtered_positive_summaries = resolve_display_duplicates(
+            base_plan.hot_topics,
+            base_plan.focus_storylines,
             regular_summaries,
-            positive_summaries,
+            filtered_positive_summaries,
         )
         return EditorialReportPlan(
             hot_topics=hot_topics,
             focus_storylines=focus_storylines,
             regular_summaries=regular_summaries,
-            positive_summaries=positive_summaries,
+            positive_summaries=filtered_positive_summaries,
         )
+
+    def plan(
+        self,
+        kept_summaries: list[ClusterSummary],
+        local_positive_summaries: list[ClusterSummary] | None = None,
+    ) -> EditorialReportPlan:
+        return self.finalize(self.base_plan(kept_summaries), local_positive_summaries)
 
 
 _DEFAULT_HOT_TOPIC_ICON_KEY = "globe"

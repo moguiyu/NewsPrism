@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 from newsprism.config import Config, SourceConfig
 from newsprism.runtime.scheduler import Scheduler, split_disjoint_event_articles
 from newsprism.service.editorial_planner import (
-    EditorialPlanner,
     filter_local_positive_summaries,
     positive_energy_classification_pool,
     resolve_display_duplicates,
@@ -1061,15 +1060,6 @@ def test_scheduler_default_positive_energy_path_uses_local_feelgood_pipeline():
 
     cfg.output["positive_energy"]["use_llm_classifier"] = True
     assert scheduler._use_feelgood_pipeline() is False
-
-
-def test_scheduler_initializes_editorial_planner():
-    cfg = _config(main_limit=5)
-    scheduler = Scheduler.__new__(Scheduler)
-    scheduler.cfg = cfg
-    scheduler.editorial_planner = EditorialPlanner(cfg)
-
-    assert scheduler.editorial_planner.cfg is cfg
 
 
 def test_scheduler_selects_positive_summaries_from_existing_articles_without_llm():

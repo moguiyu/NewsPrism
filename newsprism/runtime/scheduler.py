@@ -14,7 +14,6 @@ import logging
 import re
 import shutil
 import time
-import urllib.parse
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -50,7 +49,6 @@ from newsprism.service.dedup import Deduplicator
 from newsprism.service.editorial_planner import (
     EditorialPlanner,
     positive_energy_classification_pool,
-    select_hot_topic_families,
     select_positive_energy_summaries,
     select_report_clusters,
 )
@@ -444,22 +442,6 @@ def split_disjoint_event_articles(clusters: list[ArticleCluster]) -> list[Articl
     for cluster in clusters:
         split_clusters.extend(_split_disjoint_event_articles(cluster))
     return split_clusters
-
-
-def _shared_article_domains(left: ClusterSummary, right: ClusterSummary) -> int:
-    left_domains = {
-        urllib.parse.urlparse(article.url).netloc.lower().removeprefix("www.")
-        for article in left.cluster.articles
-        if article.url
-    }
-    right_domains = {
-        urllib.parse.urlparse(article.url).netloc.lower().removeprefix("www.")
-        for article in right.cluster.articles
-        if article.url
-    }
-    left_domains.discard("")
-    right_domains.discard("")
-    return len(left_domains & right_domains)
 
 
 def _warn_on_storyline_near_miss(clusters: list[ArticleCluster], hot_keys: set[str], stage: str) -> None:
@@ -933,7 +915,10 @@ class Scheduler:
                 stats["new"], stats["developing"], stats["stale"],
             )
 
-            hot_topics, focus_storylines, main_summaries = select_hot_topic_families(kept_summaries, self.cfg)
+            base_plan = self.editorial_planner.base_plan(kept_summaries)
+            hot_topics = base_plan.hot_topics
+            focus_storylines = base_plan.focus_storylines
+            main_summaries = base_plan.regular_summaries
             positive_summaries: list[ClusterSummary] = []
             positive_cfg = self._positive_energy_cfg()
             if self._use_feelgood_pipeline():
@@ -964,10 +949,7 @@ class Scheduler:
                         self.cfg,
                     )
 
-            plan = self.editorial_planner.plan(
-                kept_summaries,
-                local_positive_summaries=positive_summaries,
-            )
+            plan = self.editorial_planner.finalize(base_plan, positive_summaries=positive_summaries)
             hot_topics = plan.hot_topics
             focus_storylines = plan.focus_storylines
             regular_summaries = plan.regular_summaries

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from newsprism.config import Config, SourceConfig
-from newsprism.service.editorial_planner import EditorialPlanner
+from newsprism.service.editorial_planner import EditorialPlanner, _body_only_text
 from newsprism.types import Article, ArticleCluster, ClusterSummary
 
 
@@ -69,3 +69,34 @@ def test_editorial_planner_folds_two_story_family_out_of_main_feed():
     assert plan.focus_storylines[0]["storyline_key"] == "iran"
     assert plan.regular_summaries == [standalone]
     assert plan.hot_topics == []
+
+
+def test_editorial_planner_finalizes_existing_base_plan():
+    planner = EditorialPlanner(_cfg())
+    first = _summary("Iran conflict update", key="iran", role="core")
+    second = _summary("Hormuz shipping disruption", key="iran", role="spillover")
+    standalone = _summary("SpaceX IPO update")
+
+    base_plan = planner.base_plan([first, second, standalone])
+    plan = planner.finalize(base_plan, positive_summaries=[])
+
+    assert len(base_plan.focus_storylines) == 1
+    assert base_plan.regular_summaries == [standalone]
+    assert plan.focus_storylines == base_plan.focus_storylines
+    assert plan.regular_summaries == [standalone]
+    assert plan.positive_summaries == []
+
+
+def test_body_only_text_strips_headline_and_perspective_bullets():
+    text = """
+
+**鲸鱼幼崽获救**
+
+救援人员将鲸鱼幼崽带回深水区。
+• 【Reuters】关注救援行动。
+- 【BBC】关注当地志愿者。
+* 【AP】关注海洋保护。
+
+"""
+
+    assert _body_only_text(text) == "救援人员将鲸鱼幼崽带回深水区。"
