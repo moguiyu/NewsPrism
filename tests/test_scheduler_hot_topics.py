@@ -1,4 +1,6 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from newsprism.config import Config, SourceConfig
 from newsprism.runtime.scheduler import Scheduler, split_disjoint_event_articles
@@ -11,7 +13,7 @@ from newsprism.service.editorial_planner import (
     select_report_clusters,
     split_positive_energy_lane,
 )
-from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
+from newsprism.types import Article, ArticleCluster, ClusterSummary, EditorialReportPlan, PerspectiveGroup
 
 
 def _config(main_limit: int = 3) -> Config:
@@ -1097,6 +1099,156 @@ def test_scheduler_selects_positive_summaries_from_existing_articles_without_llm
 
     assert not hasattr(scheduler, "feelgood_collector")
     assert scheduler._select_positive_article_summaries([article]) == [summary]
+
+
+def test_scheduler_publish_uses_editorial_base_plan_once_for_positive_pool(monkeypatch, tmp_path):
+    cfg = _config(main_limit=3)
+    cfg.clustering["time_window_hours"] = 48
+    cfg.dedup["window_days"] = 3
+    cfg.output["positive_energy"] = {
+        "enabled": True,
+        "use_llm_classifier": True,
+        "max_items": 1,
+        "min_confidence": 0.5,
+    }
+    cfg.output["hot_topics"]["enabled"] = False
+    cfg.output["english"] = {"enabled": False}
+    article = Article(
+        url="https://example.com/base-plan",
+        title="Whale calf rescued by volunteers",
+        source_name="Reuters",
+        published_at=datetime(2026, 6, 11, tzinfo=timezone.utc),
+        content="Whale calf rescued by volunteers.",
+        id=101,
+    )
+    cluster = ArticleCluster(topic_category="Culture", articles=[article])
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**Whale calf rescued by volunteers**\n\nVolunteers guided the calf back to open water.",
+        perspectives={},
+    )
+    calls: dict[str, object] = {
+        "base_plan": 0,
+        "finalize": 0,
+        "positive_pool_args": None,
+    }
+
+    class SummarizerStub:
+        def summarize_all_batch(self, clusters: list[ArticleCluster]) -> list[ClusterSummary]:
+            assert clusters == [cluster]
+            return [summary]
+
+        def classify_positive_energy(self, summaries: list[ClusterSummary]) -> list[dict[str, object]]:
+            assert summaries == [summary]
+            return [
+                {
+                    "cluster_index": 1,
+                    "good_fit": True,
+                    "positive": True,
+                    "fun": False,
+                    "low_conflict": True,
+                    "confidence": 0.95,
+                    "reason": "low-conflict rescue",
+                }
+            ]
+
+        def normalize_positive_energy_summaries(
+            self,
+            summaries: list[ClusterSummary],
+            include_english: bool = False,
+        ) -> list[ClusterSummary]:
+            assert include_english is False
+            return summaries
+
+    class EditorialPlannerStub:
+        def base_plan(self, kept_summaries: list[ClusterSummary]) -> EditorialReportPlan:
+            calls["base_plan"] = int(calls["base_plan"]) + 1
+            assert kept_summaries == [summary]
+            return EditorialReportPlan(
+                hot_topics=[],
+                focus_storylines=[],
+                regular_summaries=[summary],
+                positive_summaries=[],
+            )
+
+        def finalize(
+            self,
+            base_plan: EditorialReportPlan,
+            positive_summaries: list[ClusterSummary] | None = None,
+        ) -> EditorialReportPlan:
+            calls["finalize"] = int(calls["finalize"]) + 1
+            assert base_plan.regular_summaries == [summary]
+            assert positive_summaries == [summary]
+            return EditorialReportPlan(
+                hot_topics=base_plan.hot_topics,
+                focus_storylines=base_plan.focus_storylines,
+                regular_summaries=[],
+                positive_summaries=positive_summaries or [],
+            )
+
+        def plan(self, kept_summaries, local_positive_summaries=None):
+            raise AssertionError("publish should not recompute display planning via plan()")
+
+    def positive_pool_stub(kept_summaries, main_summaries, hot_topics, focus_storylines, pool_cfg):
+        calls["positive_pool_args"] = (kept_summaries, main_summaries, hot_topics, focus_storylines, pool_cfg)
+        assert kept_summaries == [summary]
+        assert main_summaries == [summary]
+        assert hot_topics == []
+        assert focus_storylines == []
+        assert pool_cfg is cfg
+        return [summary]
+
+    def render_stub(regular_summaries, today, **kwargs):
+        assert regular_summaries == []
+        assert kwargs["positive_summaries"] == [summary]
+        return tmp_path / "index.html"
+
+    async def publish_stub(summaries, today):
+        assert summaries == [summary]
+
+    def postcheck_stub(item: ClusterSummary) -> None:
+        item.quality_status = "publishable"
+
+    monkeypatch.setattr("newsprism.runtime.scheduler.get_recent_clusters", lambda **_: [])
+    monkeypatch.setattr("newsprism.runtime.scheduler.insert_cluster", lambda _: 1)
+    monkeypatch.setattr("newsprism.runtime.scheduler.insert_cluster_quality_report", lambda *_: None)
+    monkeypatch.setattr("newsprism.runtime.scheduler.upsert_storyline_state", lambda *_: None)
+    monkeypatch.setattr("newsprism.runtime.scheduler.mark_articles_clustered", lambda _: None)
+    monkeypatch.setattr("newsprism.runtime.scheduler.positive_energy_classification_pool", positive_pool_stub)
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.cfg = cfg
+    scheduler._pipeline_lock = asyncio.Lock()
+    scheduler.clusterer = SimpleNamespace(cluster=lambda articles: [cluster])
+    scheduler.cluster_validator = SimpleNamespace(validate=lambda clusters: clusters)
+    scheduler.seeker = SimpleNamespace(enhance_clusters=lambda clusters: clusters)
+    scheduler.quality_assessor = SimpleNamespace(assess_clusters=lambda clusters: [], postcheck_summary=postcheck_stub)
+    scheduler.storyline_state_machine = SimpleNamespace(apply=lambda clusters, historical, today: None)
+    scheduler.summarizer = SummarizerStub()
+    scheduler.freshness_evaluator = SimpleNamespace(
+        classify_all=lambda candidates, historical: [
+            (
+                cluster,
+                summary.summary,
+                SimpleNamespace(state="new", continues_cluster_id=None),
+            )
+        ],
+    )
+    scheduler.editorial_planner = EditorialPlannerStub()
+    scheduler.renderer = SimpleNamespace(render=render_stub)
+    scheduler.publisher = SimpleNamespace(publish=publish_stub)
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=datetime(2026, 6, 11, tzinfo=timezone.utc).date(),
+            articles_override=[article],
+            push_after_render=True,
+        )
+    )
+
+    assert calls["base_plan"] == 1
+    assert calls["finalize"] == 1
+    assert calls["positive_pool_args"] is not None
 
 
 def test_report_clusters_preserve_positive_energy_candidates_beyond_main_limit():
