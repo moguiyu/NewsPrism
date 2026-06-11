@@ -26,6 +26,8 @@ def _cfg() -> Config:
             _source("Sports Feed"),
             _source("Science Feed"),
             _source("City Feed"),
+            _source("BBC News"),
+            _source("Ars Technica"),
             _source("中文源", language="zh"),
         ],
         topics={},
@@ -147,6 +149,34 @@ def test_feelgood_scorer_blocks_pseudo_positive_policy_conflict_and_market_news(
     assert [summary.cluster.articles[0].title for summary in selected] == [
         "Adorable puppy rescued by volunteers"
     ]
+
+
+def test_feelgood_scorer_blocks_military_rescue_story():
+    cfg = _cfg()
+    scorer = FeelgoodScorer(cfg)
+    article = _article(
+        "BBC News",
+        "Sea drone rescues US army helicopter crew near Strait of Hormuz",
+        "A US army helicopter went down near the Strait of Hormuz and two crew members were rescued.",
+    )
+
+    selected = scorer.select_articles([article], limit=5)
+
+    assert selected == []
+
+
+def test_feelgood_scorer_blocks_downed_helicopter_rescue_story():
+    cfg = _cfg()
+    scorer = FeelgoodScorer(cfg)
+    article = _article(
+        "Ars Technica",
+        "Drone boat picked up downed US Army helicopter pilots, a first for sea rescues",
+        "The US military said the drone boat rescued pilots after a helicopter went down near the Strait of Hormuz.",
+    )
+
+    selected = scorer.select_articles([article], limit=5)
+
+    assert selected == []
 
 
 def test_feelgood_scorer_matches_chinese_themes_and_keeps_no_english_summary_for_zh_source():

@@ -69,6 +69,33 @@ _NEGATIVE_FALLBACK_WORDS = (
     "灾难",
 )
 
+_LOCAL_RISK_BLOCKERS = (
+    "armed forces",
+    "army",
+    "crash",
+    "crashed",
+    "crew went down",
+    "downed",
+    "helicopter",
+    "hormuz",
+    "military",
+    "missile",
+    "navy",
+    "pilot went down",
+    "pilots went down",
+    "soldier",
+    "strait of hormuz",
+    "troop",
+    "海峡",
+    "霍尔木兹",
+    "军事",
+    "军方",
+    "军队",
+    "士兵",
+    "坠落",
+    "直升机",
+)
+
 _ENTITY_PATTERNS: dict[str, tuple[str, ...]] = {
     "animal": (
         r"\b(?:animal|dog|puppy|cat|kitten|bird|penguin|panda|otter|whale|dolphin|turtle)\b",
@@ -166,6 +193,7 @@ class FeelgoodScorer:
             )
             if str(keyword).strip()
         ]
+        self.blockers = list(dict.fromkeys([*self.blockers, *_LOCAL_RISK_BLOCKERS]))
         self.entity_weights = (
             self.keywords.get("entity_weights", {}) if isinstance(self.keywords, dict) else {}
         ) or {}
