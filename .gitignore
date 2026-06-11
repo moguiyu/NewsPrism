@@ -33,3 +33,9 @@ AGENTS.md
 CLAUDE.md
 *.code-workspace
 .worktrees/
+
+# Local-only internal documentation and review artifacts.
+docs/
+debug-perspectives-bug.html
+eval-report-*.png
+report-overview.png

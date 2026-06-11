@@ -1,0 +1,51 @@
+#!/bin/bash
+# Pre-push hook: keep local-only documentation out of the public GitHub remote.
+
+set -e
+
+remote_name="$1"
+remote_url="$2"
+
+case "$remote_name:$remote_url" in
+    origin:*|*:github.com/moguiyu/NewsPrism.git*)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+BLOCKED_PATH_RE='^(docs/|debug-perspectives-bug\.html$|eval-report-.*\.png$|report-overview\.png$)'
+zero_sha='0000000000000000000000000000000000000000'
+
+check_paths() {
+    local blocked
+    blocked="$(printf '%s\n' "$1" | grep -E "$BLOCKED_PATH_RE" || true)"
+    if [[ -n "$blocked" ]]; then
+        echo "ERROR: refusing to push local-only documentation/artifacts to $remote_name."
+        echo "Blocked paths match:"
+        printf '%s\n' "$blocked" | sed 's/^/  - /'
+        echo ""
+        echo "Keep these on the local-only branch, not public GitHub refs."
+        exit 1
+    fi
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [[ "$local_sha" == "$zero_sha" ]]; then
+        continue
+    fi
+
+    check_paths "$(git ls-tree -r --name-only "$local_sha")"
+
+    if [[ "$remote_sha" == "$zero_sha" ]]; then
+        check_paths "$(git rev-list "$local_sha" --not --remotes="$remote_name" |
+            while read -r commit; do
+                git diff-tree --no-commit-id --name-only -r "$commit"
+            done)"
+    else
+        check_paths "$(git rev-list "$remote_sha..$local_sha" |
+            while read -r commit; do
+                git diff-tree --no-commit-id --name-only -r "$commit"
+            done)"
+    fi
+done
