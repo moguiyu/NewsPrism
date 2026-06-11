@@ -148,6 +148,8 @@ _EVENT_ENTITY_TERMS = (
     "通用汽车",
     "NASA",
     "SpaceX",
+    "whale",
+    "calf",
 )
 _EVENT_ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     "visit": ("访华", "赴华", "访问", "出访", "visit", "trip"),
@@ -161,6 +163,7 @@ _EVENT_ACTION_ALIASES: dict[str, tuple[str, ...]] = {
     "ruling": ("裁定", "判决", "法院", "罚款", "ruling", "court", "verdict", "sentence"),
     "sanction": ("制裁", "关税", "出口管制", "禁令", "sanction", "tariff", "ban"),
     "accident": ("事故", "坠毁", "爆炸", "遇难", "crash", "accident", "explosion"),
+    "rescue": ("救援", "获救", "营救", "rescue", "rescues", "rescued", "rescuing"),
     "poll": ("民调", "调查显示", "poll", "survey"),
 }
 _EVENT_TIME_PATTERNS = (
@@ -788,6 +791,8 @@ def _strong_duplicate_anchor(
         return True, f"shared_context:{','.join(sorted(shared_contexts))}", 0.78
     if core_overlap >= 0.38 and shared_entities:
         return True, "high_core_text_similarity", 0.78
+    if "rescue" in shared_actions and len(shared_entities) >= 2:
+        return True, "rescue_entity_overlap", 0.76
     if broad_overlap >= 0.48 and len(shared_entities) >= 2 and shared_actions:
         return True, "high_text_similarity_with_entities", 0.76
     return False, "", max(0.0, min(0.74, max(core_overlap, broad_overlap)))
@@ -1473,7 +1478,15 @@ _POSITIVE_ENERGY_FINAL_BLOCKERS = (
     "market",
     "shares",
     "stock",
+    "downed",
+    "helicopter",
+    "hormuz",
+    "strait of hormuz",
     "military",
+    "army",
+    "armed forces",
+    "navy",
+    "missile",
     "troop",
     "war",
     "attack",
@@ -1496,6 +1509,16 @@ _POSITIVE_ENERGY_FINAL_BLOCKERS = (
     "市场",
     "股价",
     "军事",
+    "军方",
+    "军队",
+    "武装部队",
+    "海军",
+    "导弹",
+    "霍尔木兹",
+    "海峡",
+    "直升机",
+    "坠毁",
+    "击落",
     "战争",
     "袭击",
     "死亡",
@@ -1517,6 +1540,18 @@ def _summary_blocked_for_positive_energy(summary: ClusterSummary) -> bool:
         ]
     ).lower()
     return any(blocker in text for blocker in _POSITIVE_ENERGY_FINAL_BLOCKERS)
+
+
+def filter_local_positive_summaries(positive_summaries: list[ClusterSummary], cfg: Config) -> list[ClusterSummary]:
+    positive_cfg = cfg.output.get("positive_energy", {}) if isinstance(cfg.output, dict) else {}
+    max_items = max(0, int(positive_cfg.get("max_items", 5)))
+    candidates = [
+        summary
+        for summary in positive_summaries
+        if not _summary_blocked_for_positive_energy(summary)
+    ]
+    _hot_topics, _focus_storylines, _regular_summaries, filtered = resolve_display_duplicates([], [], [], candidates)
+    return filtered[:max_items]
 
 
 def select_positive_energy_summaries(
@@ -2118,6 +2153,7 @@ class Scheduler:
                     except Exception as exc:
                         logger.warning("Feelgood micro-pipeline failed; positive section omitted: %s", exc)
                         positive_summaries = []
+                positive_summaries = filter_local_positive_summaries(positive_summaries, self.cfg)
                 logger.info(
                     "Positive energy local pipeline from existing articles: selected=%d use_llm_classifier=false",
                     len(positive_summaries),

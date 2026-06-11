@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from newsprism.config import Config, SourceConfig
 from newsprism.runtime.scheduler import (
     Scheduler,
+    filter_local_positive_summaries,
     positive_energy_classification_pool,
     resolve_display_duplicates,
     select_hot_topic_families,
@@ -1015,6 +1016,39 @@ def test_select_positive_energy_summaries_allows_one_strong_story_by_default():
 
     assert selected == [summary]
     assert selected[0].positive_energy_reason == "小鲸可爱暖心"
+
+
+def test_local_positive_summaries_are_blocked_by_final_risk_terms():
+    cfg = _config(main_limit=5)
+    cfg.output["positive_energy"] = {"enabled": True, "max_items": 5}
+    risky = _positive_summary(
+        "BBC News",
+        "https://bbc.example/hormuz",
+        "Sea drone rescues US army helicopter crew near Strait of Hormuz",
+    )
+
+    filtered = filter_local_positive_summaries([risky], cfg)
+
+    assert filtered == []
+
+
+def test_local_positive_summaries_suppress_duplicate_events():
+    cfg = _config(main_limit=5)
+    cfg.output["positive_energy"] = {"enabled": True, "max_items": 5}
+    first = _positive_summary(
+        "Source A",
+        "https://a.example/rescue",
+        "Whale calf rescued by volunteers",
+    )
+    second = _positive_summary(
+        "Source B",
+        "https://b.example/rescue",
+        "Volunteers rescue whale calf",
+    )
+
+    filtered = filter_local_positive_summaries([first, second], cfg)
+
+    assert len(filtered) == 1
 
 
 def test_scheduler_default_positive_energy_path_uses_local_feelgood_pipeline():
