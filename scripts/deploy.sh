@@ -62,7 +62,12 @@ echo ""
 echo "→ Rebuilding and restarting containers..."
 $SSH "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml up -d --build"
 
-# ── 4. Verify ─────────────────────────────────────────────────────────────────
+# ── 4. Remove old dangling images ─────────────────────────────────────────────
+echo ""
+echo "→ Removing old dangling Docker images..."
+$SSH "docker image prune -f"
+
+# ── 5. Verify ─────────────────────────────────────────────────────────────────
 echo ""
 echo "→ Verifying..."
 $SSH "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml ps && docker compose -f docker-compose.dev.yml logs --tail=30 newsprism"
