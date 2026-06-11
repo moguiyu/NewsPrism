@@ -447,6 +447,7 @@ class TestPerspectivesContext:
             grouped_perspectives=[
                 PerspectiveGroup(sources=["Reuters", "BBC"], perspective="Both sources report the same core fact."),
             ],
+            quality_status="publishable",
         )
 
         html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
@@ -457,6 +458,52 @@ class TestPerspectivesContext:
         assert "视角差异：" not in html
         assert payload["clusters"][0]["distinct_perspective_count"] == 1
         assert payload["clusters"][0]["source_confirmation_preview"]
+
+    def test_render_does_not_confirm_sources_when_quality_needs_review(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.example/story",
+                        title="Same fact disputed",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Same fact body.",
+                    ),
+                    Article(
+                        url="https://bbc.example/story",
+                        title="Same fact disputed",
+                        source_name="BBC",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Same fact body.",
+                    ),
+                ],
+            ),
+            summary="**Same fact disputed**\n\nBody text here.",
+            perspectives={
+                "Reuters": "Both sources report the same framing.",
+                "BBC": "Both sources report the same framing.",
+            },
+            grouped_perspectives=[
+                PerspectiveGroup(
+                    sources=["Reuters", "BBC"],
+                    perspective="Both sources report the same framing.",
+                ),
+            ],
+            quality_status="needs_review",
+            quality_score=0.41,
+            quality_flags=["summary_claim_gap"],
+        )
+
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert "存在争议" in html
+        assert "多源确认：" not in html
+        assert payload["clusters"][0]["source_confirmation_preview"] == ""
 
     def test_focus_storyline_prefers_readable_name_over_truncated_prefix(self, renderer, tmp_path):
         renderer.output_dir = tmp_path

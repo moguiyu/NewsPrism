@@ -292,6 +292,14 @@ def _truncate_preview(text: str, max_chars: int = 54) -> str:
     return compact[: max_chars - 1].rstrip("，,、；;：: ") + "…"
 
 
+def _can_show_source_confirmation(summary: ClusterSummary, distinct_perspective_count: int) -> bool:
+    return (
+        summary.cluster.is_multi_source
+        and distinct_perspective_count == 1
+        and getattr(summary, "quality_status", "unknown") == "publishable"
+    )
+
+
 _MANIFEST_JSON = json.dumps(
     {
         "name": "NewsPrism - 多源新闻聚合",
@@ -783,6 +791,10 @@ class HtmlRenderer:
         perspectives_list = perspective_payload["perspectives_list"]
         perspectives_list_en = perspective_payload_en["perspectives_list"]
         broad = _broad_category(summary.cluster.topic_category)
+        can_show_source_confirmation = _can_show_source_confirmation(
+            summary,
+            perspective_payload["distinct_perspective_count"],
+        )
 
         base = {
             "index": index,
@@ -806,12 +818,12 @@ class HtmlRenderer:
             "perspective_preview_en": perspective_payload_en["perspective_preview"],
             "source_confirmation_preview": (
                 "多家来源呈现相近事实框架。"
-                if summary.cluster.is_multi_source and perspective_payload["distinct_perspective_count"] == 1
+                if can_show_source_confirmation
                 else ""
             ),
             "source_confirmation_preview_en": (
                 "Multiple sources confirm the same core framing."
-                if summary.cluster.is_multi_source and perspective_payload["distinct_perspective_count"] == 1
+                if can_show_source_confirmation
                 else ""
             ),
             "has_expandable_perspectives": perspective_payload["has_expandable_perspectives"],
