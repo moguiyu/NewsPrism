@@ -228,6 +228,15 @@ class ClusterSummary:
 
 
 @dataclass
+class EditorialReportPlan:
+    """Display-ready report buckets produced after summary, quality, and freshness checks."""
+    hot_topics: list[dict[str, object]] = field(default_factory=list)
+    focus_storylines: list[dict[str, object]] = field(default_factory=list)
+    regular_summaries: list[ClusterSummary] = field(default_factory=list)
+    positive_summaries: list[ClusterSummary] = field(default_factory=list)
+
+
+@dataclass
 class PerspectiveGroup:
     """One distinct perspective shared by one or more sources."""
     sources: list[str]
