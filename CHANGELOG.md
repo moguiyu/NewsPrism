@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.1 - 2026-06-12
+
+Editorial planning and deployment maintenance patch.
+
+### Fixed
+
+- Small focus storylines now require event-coherent members instead of folding unrelated stories by shared storyline key alone.
+- Iran-war energy and inflation spillover stories are absorbed into the existing focus storyline instead of occupying the main feed separately.
+- `今日正能量` now blocks product roundups, accessories buying guides, and AI model/API launch stories in both local scoring and final filtering.
+
+### Changed
+
+- fnOS source-build deployment now prunes old dangling Docker images after a successful rebuild.
+
 ## v0.4.0 - 2026-05-19
 
 LLM-driven clustering and batch summarisation release.
