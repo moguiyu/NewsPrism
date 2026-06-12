@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from newsprism.config import Config, SourceConfig
+from newsprism.config import Config, SourceConfig, load_config
 from newsprism.service.feelgood_scorer import FeelgoodScorer
 from newsprism.types import Article
 
@@ -142,6 +142,46 @@ def test_feelgood_scorer_blocks_pseudo_positive_policy_conflict_and_market_news(
             _article("Science Feed", "Space company celebrates after test crash"),
             _article("Science Feed", "Water returns to wetlands as drought fears loom"),
             _article("Animal Feed", "Adorable puppy rescued by volunteers"),
+        ],
+        limit=5,
+    )
+
+    assert [summary.cluster.articles[0].title for summary in selected] == [
+        "Adorable puppy rescued by volunteers"
+    ]
+
+
+def test_feelgood_scorer_blocks_product_roundups():
+    scorer = FeelgoodScorer(load_config())
+    selected = scorer.select_articles(
+        [
+            _article(
+                "Wired",
+                "Best iPad Accessories (2026): Keyboards, Cases, Styli",
+                "This product roundup lists keyboards, cases, styli, accessories, and design picks.",
+                url="https://www.wired.com/gallery/best-ipad-accessories/",
+            ),
+            _article("BBC News", "Adorable puppy rescued by volunteers"),
+        ],
+        limit=5,
+    )
+
+    assert [summary.cluster.articles[0].title for summary in selected] == [
+        "Adorable puppy rescued by volunteers"
+    ]
+
+
+def test_feelgood_scorer_blocks_ai_model_api_launches():
+    scorer = FeelgoodScorer(load_config())
+    selected = scorer.select_articles(
+        [
+            _article(
+                "TechCrunch",
+                "Decart launches a video model available via API",
+                "The startup says developers can use the model through API access after launch.",
+                url="https://techcrunch.com/example/decart-model-launch/",
+            ),
+            _article("BBC News", "Adorable puppy rescued by volunteers"),
         ],
         limit=5,
     )

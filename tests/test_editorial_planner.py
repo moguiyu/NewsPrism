@@ -35,7 +35,7 @@ def _cfg() -> Config:
     )
 
 
-def _summary(title: str, key: str | None = None, role: str = "none") -> ClusterSummary:
+def _summary(title: str, key: str | None = None, role: str = "none", body: str | None = None) -> ClusterSummary:
     cluster = ArticleCluster(
         topic_category="World News",
         articles=[
@@ -44,7 +44,7 @@ def _summary(title: str, key: str | None = None, role: str = "none") -> ClusterS
                 title=title,
                 source_name="Reuters",
                 published_at=datetime.now(tz=timezone.utc),
-                content=f"{title} body.",
+                content=body or f"{title} body.",
             )
         ],
     )
@@ -54,13 +54,13 @@ def _summary(title: str, key: str | None = None, role: str = "none") -> ClusterS
     cluster.macro_topic_name = "伊朗局势" if key else None
     cluster.storyline_role = role
     cluster.storyline_membership_status = role if role in {"core", "spillover"} else "none"
-    return ClusterSummary(cluster=cluster, summary=f"**{title}**\n\nBody.")
+    return ClusterSummary(cluster=cluster, summary=f"**{title}**\n\n{body or 'Body.'}")
 
 
 def test_editorial_planner_folds_two_story_family_out_of_main_feed():
     planner = EditorialPlanner(_cfg())
-    first = _summary("Iran conflict update", key="iran", role="core")
-    second = _summary("Hormuz shipping disruption", key="iran", role="spillover")
+    first = _summary("Iran war talks update", key="iran", role="core", body="Iran war talks continue.")
+    second = _summary("Iran war disrupts Hormuz shipping", key="iran", role="spillover", body="Iran war disruption affects Hormuz shipping.")
     standalone = _summary("SpaceX IPO update")
 
     plan = planner.plan([first, second, standalone], local_positive_summaries=[])
@@ -71,10 +71,62 @@ def test_editorial_planner_folds_two_story_family_out_of_main_feed():
     assert plan.hot_topics == []
 
 
+def test_editorial_planner_absorbs_related_spillover_into_focus_storyline():
+    planner = EditorialPlanner(_cfg())
+    iran_talks = _summary(
+        "特朗普称美伊协议即将签署",
+        key="middle-east",
+        role="core",
+        body="美国与伊朗围绕战争降级和协议继续谈判。",
+    )
+    opec_oil = _summary(
+        "OPEC下调全球石油需求增长预测",
+        key="middle-east",
+        role="spillover",
+        body="OPEC下调石油需求预测，市场关注伊朗战争对能源价格的影响。",
+    )
+    ecb_inflation = _summary(
+        "欧洲央行加息应对伊朗战争引发的通胀",
+        body="欧洲央行加息以应对伊朗战争导致的能源价格飙升和通胀上升。",
+    )
+    standalone = _summary("SpaceX IPO update")
+
+    plan = planner.plan([iran_talks, opec_oil, ecb_inflation, standalone], local_positive_summaries=[])
+
+    assert len(plan.focus_storylines) == 1
+    assert [summary for summary in plan.focus_storylines[0]["summaries"]] == [
+        iran_talks,
+        opec_oil,
+        ecb_inflation,
+    ]
+    assert plan.regular_summaries == [standalone]
+
+
+def test_editorial_planner_does_not_fold_unrelated_ai_items_by_key_only():
+    planner = EditorialPlanner(_cfg())
+    safety = _summary(
+        "Anthropic apologizes for hidden Claude safety guardrail",
+        key="ai-vendors",
+        role="core",
+        body="Anthropic adjusted Claude safety guardrails after user complaints.",
+    )
+    pricing = _summary(
+        "OpenAI plans price cuts to compete with Anthropic",
+        key="ai-vendors",
+        role="core",
+        body="OpenAI is preparing pricing changes to compete with Anthropic for enterprise users.",
+    )
+
+    plan = planner.plan([safety, pricing], local_positive_summaries=[])
+
+    assert plan.focus_storylines == []
+    assert {id(summary) for summary in plan.regular_summaries} == {id(safety), id(pricing)}
+
+
 def test_editorial_planner_finalizes_existing_base_plan():
     planner = EditorialPlanner(_cfg())
-    first = _summary("Iran conflict update", key="iran", role="core")
-    second = _summary("Hormuz shipping disruption", key="iran", role="spillover")
+    first = _summary("Iran war talks update", key="iran", role="core", body="Iran war talks continue.")
+    second = _summary("Iran war disrupts Hormuz shipping", key="iran", role="spillover", body="Iran war disruption affects Hormuz shipping.")
     standalone = _summary("SpaceX IPO update")
 
     base_plan = planner.base_plan([first, second, standalone])

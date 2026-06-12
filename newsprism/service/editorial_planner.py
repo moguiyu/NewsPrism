@@ -118,6 +118,8 @@ _EVENT_ENTITY_ALIASES = {
 
 
 _EVENT_ENTITY_TERMS = (
+    "OPEC",
+    "ECB",
     "特朗普",
     "习近平",
     "拜登",
@@ -137,6 +139,7 @@ _EVENT_ENTITY_TERMS = (
     "俄罗斯",
     "乌克兰",
     "欧盟",
+    "欧洲央行",
     "墨西哥",
     "台湾",
     "菲律宾",
@@ -230,7 +233,13 @@ _EVENT_TOKEN_STOPWORDS = {
 
 
 _POSITIVE_ENERGY_FINAL_BLOCKERS = (
+    "accessories",
     "ai-generated",
+    "api access",
+    "available via api",
+    "best ipad accessories",
+    "broadcast",
+    "buying guide",
     "ineligible",
     "eligible",
     "eligibility",
@@ -248,8 +257,13 @@ _POSITIVE_ENERGY_FINAL_BLOCKERS = (
     "tariff",
     "trade",
     "market",
+    "model launch",
+    "product roundup",
     "shares",
     "stock",
+    "streaming",
+    "styli",
+    "via api",
     "downed",
     "helicopter",
     "hormuz",
@@ -614,10 +628,31 @@ def _event_time_anchors(value: str) -> set[str]:
 def _event_context_anchors(value: str) -> set[str]:
     expanded = _expand_event_aliases(value).lower()
     anchors: set[str] = set()
+    energy_inflation_terms = (
+        "opec",
+        "oil",
+        "energy",
+        "inflation",
+        "rate",
+        "rates",
+        "central bank",
+        "ecb",
+        "石油",
+        "能源",
+        "油价",
+        "通胀",
+        "加息",
+        "央行",
+        "欧洲央行",
+    )
     if ("伊朗" in expanded or "iran" in expanded) and any(
         token in expanded for token in ("战争", "军事行动", "打击", "霍尔木兹", "war", "strike", "hormuz")
     ):
         anchors.add("iran-war")
+        if any(token in expanded for token in energy_inflation_terms):
+            anchors.add("iran-energy-spillover")
+    if any(token in expanded for token in energy_inflation_terms):
+        anchors.add("energy-inflation")
     if ("特朗普" in expanded or "trump" in expanded) and ("中国" in expanded or "china" in expanded) and any(
         token in expanded for token in ("访华", "访问", "会晤", "visit", "trip", "talk")
     ):
@@ -970,14 +1005,24 @@ def _deduplicate_main_lane(summaries: list[ClusterSummary]) -> list[ClusterSumma
 def _summary_family_link(left: ClusterSummary, right: ClusterSummary) -> bool:
     if _summary_anchor_labels(left) & _summary_anchor_labels(right):
         return True
+    left_sig = _summary_event_signature(left)
+    right_sig = _summary_event_signature(right)
+    shared_contexts = set(left_sig["contexts"]) & set(right_sig["contexts"])
+    shared_entities = set(left_sig["entities"]) & set(right_sig["entities"])
+    shared_actions = set(left_sig["actions"]) & set(right_sig["actions"])
+    if "iran-war" in shared_contexts and shared_entities and shared_actions:
+        return True
     signature_match, _reason, _confidence = _event_signature_duplicate(left, right)
     return signature_match
 
 
-def _coherent_family_component(members: list[ClusterSummary]) -> list[ClusterSummary]:
+def _coherent_family_component(
+    members: list[ClusterSummary],
+    allow_unanchored_family: bool = False,
+) -> list[ClusterSummary]:
     if not members:
         return []
-    if not any(_summary_anchor_labels(member) for member in members):
+    if allow_unanchored_family and not any(_summary_anchor_labels(member) for member in members):
         return members
 
     components: list[list[ClusterSummary]] = []
@@ -1003,6 +1048,45 @@ def _coherent_family_component(members: list[ClusterSummary]) -> list[ClusterSum
 
     components.sort(key=lambda group: (-len(group), members.index(group[0])))
     return components[0]
+
+
+def _related_focus_spillover(candidate: ClusterSummary, family_members: list[ClusterSummary]) -> bool:
+    candidate_sig = _summary_event_signature(candidate)
+    candidate_contexts = set(candidate_sig["contexts"])
+    if "iran-energy-spillover" not in candidate_contexts:
+        return False
+    candidate_entities = set(candidate_sig["entities"])
+    for member in family_members:
+        member_sig = _summary_event_signature(member)
+        member_contexts = set(member_sig["contexts"])
+        if not ({"iran-war", "iran-energy-spillover"} & member_contexts):
+            continue
+        if candidate_entities & set(member_sig["entities"]):
+            return True
+    return False
+
+
+def _absorb_focus_storyline_spillovers(
+    focus_storylines: list[dict[str, object]],
+    standalone_candidates: list[ClusterSummary],
+) -> list[ClusterSummary]:
+    remaining: list[ClusterSummary] = []
+    for candidate in standalone_candidates:
+        absorbed = False
+        for family in focus_storylines:
+            summaries = family.get("summaries")
+            if not isinstance(summaries, list):
+                continue
+            family_members = [summary for summary in summaries if isinstance(summary, ClusterSummary)]
+            if not _related_focus_spillover(candidate, family_members):
+                continue
+            summaries.append(candidate)
+            family["member_count"] = len(summaries)
+            absorbed = True
+            break
+        if not absorbed:
+            remaining.append(candidate)
+    return remaining
 
 
 def _validated_family_name(members: list[ClusterSummary], max_chars: int) -> str:
@@ -1227,7 +1311,7 @@ def select_hot_topic_families(
     assigned_hot_keys: set[str] = set()
     for position, key in enumerate(hot_keys, 1):
         members = hot_grouped[key]
-        validated_members = _coherent_family_component(members)
+        validated_members = _coherent_family_component(members, allow_unanchored_family=True)
         if len(validated_members) < min_items_per_topic:
             logger.info(
                 "Hot topic family %s suppressed after coherence validation: %d -> %d members",
@@ -1284,6 +1368,8 @@ def select_hot_topic_families(
             group_order.get(str(family["storyline_key"]), 0),
         ),
     )
+
+    standalone_candidates = _absorb_focus_storyline_spillovers(focus_storylines, standalone_candidates)
 
     main_candidates = list(standalone_candidates)
     for key, members in storyline_grouped.items():

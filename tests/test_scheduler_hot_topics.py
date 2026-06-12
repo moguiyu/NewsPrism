@@ -1033,6 +1033,30 @@ def test_local_positive_summaries_are_blocked_by_final_risk_terms():
     assert filtered == []
 
 
+def test_local_positive_summaries_block_product_roundups_and_model_launches():
+    cfg = _config(main_limit=5)
+    cfg.output["positive_energy"] = {"enabled": True, "max_items": 5}
+    roundup = _positive_summary(
+        "Wired",
+        "https://wired.example/ipad-accessories",
+        "Best iPad Accessories: keyboards, cases, and styli",
+    )
+    model_launch = _positive_summary(
+        "TechCrunch",
+        "https://techcrunch.example/decart-model-launch",
+        "Decart launches a video model available via API",
+    )
+    puppy = _positive_summary(
+        "BBC News",
+        "https://bbc.example/puppy",
+        "Adorable puppy rescued by volunteers",
+    )
+
+    filtered = filter_local_positive_summaries([roundup, model_launch, puppy], cfg)
+
+    assert [summary.cluster.articles[0].url for summary in filtered] == ["https://bbc.example/puppy"]
+
+
 def test_local_positive_summaries_suppress_duplicate_events():
     cfg = _config(main_limit=5)
     cfg.output["positive_energy"] = {"enabled": True, "max_items": 5}
