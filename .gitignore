@@ -39,3 +39,5 @@ docs/
 debug-perspectives-bug.html
 eval-report-*.png
 report-overview.png
+.playwright-mcp/
+.firecrawl/

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from newsprism.config import Config, SourceConfig
-from newsprism.runtime.scheduler import Scheduler, split_disjoint_event_articles
+from newsprism.runtime.scheduler import Scheduler
 from newsprism.service.editorial_planner import (
     filter_local_positive_summaries,
     positive_energy_classification_pool,
@@ -586,24 +586,6 @@ def test_display_duplicate_resolver_keeps_putin_visit_neighbor_events_separate()
 
     assert regular == [visit, north_korea, reunion]
     assert all(summary.duplicate_action == "kept" for summary in regular)
-
-
-def test_pre_summary_splitter_separates_putin_reunion_from_visit_cluster():
-    visit_articles = [
-        _article("凤凰网", "特朗普回应中俄元首会晤"),
-        _article("澎湃新闻", "俄罗斯总统普京访华期间两国元首会晤成果文件清单"),
-        _article("BBC News", "Rosenberg: Putin enjoys Xi's Chinese welcome but heads home without pipeline deal"),
-        _article("中国新闻网", "新华图讯｜俄罗斯总统普京结束访华离开北京"),
-        _article("卫星通讯社", "习近平：中俄关系已经迈上新起点"),
-    ]
-    reunion = _article("联合早报", "时隔26年 普京在北京重逢当年北海公园偶遇的中国男孩")
-    cluster = ArticleCluster(topic_category="World News", articles=[reunion, *visit_articles])
-
-    split_clusters = split_disjoint_event_articles([cluster])
-
-    assert len(split_clusters) == 2
-    assert [article.title for article in split_clusters[0].articles] == [article.title for article in visit_articles]
-    assert [article.title for article in split_clusters[1].articles] == [reunion.title]
 
 
 def test_selection_score_prefers_distinct_perspectives_over_same_angle_pileup():

@@ -24,44 +24,6 @@ collection:
   rate_limit_delay: 2.0      # seconds between requests to same domain
   retry_attempts: 3
   retry_backoff: 2.0
-  delta_source_names:
-    - IT之家
-    - 澎湃新闻
-    - 凤凰网
-    - 华尔街见闻
-    - 36氪
-    - 中国新闻网
-    - AP News
-    - Reuters
-    - BBC News
-    - The Guardian
-    - The Hindu
-    - 联合早报
-    - 연합뉴스
-    - Yonhap News EN
-    - Kyiv Independent
-    - 朝日新聞
-    - ITmedia NEWS
-    - 卫星通讯社
-  backoff:
-    enabled: true
-    failure_threshold: 9
-    rolling_window_runs: 18
-    restore_success_streak: 3
-    daily_retry_hours_local: [18]
-    seed_daily_retry_source_names:
-      - tagesschau
-      - Tweakers
-      - Platum
-      - Nu.nl Tech
-      - Niebezpiecznik
-      - NHKニュース
-      - NDTV
-      - Financial Times
-      - Deutsche Welle Tech
-      - РБК
-      - VOA中文
-      - MIT Technology Review
 
 # ─── FILTERING ─────────────────────────────────────────────────────────────────
 filter:
@@ -227,24 +189,6 @@ active_search:
   min_cluster_title_overlap: 0.08
   max_existing_title_overlap: 0.82
   allow_unknown_freshness_for_official: false
-  cost_tracking:
-    billing:
-      brightdata_serp:
-        pricing_mode: per_result
-        unit_cost_usd: 0.0015          # Bright Data SERP API pay-as-you-go: $1.5 / 1K results
-        estimated_results_per_request: 4
-      tavily_search:
-        pricing_mode: per_request
-        unit_cost_usd: 0.008           # Update to your live Tavily plan if it differs
-      x_recent_search:
-        pricing_mode: per_request
-        unit_cost_usd: null            # Fill from the active X developer billing view
-      x_user_lookup:
-        pricing_mode: per_request
-        unit_cost_usd: null            # Fill from the active X developer billing view
-      x_user_timeline:
-        pricing_mode: per_request
-        unit_cost_usd: null            # Fill from the active X developer billing view
   search_profiles:
     # Major powers
     us:
@@ -1080,6 +1024,7 @@ sources:
     language: en
     region: us
     tier: editorial
+    enabled: false
     perspective: "国际权威通讯社，事实导向，科技/地缘政治"
 
   - name: AP News
@@ -1093,6 +1038,7 @@ sources:
     language: en
     region: us
     tier: editorial
+    enabled: false
     perspective: "美联社，中立事实报道，重大事件权威来源"
 
   - name: NPR

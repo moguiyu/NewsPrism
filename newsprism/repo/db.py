@@ -539,14 +539,6 @@ def get_recent_clusters(days: int = 3, anchor_date: str | None = None, db_path: 
     return [_row_to_cluster(r) for r in rows]
 
 
-def mark_cluster_published(cluster_id: int, channel: str, db_path: Path = DB_PATH) -> None:
-    _CHANNEL_COL = {"telegram": "published_telegram", "html": "published_html"}
-    if channel not in _CHANNEL_COL:
-        raise ValueError(f"Invalid channel: {channel!r}; must be one of {list(_CHANNEL_COL)}")
-    col = _CHANNEL_COL[channel]
-    with get_conn(db_path) as conn:
-        conn.execute(f"UPDATE clusters SET {col} = 1 WHERE id = ?", (cluster_id,))
-
 
 def delete_clusters_for_date(report_date: str, db_path: Path = DB_PATH) -> int:
     with get_conn(db_path) as conn:

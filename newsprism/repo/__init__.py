@@ -18,7 +18,6 @@ from newsprism.repo.db import (
     insert_cluster_quality_report,
     insert_search_request_event,
     mark_articles_clustered,
-    mark_cluster_published,
     reset_articles_clustered,
     update_article_embedding,
     upsert_storyline_state,
@@ -41,6 +40,5 @@ __all__ = [
     "insert_search_request_event",
     "upsert_storyline_state",
     "get_clusters_for_date",
-    "mark_cluster_published",
     "reset_articles_clustered",
 ]

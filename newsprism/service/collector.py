@@ -24,7 +24,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
@@ -92,13 +91,6 @@ WALLSTREETCN_API = (
 
 
 @dataclass
-class SourceCollectionState:
-    outcomes: deque[bool]
-    success_streak: int = 0
-    in_daily_retry: bool = False
-
-
-@dataclass
 class SourceCollectionResult:
     source: SourceConfig
     articles: list[RawArticle] = field(default_factory=list)
@@ -118,29 +110,12 @@ class Collector:
         )
         self.delta_max_age_hours = int(cfg.collection.get("delta_max_age_hours", 3))
         self.delta_source_names = set(cfg.collection.get("delta_source_names", []))
-        backoff_cfg = cfg.collection.get("backoff", {}) if isinstance(cfg.collection, dict) else {}
-        self.backoff_enabled = bool(backoff_cfg.get("enabled", False))
-        self.backoff_failure_threshold = int(backoff_cfg.get("failure_threshold", 9))
-        self.backoff_window_runs = int(backoff_cfg.get("rolling_window_runs", 18))
-        self.backoff_restore_success_streak = int(backoff_cfg.get("restore_success_streak", 3))
-        self.daily_retry_hours_local = {
-            int(hour)
-            for hour in backoff_cfg.get("daily_retry_hours_local", [18])
-        }
-        self.seed_daily_retry_source_names = set(backoff_cfg.get("seed_daily_retry_source_names", []))
         timezone_name = cfg.schedule.get("timezone", "UTC")
         try:
             self.schedule_timezone = ZoneInfo(timezone_name)
         except Exception:
             logger.warning("Invalid schedule timezone %r; falling back to UTC", timezone_name)
             self.schedule_timezone = ZoneInfo("UTC")
-        self._source_state: dict[str, SourceCollectionState] = {
-            source.name: SourceCollectionState(
-                outcomes=deque(maxlen=self.backoff_window_runs),
-                in_daily_retry=source.name in self.seed_daily_retry_source_names,
-            )
-            for source in self.cfg.sources
-        }
         # newsnow base URL from env; fall back to public instance
         self.newsnow_base = (
             os.environ.get("NEWSNOW_BASE_URL", "").rstrip("/")
@@ -207,56 +182,7 @@ class Collector:
                 return [source for source in self.cfg.sources if source.name in self.delta_source_names]
             return [source for source in self.cfg.sources if source.tier != "portal"]
 
-        is_daily_retry_window = now_local.hour in self.daily_retry_hours_local
-        selected: list[SourceConfig] = []
-        for source in self.cfg.sources:
-            state = self._source_state.setdefault(
-                source.name,
-                SourceCollectionState(outcomes=deque(maxlen=self.backoff_window_runs)),
-            )
-            if self.backoff_enabled and state.in_daily_retry and not is_daily_retry_window:
-                logger.info(
-                    "Collect source skip: source=%s mode=%s reason=daily_retry waiting_for_local_hours=%s",
-                    source.name,
-                    mode,
-                    sorted(self.daily_retry_hours_local),
-                )
-                continue
-            selected.append(source)
-        return selected
-
-    def _record_result(self, result: SourceCollectionResult) -> None:
-        if not self.backoff_enabled or not result.attempted:
-            return
-
-        state = self._source_state.setdefault(
-            result.source.name,
-            SourceCollectionState(outcomes=deque(maxlen=self.backoff_window_runs)),
-        )
-        success = bool(result.articles)
-        state.outcomes.append(success)
-
-        if success:
-            state.success_streak += 1
-            if state.in_daily_retry and state.success_streak >= self.backoff_restore_success_streak:
-                state.in_daily_retry = False
-                logger.info(
-                    "Collect source backoff cleared: source=%s success_streak=%d",
-                    result.source.name,
-                    state.success_streak,
-                )
-            return
-
-        state.success_streak = 0
-        failure_count = sum(not outcome for outcome in state.outcomes)
-        if not state.in_daily_retry and failure_count >= self.backoff_failure_threshold:
-            state.in_daily_retry = True
-            logger.warning(
-                "Collect source backoff enabled: source=%s failures_in_window=%d window=%d",
-                result.source.name,
-                failure_count,
-                state.outcomes.maxlen or self.backoff_window_runs,
-            )
+        return list(self.cfg.sources)
 
     def _log_results(
         self,
@@ -265,17 +191,13 @@ class Collector:
         now_local: datetime,
     ) -> None:
         for result in results:
-            self._record_result(result)
-            state = self._source_state.get(result.source.name)
             logger.info(
-                "Collect source result: source=%s mode=%s status=%s articles=%d duration_ms=%d local_hour=%02d daily_retry=%s",
+                "Collect source result: source=%s mode=%s status=%s articles=%d duration_ms=%d",
                 result.source.name,
                 mode,
                 result.status,
                 len(result.articles),
                 result.duration_ms,
-                now_local.hour,
-                bool(state.in_daily_retry) if state else False,
             )
 
     # ─── DISPATCH ────────────────────────────────────────────────────────────

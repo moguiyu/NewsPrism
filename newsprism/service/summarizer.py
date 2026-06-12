@@ -147,21 +147,6 @@ class PositiveEnergyBatch(BaseModel):
     )
 
 
-class MacroTopicAssignment(BaseModel):
-    cluster_index: int = Field(description="1-based cluster index from the provided candidate list.")
-    macro_topic_key: str = Field(description="Stable ASCII key shared by related clusters.")
-    macro_topic_name: str = Field(description="Short Chinese macro-topic family name, 4-10 characters.")
-    topic_icon_key: str | None = Field(
-        default=None,
-        description="One hotspot icon key chosen from the provided allowlist.",
-    )
-
-
-class MacroTopicGrouping(BaseModel):
-    assignments: list[MacroTopicAssignment] = Field(
-        default_factory=list,
-        description="One assignment per candidate cluster.",
-    )
 
 
 class StorylineRelationItem(BaseModel):
@@ -426,36 +411,6 @@ class Summarizer:
             normalized.append(summary)
         return normalized
 
-    def classify_macro_topics(self, clusters: list[ArticleCluster]) -> list[dict[str, str | int | None]]:
-        if not clusters:
-            return []
-        return self._classify_macro_topic_batches(
-            clusters=clusters,
-            batch_size=int(self.hot_topics_cfg.get("grouping_batch_size", 12)),
-            build_prompt=lambda batch, _assignments, _history: self._build_macro_topic_prompt(batch),
-            max_tokens=min(self.max_tokens, 1600),
-            stage_label="macro-topic grouping",
-        )
-
-    def refine_macro_topics_with_history(
-        self,
-        clusters: list[ArticleCluster],
-        initial_assignments: list[dict[str, str | int | None]],
-        history_by_family: dict[str, list[dict[str, str | int]]],
-    ) -> list[dict[str, str | int | None]]:
-        if not clusters:
-            return []
-        if not any(history_by_family.values()):
-            return initial_assignments
-        return self._classify_macro_topic_batches(
-            clusters=clusters,
-            batch_size=int(self.hot_topics_cfg.get("refinement_batch_size", 10)),
-            build_prompt=self._build_macro_topic_refinement_prompt,
-            max_tokens=min(self.max_tokens, 2200),
-            stage_label="history-refined macro-topic grouping",
-            initial_assignments=initial_assignments,
-            history_by_family=history_by_family,
-        )
 
     def classify_storyline_relations(
         self,
@@ -588,73 +543,15 @@ class Summarizer:
             logger.warning("Storyline naming failed; falling back to deterministic name: %s", exc)
             return None
 
-    def _classify_macro_topic_batches(
-        self,
-        clusters: list[ArticleCluster],
-        batch_size: int,
-        build_prompt,
-        max_tokens: int,
-        stage_label: str,
-        initial_assignments: list[dict[str, str | int | None]] | None = None,
-        history_by_family: dict[str, list[dict[str, str | int]]] | None = None,
-    ) -> list[dict[str, str | int | None]]:
-        batch_size = max(1, batch_size)
-        all_assignments: list[dict[str, str | int | None]] = []
-        for start in range(0, len(clusters), batch_size):
-            batch_clusters = clusters[start:start + batch_size]
-            local_initial = self._slice_assignments(initial_assignments or [], start, len(batch_clusters))
-            local_history = self._slice_history(history_by_family or {}, local_initial)
-            prompt = build_prompt(batch_clusters, local_initial, local_history)
-            parsed = self._request_macro_topic_grouping(
-                prompt=prompt,
-                clusters=batch_clusters,
-                max_tokens=max_tokens,
-                stage_label=f"{stage_label} batch {start + 1}-{start + len(batch_clusters)}",
-            )
-            normalized = self._normalize_macro_topic_assignments(
-                batch_clusters,
-                parsed.assignments if parsed is not None else [],
-                fallback_assignments=local_initial,
-            )
-            for assignment in normalized:
-                assignment["cluster_index"] = int(assignment["cluster_index"]) + start
-                all_assignments.append(assignment)
-        return all_assignments
-
-    def _request_macro_topic_grouping(
-        self,
-        prompt: str,
-        clusters: list[ArticleCluster],
-        max_tokens: int,
-        stage_label: str,
-    ) -> MacroTopicGrouping | None:
-        content = self._macro_topic_completion(prompt, max_tokens)
-        parsed = self._parse_macro_topic_grouping_content(content)
-        if parsed is not None:
-            return parsed
-
-        logger.warning("Retrying %s with compact JSON prompt after parse failure", stage_label)
-        retry_prompt = (
-            f"{prompt}\n\n"
-            "最后要求：只输出紧凑 JSON，不要解释，不要 Markdown，不要换行装饰。"
-        )
-        retry_content = self._macro_topic_completion(retry_prompt, max_tokens)
-        parsed = self._parse_macro_topic_grouping_content(retry_content)
-        if parsed is not None:
-            return parsed
-
-        salvaged = self._salvage_macro_topic_assignments(retry_content or content)
-        if salvaged:
-            logger.warning(
-                "Salvaged %d/%d assignments from malformed %s output",
-                len(salvaged),
-                len(clusters),
-                stage_label,
-            )
-            return MacroTopicGrouping(assignments=salvaged)
-
-        logger.error("Failed to parse %s output after retry", stage_label)
-        return None
+    def _normalize_macro_topic_name(self, value: str | None, cluster: ArticleCluster) -> str:
+        candidate = re.sub(r"\s+", "", (value or "").strip())
+        candidate = re.sub(r"^(热点专题[-:：]?|专题[-:：]?)", "", candidate)
+        candidate = candidate[:10].strip(" -:：，,、。.；;")
+        if candidate:
+            return candidate
+        fallback = cluster.articles[0].title if cluster.articles else cluster.topic_category
+        fallback = re.sub(r"\s+", "", fallback)[:10].strip(" -:：，,、。.；;")
+        return fallback or "焦点话题"
 
     def _request_storyline_relations(
         self,
@@ -705,19 +602,6 @@ class Summarizer:
         )
         return response.choices[0].message.content or ""
 
-    def _parse_macro_topic_grouping_content(self, content: str) -> MacroTopicGrouping | None:
-        if not content.strip():
-            return None
-        try:
-            return MacroTopicGrouping.model_validate_json(content)
-        except Exception:
-            extracted = self._extract_json_object(content)
-            if extracted and extracted != content:
-                try:
-                    return MacroTopicGrouping.model_validate_json(extracted)
-                except Exception:
-                    return None
-        return None
 
     def _parse_storyline_relation_content(self, content: str) -> StorylineRelationBatch | None:
         if not content.strip():
@@ -768,32 +652,6 @@ class Summarizer:
             return None
         return content[start:end + 1]
 
-    def _salvage_macro_topic_assignments(self, content: str) -> list[MacroTopicAssignment]:
-        if not content.strip():
-            return []
-        pattern = re.compile(
-            r'\{\s*"cluster_index"\s*:\s*(?P<cluster_index>\d+)'
-            r'.*?"macro_topic_key"\s*:\s*"(?P<macro_topic_key>[^"]*)"'
-            r'.*?"macro_topic_name"\s*:\s*"(?P<macro_topic_name>[^"]*)"'
-            r'(?:.*?"topic_icon_key"\s*:\s*"(?P<topic_icon_key>[^"]*)")?',
-            re.DOTALL,
-        )
-        salvaged: list[MacroTopicAssignment] = []
-        seen: set[int] = set()
-        for match in pattern.finditer(content):
-            cluster_index = int(match.group("cluster_index"))
-            if cluster_index in seen:
-                continue
-            seen.add(cluster_index)
-            salvaged.append(
-                MacroTopicAssignment(
-                    cluster_index=cluster_index,
-                    macro_topic_key=match.group("macro_topic_key"),
-                    macro_topic_name=match.group("macro_topic_name"),
-                    topic_icon_key=match.group("topic_icon_key"),
-                )
-            )
-        return salvaged
 
     def _salvage_storyline_relations(self, content: str) -> list[StorylineRelationItem]:
         if not content.strip():
@@ -830,87 +688,6 @@ class Summarizer:
             )
         return salvaged
 
-    def _slice_assignments(
-        self,
-        assignments: list[dict[str, str | int | None]],
-        start: int,
-        batch_len: int,
-    ) -> list[dict[str, str | int | None]]:
-        sliced: list[dict[str, str | int | None]] = []
-        lower = start + 1
-        upper = start + batch_len
-        for assignment in assignments:
-            cluster_index = assignment.get("cluster_index")
-            if not isinstance(cluster_index, int) or not (lower <= cluster_index <= upper):
-                continue
-            local_assignment = dict(assignment)
-            local_assignment["cluster_index"] = cluster_index - start
-            sliced.append(local_assignment)
-        return sliced
-
-    def _slice_history(
-        self,
-        history_by_family: dict[str, list[dict[str, str | int]]],
-        assignments: list[dict[str, str | int | None]],
-    ) -> dict[str, list[dict[str, str | int]]]:
-        family_keys = {
-            str(assignment.get("macro_topic_key"))
-            for assignment in assignments
-            if assignment.get("macro_topic_key")
-        }
-        return {
-            key: history_by_family.get(key, [])
-            for key in family_keys
-        }
-
-    def _normalize_macro_topic_assignments(
-        self,
-        clusters: list[ArticleCluster],
-        assignments: list[MacroTopicAssignment],
-        fallback_assignments: list[dict[str, str | int | None]] | None = None,
-    ) -> list[dict[str, str | int | None]]:
-        fallback_by_index = {
-            int(assignment.get("cluster_index", 0)): assignment
-            for assignment in (fallback_assignments or [])
-            if isinstance(assignment.get("cluster_index"), int)
-        }
-        assignments_by_index = {
-            assignment.cluster_index: assignment for assignment in assignments
-        }
-        normalized: list[dict[str, str | int | None]] = []
-        for index, cluster in enumerate(clusters, 1):
-            assignment = assignments_by_index.get(index)
-            if assignment is None:
-                fallback = fallback_by_index.get(index)
-                if fallback is None:
-                    normalized.append(self._fallback_macro_assignment(cluster, index))
-                    continue
-                normalized.append(
-                    {
-                        "cluster_index": index,
-                        "macro_topic_key": self._normalize_macro_topic_key(
-                            fallback.get("macro_topic_key") if isinstance(fallback, dict) else None,
-                            index,
-                        ),
-                        "macro_topic_name": self._normalize_macro_topic_name(
-                            fallback.get("macro_topic_name") if isinstance(fallback, dict) else None,
-                            cluster,
-                        ),
-                        "topic_icon_key": self._normalize_icon_key(
-                            fallback.get("topic_icon_key") if isinstance(fallback, dict) else None,
-                        ),
-                    }
-                )
-                continue
-            normalized.append(
-                {
-                    "cluster_index": index,
-                    "macro_topic_key": self._normalize_macro_topic_key(assignment.macro_topic_key, index),
-                    "macro_topic_name": self._normalize_macro_topic_name(assignment.macro_topic_name, cluster),
-                    "topic_icon_key": self._normalize_icon_key(assignment.topic_icon_key),
-                }
-            )
-        return normalized
 
     def _build_positive_energy_prompt(self, summaries: list[ClusterSummary]) -> str:
         candidates = []
@@ -1373,128 +1150,6 @@ class Summarizer:
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
 
-    def _build_macro_topic_prompt(self, clusters: list[ArticleCluster]) -> str:
-        cluster_lines: list[str] = []
-        for index, cluster in enumerate(clusters, 1):
-            lead_title = cluster.articles[0].title if cluster.articles else cluster.topic_category
-            source_preview = "、".join(cluster.sources[:4])
-            cluster_lines.append(
-                f"[{index}] topic_category={cluster.topic_category}\n"
-                f"headline={lead_title}\n"
-                f"sources={source_preview}\n"
-                f"article_count={len(cluster.articles)}"
-            )
-
-        allowlist = ", ".join(self.topic_icon_allowlist)
-        return (
-            "下面是一组已经完成事件级聚类的候选新闻条目。"
-            "你的任务不是总结单条新闻，而是判断哪些条目属于同一个更高层级的宏观热点家族。\n\n"
-            "规则：\n"
-            "1. 只有在多个条目明显属于同一主线事件/冲突/危机时，才给它们相同的 macro_topic_key 与 macro_topic_name。\n"
-            "2. 单条新闻即使来源很多，也不要因为视角多就提升为宏观主题家族。\n"
-            "3. macro_topic_name 必须是 4-10 个中文字符，不要包含“热点专题”前缀。\n"
-            "4. macro_topic_key 必须是 ASCII 小写短键，可用连字符。\n"
-            f"5. topic_icon_key 只能从以下列表中选择：{allowlist}\n"
-            "6. 如果某条新闻不属于任何更大的共享家族，给它一个唯一的宏观主题键和对应短名。\n"
-            "7. 输出必须覆盖每个 cluster_index，且只能输出 JSON。\n\n"
-            "输出格式：\n"
-            "{\n"
-            '  "assignments": [\n'
-            '    {"cluster_index": 1, "macro_topic_key": "...", "macro_topic_name": "...", "topic_icon_key": "..."}\n'
-            "  ]\n"
-            "}\n\n"
-            "候选条目：\n"
-            + "\n\n".join(cluster_lines)
-        )
-
-    def _build_macro_topic_refinement_prompt(
-        self,
-        clusters: list[ArticleCluster],
-        initial_assignments: list[dict[str, str | int | None]],
-        history_by_family: dict[str, list[dict[str, str | int]]],
-    ) -> str:
-        initial_by_index = {
-            int(assignment.get("cluster_index", 0)): assignment
-            for assignment in initial_assignments
-            if isinstance(assignment.get("cluster_index"), int)
-        }
-
-        cluster_lines: list[str] = []
-        for index, cluster in enumerate(clusters, 1):
-            lead_title = cluster.articles[0].title if cluster.articles else cluster.topic_category
-            source_preview = "、".join(cluster.sources[:4])
-            initial = initial_by_index.get(index, {})
-            family_key = str(initial.get("macro_topic_key") or f"single-{index}")
-            family_name = str(initial.get("macro_topic_name") or cluster.topic_category)
-            history_lines = []
-            for item in history_by_family.get(family_key, []):
-                report_date = item.get("report_date", "")
-                topic_category = item.get("topic_category", "")
-                summary = item.get("summary", "")
-                history_lines.append(
-                    f"- {report_date} | {topic_category} | {summary}"
-                )
-            history_block = "\n".join(history_lines) if history_lines else "- 无相关历史记忆"
-            cluster_lines.append(
-                f"[{index}] initial_family_key={family_key}\n"
-                f"initial_family_name={family_name}\n"
-                f"topic_category={cluster.topic_category}\n"
-                f"headline={lead_title}\n"
-                f"sources={source_preview}\n"
-                f"article_count={len(cluster.articles)}\n"
-                f"related_history:\n{history_block}"
-            )
-
-        allowlist = ", ".join(self.topic_icon_allowlist)
-        return (
-            "下面是一组当前日期的候选新闻条目，以及从过去5天检索出的相关历史簇摘要。"
-            "请根据当前条目本身和这些历史记忆，重新判断哪些条目属于同一个宏观热点家族。"
-            "历史记忆只用于帮助你识别跨天延续的大主题，不能因为历史很多就把今天无关的条目硬合并。\n\n"
-            "规则：\n"
-            "1. 优先依据今天的条目是否属于同一主线事件/危机/战争来分组。\n"
-            "2. 历史记忆只用于纠正今天的碎片化分组，帮助识别同一超级话题。\n"
-            "3. 只有核心事件及其直接外溢影响可以归入同一家族；宽泛的地域相似或二级延伸不要硬合并。\n"
-            "4. 单条新闻即使来源很多，也不要仅因视角多就提升为宏观主题家族。\n"
-            "5. macro_topic_name 必须是 4-10 个中文字符，不要包含“热点专题”前缀。\n"
-            "6. macro_topic_key 必须是 ASCII 小写短键，可用连字符。\n"
-            f"7. topic_icon_key 只能从以下列表中选择：{allowlist}\n"
-            "8. 输出必须覆盖每个 cluster_index，且只能输出 JSON。\n\n"
-            "输出格式：\n"
-            "{\n"
-            '  "assignments": [\n'
-            '    {"cluster_index": 1, "macro_topic_key": "...", "macro_topic_name": "...", "topic_icon_key": "..."}\n'
-            "  ]\n"
-            "}\n\n"
-            "当前候选条目与历史记忆：\n"
-            + "\n\n".join(cluster_lines)
-        )
-
-    def _fallback_macro_assignment(self, cluster: ArticleCluster, index: int) -> dict[str, str | int | None]:
-        return {
-            "cluster_index": index,
-            "macro_topic_key": f"single-{index}",
-            "macro_topic_name": self._normalize_macro_topic_name(cluster.topic_category, cluster),
-            "topic_icon_key": self._normalize_icon_key(None),
-        }
-
-    def _normalize_macro_topic_key(self, value: str | None, index: int) -> str:
-        compact = re.sub(r"[^a-z0-9\-]+", "-", (value or "").lower()).strip("-")
-        return compact or f"single-{index}"
-
-    def _normalize_macro_topic_name(self, value: str | None, cluster: ArticleCluster) -> str:
-        candidate = re.sub(r"\s+", "", (value or "").strip())
-        candidate = re.sub(r"^(热点专题[-:：]?|专题[-:：]?)", "", candidate)
-        candidate = candidate[:10].strip(" -:：，,、。.；;")
-        if candidate:
-            return candidate
-        fallback = cluster.articles[0].title if cluster.articles else cluster.topic_category
-        fallback = re.sub(r"\s+", "", fallback)[:10].strip(" -:：，,、。.；;")
-        return fallback or "焦点话题"
-
-    def _normalize_icon_key(self, value: str | None) -> str:
-        if value in self.topic_icon_allowlist:
-            return value
-        return self.topic_icon_allowlist[0] if self.topic_icon_allowlist else "globe"
 
     def _build_storyline_relation_prompt(self, pair_candidates: list[dict[str, object]]) -> str:
         pair_lines: list[str] = []

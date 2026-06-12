@@ -233,20 +233,6 @@ class FeelgoodScorer:
         )
         return summaries
 
-    def select(self, raw_articles: list[RawArticle], limit: int = 5) -> list[ClusterSummary]:
-        """Compatibility shim for tests and one-off callers; runtime uses select_articles."""
-        articles = [
-            Article(
-                url=raw.url,
-                title=raw.title,
-                source_name=raw.source_name,
-                published_at=raw.published_at,
-                content=raw.content,
-            )
-            for raw in raw_articles
-        ]
-        return self.select_articles(articles, limit=limit)
-
     def _score_article(self, article: Article) -> FeelgoodCandidate | None:
         text = f"{article.title}\n{article.content}".strip()
         text_lower = text.lower()
@@ -285,6 +271,8 @@ class FeelgoodScorer:
             category=category,
             source_weight=source_weight,
         )
+
+
 
     def _blocked(self, text_lower: str) -> bool:
         for keyword in self.blockers:
