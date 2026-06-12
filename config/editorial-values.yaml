@@ -1,3 +1,24 @@
+impact:
+  # Seed weights for the calibrated composite (live values: calibration_weights table).
+  # Dimensions are scored 0-10 by the LLM; signal is computed locally from
+  # source/region/tier facts. feelgood feeds only the 今日正能量 lane.
+  weights:
+    scope: 0.16
+    severity: 0.16
+    novelty: 0.12
+    actor_influence: 0.14
+    decision_relevance: 0.18
+    feelgood: 0.0
+    signal: 0.24
+  status:
+    suppress_floor: 0.18
+    review_floor: 0.34
+    single_source_severity_review: 6.0
+  positive:
+    min_feelgood: 7.0
+    max_severity: 4.0
+  batch_size: 40
+
 quality:
   min_publish_score: 0.45
   min_review_score: 0.35

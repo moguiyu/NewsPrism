@@ -122,6 +122,58 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 UNIQUE(cluster_id, claim_uid, source_name)
             );
 
+            CREATE TABLE IF NOT EXISTS cluster_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id INTEGER,                 -- linked after cluster insert; NULL for unselected candidates
+                report_date TEXT NOT NULL,
+                cluster_key TEXT NOT NULL,
+                dims TEXT NOT NULL DEFAULT '{}',    -- JSON {scope, severity, novelty, actor_influence, decision_relevance, feelgood}
+                rationale TEXT NOT NULL DEFAULT '',
+                signal REAL NOT NULL DEFAULT 0.0,
+                composite REAL NOT NULL DEFAULT 0.0,
+                rank INTEGER,
+                selected INTEGER NOT NULL DEFAULT 0,
+                display_category TEXT,
+                status TEXT NOT NULL DEFAULT 'publishable',
+                flags TEXT NOT NULL DEFAULT '[]',
+                evaluated_by_llm INTEGER NOT NULL DEFAULT 1,
+                model TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(report_date, cluster_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS editorial_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cluster_id INTEGER NOT NULL,
+                verdict INTEGER NOT NULL,           -- +1 accept / -1 reject
+                channel TEXT NOT NULL DEFAULT 'cli',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS calibration_weights (
+                dimension TEXT PRIMARY KEY,
+                weight REAL NOT NULL,
+                seed REAL NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS calibration_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dimension TEXT NOT NULL,
+                old_weight REAL NOT NULL,
+                new_weight REAL NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS editorial_policy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS storylines (
                 storyline_key TEXT PRIMARY KEY,
                 storyline_name TEXT,
@@ -161,6 +213,10 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 ON claim_evidence(cluster_id);
             CREATE INDEX IF NOT EXISTS idx_storyline_events_key_date
                 ON storyline_events(storyline_key, event_date);
+            CREATE INDEX IF NOT EXISTS idx_cluster_evaluations_date
+                ON cluster_evaluations(report_date);
+            CREATE INDEX IF NOT EXISTS idx_editorial_feedback_cluster
+                ON editorial_feedback(cluster_id);
         """)
 
         # Migration: Add new columns if they don't exist (for existing databases)
@@ -566,6 +622,104 @@ def reset_articles_clustered(ids: list[int], db_path: Path = DB_PATH) -> int:
             ids,
         )
         return cur.rowcount
+
+
+# ─── IMPACT EVALUATION / EVOLUTION ─────────────────────────────────────────────
+
+def insert_cluster_evaluation(
+    report_date: str,
+    cluster_key: str,
+    dims: dict[str, float],
+    rationale: str,
+    signal: float,
+    composite: float,
+    rank: int | None,
+    display_category: str | None,
+    status: str,
+    flags: list[str],
+    evaluated_by_llm: bool,
+    model: str | None,
+    db_path: Path = DB_PATH,
+) -> int:
+    """Persist one cluster's impact evaluation (upsert on report_date+cluster_key)."""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO cluster_evaluations (
+                   report_date, cluster_key, dims, rationale, signal, composite,
+                   rank, display_category, status, flags, evaluated_by_llm, model
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(report_date, cluster_key) DO UPDATE SET
+                   dims = excluded.dims,
+                   rationale = excluded.rationale,
+                   signal = excluded.signal,
+                   composite = excluded.composite,
+                   rank = excluded.rank,
+                   display_category = excluded.display_category,
+                   status = excluded.status,
+                   flags = excluded.flags,
+                   evaluated_by_llm = excluded.evaluated_by_llm,
+                   model = excluded.model,
+                   cluster_id = NULL,
+                   selected = 0""",
+            (
+                report_date,
+                cluster_key,
+                json.dumps(dims, ensure_ascii=False),
+                rationale,
+                signal,
+                composite,
+                rank,
+                display_category,
+                status,
+                json.dumps(flags, ensure_ascii=False),
+                1 if evaluated_by_llm else 0,
+                model,
+            ),
+        )
+        return cur.lastrowid
+
+
+def link_cluster_evaluation(
+    report_date: str,
+    cluster_key: str,
+    cluster_id: int,
+    selected: bool = True,
+    db_path: Path = DB_PATH,
+) -> None:
+    with get_conn(db_path) as conn:
+        conn.execute(
+            """UPDATE cluster_evaluations
+               SET cluster_id = ?, selected = ?
+               WHERE report_date = ? AND cluster_key = ?""",
+            (cluster_id, 1 if selected else 0, report_date, cluster_key),
+        )
+
+
+def get_calibration_weights(db_path: Path = DB_PATH) -> dict[str, float]:
+    with get_conn(db_path) as conn:
+        rows = conn.execute("SELECT dimension, weight FROM calibration_weights").fetchall()
+    return {row["dimension"]: float(row["weight"]) for row in rows}
+
+
+def seed_calibration_weights(weights: dict[str, float], db_path: Path = DB_PATH) -> None:
+    """Insert seed weights for dimensions that have no calibrated value yet."""
+    with get_conn(db_path) as conn:
+        for dimension, weight in weights.items():
+            conn.execute(
+                """INSERT INTO calibration_weights (dimension, weight, seed)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(dimension) DO NOTHING""",
+                (dimension, float(weight), float(weight)),
+            )
+
+
+def get_latest_editorial_policy(db_path: Path = DB_PATH) -> str | None:
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT content FROM editorial_policy ORDER BY version DESC, id DESC LIMIT 1"
+        ).fetchone()
+    return row["content"] if row else None
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────────────────

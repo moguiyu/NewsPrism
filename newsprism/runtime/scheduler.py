@@ -34,9 +34,12 @@ from newsprism.repo import (
     init_db,
     insert_article,
     insert_cluster,
+    insert_cluster_evaluation,
     insert_cluster_quality_report,
+    link_cluster_evaluation,
     mark_articles_clustered,
     reset_articles_clustered,
+    seed_calibration_weights,
     update_article_embedding,
     upsert_storyline_state,
 )
@@ -55,6 +58,7 @@ from newsprism.service.editorial_planner import (
 from newsprism.service.feelgood_scorer import FeelgoodScorer
 from newsprism.service.filter import TopicTagger
 from newsprism.service.freshness import FreshnessEvaluator
+from newsprism.service.impact import ImpactAssessor
 from newsprism.service.quality import QualityAssessor
 from newsprism.service.seeker import ActiveSeeker
 from newsprism.service.storyline import EventClusterValidator, StorylineResolver, StorylineStateMachine
@@ -178,6 +182,8 @@ class Scheduler:
         self.seeker = ActiveSeeker(cfg)
         self.summarizer = Summarizer(cfg)
         self.quality_assessor = QualityAssessor(cfg)
+        self.impact_assessor = ImpactAssessor(cfg)
+        seed_calibration_weights(self.impact_assessor.seed_weights)
         self.freshness_evaluator = FreshnessEvaluator(cfg)
         self.storyline_state_machine = StorylineStateMachine()
         self.storyline_resolver = StorylineResolver(
@@ -467,6 +473,33 @@ class Scheduler:
             for index, cluster in enumerate(candidate_clusters):
                 cluster._storyline_candidate_index = index  # type: ignore[attr-defined]
 
+            # Impact evaluation (shadow): scores are persisted for calibration and
+            # ranking comparison; selection below still runs the legacy path.
+            try:
+                impact_assessments = self.impact_assessor.assess_clusters(candidate_clusters)
+                ranked_keys = [
+                    assessment.cluster_key
+                    for assessment in sorted(impact_assessments, key=lambda a: -a.composite)
+                ]
+                rank_by_key = {key: position for position, key in enumerate(ranked_keys, 1)}
+                for assessment in impact_assessments:
+                    insert_cluster_evaluation(
+                        report_date=today.isoformat(),
+                        cluster_key=assessment.cluster_key,
+                        dims=assessment.dims,
+                        rationale=assessment.rationale,
+                        signal=assessment.signal,
+                        composite=assessment.composite,
+                        rank=rank_by_key.get(assessment.cluster_key),
+                        display_category=assessment.display_category,
+                        status=assessment.status,
+                        flags=assessment.flags,
+                        evaluated_by_llm=assessment.evaluated_by_llm,
+                        model=assessment.model,
+                    )
+            except Exception:
+                logger.exception("Impact shadow evaluation failed; continuing with legacy selection")
+
             if hot_cfg.get("enabled", False):
                 history_window_days = hot_cfg.get("history_window_days", 5)
                 historical_hot_topic_memory = get_recent_clusters(
@@ -583,6 +616,14 @@ class Scheduler:
                 cluster_id = insert_cluster(cluster_record)
                 if cs.quality_report is not None:
                     insert_cluster_quality_report(cluster_id, cs.quality_report)
+                if cs.cluster.impact is not None:
+                    with contextlib.suppress(Exception):
+                        link_cluster_evaluation(
+                            today.isoformat(),
+                            cs.cluster.impact.cluster_key,
+                            cluster_id,
+                            selected=True,
+                        )
                 upsert_storyline_state(cluster_id, cs, today.isoformat())
                 mark_articles_clustered([a.id for a in cs.cluster.articles if a.id])
 

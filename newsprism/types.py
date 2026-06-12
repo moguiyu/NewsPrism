@@ -88,6 +88,32 @@ class Cluster:
     quality_score: float = 0.0
 
 
+# ─── IMPACT EVALUATION ───────────────────────────────────────────────────────
+
+@dataclass
+class ImpactAssessment:
+    """LLM multi-dimensional impact judgment + local cross-source signal for one cluster.
+
+    dims values are 0–10; signal and composite are 0–1.
+    """
+    cluster_key: str
+    dims: dict[str, float] = field(default_factory=dict)
+    rationale: str = ""
+    display_category: str = ""
+    short_topic_name: str | None = None
+    topic_icon_key: str | None = None
+    signal: float = 0.0
+    composite: float = 0.0
+    status: str = "publishable"     # publishable|needs_review|seek_more_evidence|suppress
+    flags: list[str] = field(default_factory=list)
+    summary_constraints: list[str] = field(default_factory=list)
+    evaluated_by_llm: bool = True   # False when the signal-only fallback produced this
+    model: str | None = None
+
+    def dim(self, name: str) -> float:
+        return float(self.dims.get(name, 0.0))
+
+
 # ─── QUALITY ─────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -177,6 +203,8 @@ class ArticleCluster:
     storyline_anchor_labels: list[str] = field(default_factory=list)
     quality_report: ClusterQualityReport | None = None
     quality_decision: QualityDecision | None = None
+    impact: ImpactAssessment | None = None
+    display_category: str | None = None
 
     def __post_init__(self) -> None:
         self.sources = list(dict.fromkeys(a.source_name for a in self.articles))
@@ -225,6 +253,10 @@ class ClusterSummary:
     confirmed_claims: list[str] = field(default_factory=list)
     contested_claims: list[str] = field(default_factory=list)
     evidence_summary: str = ""
+    impact: ImpactAssessment | None = None
+    display_category: str | None = None
+    feelgood_score: float = 0.0
+    feelgood_reason: str = ""
 
 
 @dataclass
