@@ -49,6 +49,23 @@ def main() -> None:
     audit_parser.add_argument("--db-path", default="data/newsprism.db", help="SQLite DB path")
     audit_parser.add_argument("--output-dir", default="output", help="Rendered output directory")
     sub.add_parser("run", help="Start scheduler (long-running)")
+
+    feedback_parser = sub.add_parser("feedback", help="Record or list editor accept/reject feedback")
+    feedback_sub = feedback_parser.add_subparsers(dest="feedback_cmd")
+    fb_add = feedback_sub.add_parser("add", help="Record one accept/reject signal")
+    fb_add.add_argument("--cluster", dest="fb_cluster", type=int, required=True, help="Cluster id from the report")
+    fb_add.add_argument("--verdict", choices=["accept", "reject"], required=True)
+    fb_add.add_argument("--note", default="", help="Optional note")
+    fb_list = feedback_sub.add_parser("list", help="Show recent feedback")
+    fb_list.add_argument("--limit", type=int, default=30)
+    feedback_sub.add_parser("poll", help="Poll Telegram for queued feedback taps now")
+
+    calibrate_parser = sub.add_parser("calibrate", help="Tune impact weights and refresh editorial policy memory")
+    calibrate_sub = calibrate_parser.add_subparsers(dest="calibrate_cmd")
+    calibrate_sub.add_parser("run", help="Run weekly calibration now")
+    calibrate_sub.add_parser("show", help="Show current weights and editorial policy")
+    calibrate_sub.add_parser("reset", help="Restore all weights to seed values")
+
     args = parser.parse_args()
 
     _setup_logging(verbose=args.verbose)
@@ -89,6 +106,41 @@ def main() -> None:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
             else:
                 print(format_audit_report(payload))
+        elif args.cmd == "feedback":
+            from newsprism.runtime.feedback import (
+                FeedbackPoller,
+                format_feedback_list,
+                record_feedback_cli,
+            )
+
+            if args.feedback_cmd == "add":
+                row_id = record_feedback_cli(args.fb_cluster, args.verdict, note=args.note)
+                print(f"Recorded feedback #{row_id}: cluster={args.fb_cluster} verdict={args.verdict}")
+            elif args.feedback_cmd == "list":
+                print(format_feedback_list(limit=args.limit))
+            elif args.feedback_cmd == "poll":
+                count = FeedbackPoller(cfg).poll_once()
+                print(f"Recorded {count} feedback signal(s) from Telegram")
+            else:
+                feedback_parser.print_help()
+                sys.exit(1)
+        elif args.cmd == "calibrate":
+            from newsprism.service.calibrate import (
+                reset_calibration,
+                run_calibration,
+                show_calibration,
+            )
+
+            if args.calibrate_cmd == "run":
+                result = run_calibration(cfg)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            elif args.calibrate_cmd == "show":
+                print(show_calibration())
+            elif args.calibrate_cmd == "reset":
+                print(reset_calibration())
+            else:
+                calibrate_parser.print_help()
+                sys.exit(1)
         elif args.cmd == "run":
             sched.start()
         else:

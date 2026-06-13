@@ -722,6 +722,138 @@ def get_latest_editorial_policy(db_path: Path = DB_PATH) -> str | None:
     return row["content"] if row else None
 
 
+# ─── EVOLUTION: FEEDBACK / CALIBRATION (P2) ────────────────────────────────────
+
+def insert_editorial_feedback(
+    cluster_id: int,
+    verdict: int,
+    channel: str = "cli",
+    note: str = "",
+    db_path: Path = DB_PATH,
+) -> int:
+    """Record one editor accept (+1) / reject (-1) signal for a published cluster."""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO editorial_feedback (cluster_id, verdict, channel, note) VALUES (?, ?, ?, ?)",
+            (cluster_id, 1 if verdict >= 0 else -1, channel, note),
+        )
+        return cur.lastrowid
+
+
+def list_editorial_feedback(limit: int = 50, db_path: Path = DB_PATH) -> list[dict[str, object]]:
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT f.id, f.cluster_id, f.verdict, f.channel, f.note, f.created_at,
+                      c.summary AS cluster_summary, c.report_date
+               FROM editorial_feedback f
+               LEFT JOIN clusters c ON c.id = f.cluster_id
+               ORDER BY f.id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_feedback_training_rows(days: int = 30, db_path: Path = DB_PATH) -> list[dict[str, object]]:
+    """Join feedback to its cluster's impact evaluation — the calibration training set.
+
+    Returns one row per feedback signal with the evaluated dimensions, composite,
+    signal, rationale, and the verdict (+1/-1).
+    """
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT f.verdict, f.note, e.dims, e.rationale, e.composite, e.signal,
+                      e.display_category, c.report_date, c.summary AS cluster_summary
+               FROM editorial_feedback f
+               JOIN clusters c ON c.id = f.cluster_id
+               JOIN cluster_evaluations e
+                    ON e.cluster_id = c.id AND e.report_date = c.report_date
+               WHERE f.created_at >= datetime('now', ?)""",
+            (f"-{days} days",),
+        ).fetchall()
+    result: list[dict[str, object]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["dims"] = json.loads(item["dims"]) if item.get("dims") else {}
+        except (TypeError, ValueError):
+            item["dims"] = {}
+        result.append(item)
+    return result
+
+
+def get_calibration_state(db_path: Path = DB_PATH) -> list[dict[str, object]]:
+    """Current weight, seed, and last-updated per dimension (for `calibrate show`)."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT dimension, weight, seed, updated_at FROM calibration_weights ORDER BY dimension"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_calibration_weight(
+    dimension: str,
+    new_weight: float,
+    reason: str = "",
+    db_path: Path = DB_PATH,
+) -> None:
+    """Set a dimension weight and append a calibration_log entry (audit + reset)."""
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT weight FROM calibration_weights WHERE dimension = ?", (dimension,)
+        ).fetchone()
+        old_weight = float(row["weight"]) if row else 0.0
+        conn.execute(
+            """INSERT INTO calibration_weights (dimension, weight, seed, updated_at)
+               VALUES (?, ?, ?, datetime('now'))
+               ON CONFLICT(dimension) DO UPDATE SET weight = excluded.weight, updated_at = datetime('now')""",
+            (dimension, float(new_weight), float(new_weight)),
+        )
+        conn.execute(
+            "INSERT INTO calibration_log (dimension, old_weight, new_weight, reason) VALUES (?, ?, ?, ?)",
+            (dimension, old_weight, float(new_weight), reason),
+        )
+
+
+def reset_calibration_weights(db_path: Path = DB_PATH) -> int:
+    """Restore every weight to its seed; log each reset. Returns count reset."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute("SELECT dimension, weight, seed FROM calibration_weights").fetchall()
+        for row in rows:
+            if float(row["weight"]) != float(row["seed"]):
+                conn.execute(
+                    "INSERT INTO calibration_log (dimension, old_weight, new_weight, reason) VALUES (?, ?, ?, ?)",
+                    (row["dimension"], float(row["weight"]), float(row["seed"]), "reset"),
+                )
+            conn.execute(
+                "UPDATE calibration_weights SET weight = seed, updated_at = datetime('now') WHERE dimension = ?",
+                (row["dimension"],),
+            )
+        return len(rows)
+
+
+def insert_editorial_policy(content: str, db_path: Path = DB_PATH) -> int:
+    """Append a new editorial-policy version (the persistent editorial memory)."""
+    with get_conn(db_path) as conn:
+        row = conn.execute("SELECT COALESCE(MAX(version), 0) AS v FROM editorial_policy").fetchone()
+        version = int(row["v"]) + 1
+        cur = conn.execute(
+            "INSERT INTO editorial_policy (version, content) VALUES (?, ?)",
+            (version, content),
+        )
+        return cur.lastrowid
+
+
+def delete_old_unclustered_articles(days: int = 30, db_path: Path = DB_PATH) -> int:
+    """Retention: drop unclustered articles older than `days`. Clustered rows are kept
+    (replay depends on them). Returns rows deleted."""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM articles WHERE clustered = 0 AND published_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        return cur.rowcount
+
+
 # ─── HELPERS ───────────────────────────────────────────────────────────────────
 
 def _row_to_article(row: sqlite3.Row) -> Article:

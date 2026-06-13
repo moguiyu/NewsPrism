@@ -48,6 +48,7 @@ class Config:
     active_search: dict[str, Any]
     editorial_values: dict[str, Any] = field(default_factory=dict)
     feelgood_keywords: dict[str, Any] = field(default_factory=dict)
+    evolution: dict[str, Any] = field(default_factory=dict)
 
     # Topic equivalence: canonical topic → list of equivalent topics
     topic_equivalence: dict[str, list[str]] = field(default_factory=dict)
@@ -175,6 +176,7 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         active_search=raw.get("active_search", {}),
         editorial_values=editorial_values,
         feelgood_keywords=feelgood_keywords,
+        evolution=raw.get("evolution", {}),
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
         use_llm_clustering=bool(raw.get("clustering", {}).get("use_llm_clustering", True)),
     )

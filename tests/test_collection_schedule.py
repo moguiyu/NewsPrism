@@ -126,4 +126,12 @@ def test_scheduler_registers_full_delta_publish_and_push_jobs(monkeypatch):
 
     asyncio.run(scheduler._run_scheduler())
 
-    assert captured_job_ids == ["collect_full", "collect_delta", "publish_stage", "push_daily"]
+    assert captured_job_ids == [
+        "collect_full",
+        "collect_delta",
+        "publish_stage",
+        "push_daily",
+        "feedback_poll",
+        "calibrate_weekly",
+        "retention_weekly",
+    ]

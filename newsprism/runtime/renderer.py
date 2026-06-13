@@ -881,6 +881,9 @@ class HtmlRenderer:
             "duplicate_confidence": getattr(summary, "duplicate_confidence", 0.0),
             "selection_score": getattr(summary, "selection_score", None),
             "selection_reasons": list(getattr(summary, "selection_reasons", [])),
+            "cluster_id": getattr(summary, "cluster_db_id", None),
+            "impact_composite": round(float(impact.composite), 3) if (impact := getattr(summary, "impact", None)) else None,
+            "impact_rationale": getattr(impact, "rationale", "") if impact else "",
         }
         return (
             {

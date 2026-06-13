@@ -571,6 +571,7 @@ class Scheduler:
                     quality_score=cs.quality_score,
                 )
                 cluster_id = insert_cluster(cluster_record)
+                cs.cluster_db_id = cluster_id
                 if cs.cluster.impact is not None:
                     with contextlib.suppress(Exception):
                         link_cluster_evaluation(
@@ -737,6 +738,38 @@ class Scheduler:
                 time.perf_counter() - started,
             )
 
+    async def _poll_feedback(self) -> None:
+        """Hourly: pull editor accept/reject taps from Telegram into editorial_feedback."""
+        from newsprism.runtime.feedback import FeedbackPoller
+
+        try:
+            count = await asyncio.to_thread(FeedbackPoller(self.cfg).poll_once)
+            if count:
+                logger.info("Feedback poll: recorded %d editor signal(s)", count)
+        except Exception:
+            logger.exception("Feedback poll failed")
+
+    async def _run_calibration(self) -> None:
+        """Weekly: nudge impact weights and refresh the editorial-policy memory."""
+        from newsprism.service.calibrate import run_calibration
+
+        try:
+            result = await asyncio.to_thread(run_calibration, self.cfg)
+            logger.info("Calibration run: %s", result)
+        except Exception:
+            logger.exception("Calibration run failed")
+
+    async def _run_retention(self) -> None:
+        """Weekly: drop unclustered articles past the retention window."""
+        from newsprism.repo import delete_old_unclustered_articles
+
+        days = int(self.cfg.evolution.get("retention_days", 30)) if isinstance(self.cfg.evolution, dict) else 30
+        try:
+            deleted = await asyncio.to_thread(delete_old_unclustered_articles, days)
+            logger.info("Retention: deleted %d unclustered articles older than %d days", deleted, days)
+        except Exception:
+            logger.exception("Retention job failed")
+
     async def replay(self, report_date: date | None = None, dry_run: bool = False) -> None:
         """Reset one report date's article set and rerun publish from that exact set."""
         target_date = report_date or date.today()
@@ -834,6 +867,29 @@ class Scheduler:
             self.push,
             CronTrigger.from_crontab(push_cron, timezone=tz),
             id="push_daily",
+        )
+
+        # ─── Evolution loop (feedback → calibration → memory; retention) ──────
+        evolution = self.cfg.evolution if isinstance(self.cfg.evolution, dict) else {}
+        if evolution.get("feedback_enabled", True):
+            feedback_cron = self.cfg.schedule.get("feedback_poll_cron", "5 * * * *")
+            sched.add_job(
+                self._poll_feedback,
+                CronTrigger.from_crontab(feedback_cron, timezone=tz),
+                id="feedback_poll",
+            )
+        if evolution.get("calibration", {}).get("enabled", True):
+            calibrate_cron = self.cfg.schedule.get("calibrate_cron", "30 3 * * 1")
+            sched.add_job(
+                self._run_calibration,
+                CronTrigger.from_crontab(calibrate_cron, timezone=tz),
+                id="calibrate_weekly",
+            )
+        retention_cron = self.cfg.schedule.get("retention_cron", "0 4 * * 1")
+        sched.add_job(
+            self._run_retention,
+            CronTrigger.from_crontab(retention_cron, timezone=tz),
+            id="retention_weekly",
         )
 
         sched.start()

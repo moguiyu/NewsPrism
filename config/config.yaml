@@ -10,11 +10,26 @@ schedule:
   prepublish_collect_cron: "20 7 * * *"
   publish_cron: "30 7 * * *"    # build staged report before the 08:00 push
   push_cron: "0 8 * * *"        # deliver final page + Telegram at 08:00 sharp
+  feedback_poll_cron: "5 * * * *"   # hourly: pull editor accept/reject taps from Telegram
+  calibrate_cron: "30 3 * * 1"      # weekly Mon 03:30: nudge weights + refresh policy memory
+  retention_cron: "0 4 * * 1"       # weekly Mon 04:00: drop unclustered articles >30d
   push_retry:
     enabled: true
     max_attempts: 3
     retry_interval_minutes: 5
   timezone: "Europe/Warsaw"     # overridable via SCHEDULE_TIMEZONE env var
+
+# ─── EVOLUTION (P2) ─────────────────────────────────────────────────────────────
+evolution:
+  feedback_enabled: true
+  calibration:
+    enabled: true
+    training_window_days: 30
+    max_step: 0.02          # per-week weight nudge magnitude
+    weight_bounds: [0.3, 3.0]   # clamp as multiples of each dimension's seed
+    min_feedback_to_run: 10
+    policy_max_bullets: 10
+  retention_days: 30
 
 # ─── COLLECTION ────────────────────────────────────────────────────────────────
 collection:

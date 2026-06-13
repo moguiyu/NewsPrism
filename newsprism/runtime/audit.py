@@ -301,6 +301,97 @@ def audit(days: int = 10, anchor_date: str | None = None, db_path: str | Path = 
         )
 
     result["issues"] = dict(result["issues"])
+
+    # ── source contribution (impact-weighted attribution via cluster_evaluations) ──
+    if db.exists():
+        with _connect(db) as conn:
+            eval_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(cluster_evaluations)").fetchall()
+            }
+        if eval_columns:
+            with _connect(db) as conn:
+                # One row per (source_name, cluster) — join article membership to evaluations.
+                # Use json_each to expand article_ids array; aggregate source_count per cluster
+                # in a subquery to avoid window functions (SQLite DISTINCT in window unsupported).
+                contrib_rows = conn.execute(
+                    """
+                    SELECT
+                        a.source_name,
+                        c.id        AS cluster_id,
+                        e.composite AS composite,
+                        e.selected  AS selected,
+                        sc.source_count AS source_count_in_cluster
+                    FROM clusters c
+                    JOIN cluster_evaluations e
+                        ON e.cluster_id = c.id AND e.report_date = c.report_date
+                    JOIN articles a
+                        ON json_each.value = a.id,
+                        json_each(c.article_ids)
+                    JOIN (
+                        SELECT c2.id AS cluster_id,
+                               COUNT(DISTINCT a2.source_name) AS source_count
+                        FROM clusters c2
+                        JOIN cluster_evaluations e2
+                            ON e2.cluster_id = c2.id AND e2.report_date = c2.report_date
+                        JOIN articles a2
+                            ON json_each.value = a2.id,
+                            json_each(c2.article_ids)
+                        WHERE c2.report_date BETWEEN ? AND ?
+                        GROUP BY c2.id
+                    ) sc ON sc.cluster_id = c.id
+                    WHERE c.report_date BETWEEN ? AND ?
+                    """,
+                    (start, end, start, end),
+                ).fetchall()
+            # Aggregate in Python; deduplicate per (source, cluster)
+            from collections import defaultdict
+            src_clusters: dict[str, set[int]] = defaultdict(set)
+            src_composite: dict[str, float] = defaultdict(float)
+            src_exclusive: dict[str, int] = defaultdict(int)
+            src_selected: dict[str, int] = defaultdict(int)
+            seen: set[tuple[str, int]] = set()
+            for row in contrib_rows:
+                src = row["source_name"]
+                cid = row["cluster_id"]
+                if (src, cid) in seen:
+                    continue
+                seen.add((src, cid))
+                src_clusters[src].add(cid)
+                src_composite[src] += float(row["composite"] or 0.0)
+                if int(row["source_count_in_cluster"]) == 1:
+                    src_exclusive[src] += 1
+                if int(row["selected"] or 0):
+                    src_selected[src] += 1
+
+            ranked = sorted(
+                src_clusters.keys(),
+                key=lambda s: src_composite[s],
+                reverse=True,
+            )
+            contribution_list = [
+                {
+                    "source_name": src,
+                    "appearances": len(src_clusters[src]),
+                    "impact_weighted": round(src_composite[src], 3),
+                    "exclusive": src_exclusive[src],
+                    "selected_count": src_selected[src],
+                }
+                for src in ranked
+            ]
+
+            zero_contribution: list[str] = []
+            try:
+                cfg_source_names = {s.name for s in load_config().sources}
+                active_source_names = set(src_clusters.keys())
+                zero_contribution = sorted(cfg_source_names - active_source_names)
+            except Exception:
+                pass
+
+            result["source_contribution"] = {
+                "ranked": contribution_list,
+                "zero_contribution_sources": zero_contribution,
+            }
+
     return result
 
 
@@ -327,4 +418,23 @@ def format_audit_report(payload: dict[str, Any]) -> str:
             f"generic_or_stale={len(report['generic_or_stale_articles'])}, "
             f"markdown_leaks={report['markdown_leaks']}"
         )
+
+    sc = payload.get("source_contribution")
+    if sc:
+        lines.append("")
+        lines.append("Source contribution (impact-weighted):")
+        ranked = sc.get("ranked") or []
+        header = f"  {'Source':<35} {'Appear':>6}  {'Impact':>7}  {'Excl':>5}  {'Sel':>5}"
+        lines.append(header)
+        lines.append("  " + "-" * (len(header) - 2))
+        for entry in ranked[:15]:
+            lines.append(
+                f"  {entry['source_name']:<35} {entry['appearances']:>6}  "
+                f"{entry['impact_weighted']:>7.3f}  {entry['exclusive']:>5}  {entry['selected_count']:>5}"
+            )
+        zeros = sc.get("zero_contribution_sources") or []
+        if zeros:
+            lines.append("")
+            lines.append(f"  Zero-contribution (candidates to drop): {', '.join(zeros)}")
+
     return "\n".join(lines)

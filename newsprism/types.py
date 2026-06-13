@@ -257,6 +257,7 @@ class ClusterSummary:
     display_category: str | None = None
     feelgood_score: float = 0.0
     feelgood_reason: str = ""
+    cluster_db_id: int | None = None   # set after the cluster row is persisted (feedback target)
 
 
 @dataclass
