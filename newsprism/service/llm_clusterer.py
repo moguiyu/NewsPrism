@@ -1,16 +1,18 @@
-"""LLM-driven clusterer using a single API call to group articles by event.
+"""LLM-driven clusterer using batched API calls to group articles by event.
 
-Replaces the embedding+cosine-sim approach. The LLM groups articles by
-real-world event identity, not just topic overlap. Falls back to the
-embedding Clusterer if the LLM call fails or returns too few clusters.
+The LLM groups articles by real-world event identity. Large pools are split
+into time-ordered chunks (clustering.llm_max_articles_per_call each); a
+same-event split across a chunk boundary is tolerated — downstream display
+dedup merges it. Falls back to the embedding Clusterer if any LLM call fails
+or returns too few clusters.
 
-Layer: service (imports types, config, service/llm_compat; never imports repo or runtime)
+Layer: service (imports types, config, service/llm_compat; never imports runtime)
 """
 from __future__ import annotations
 
 import json
 import logging
-from collections import defaultdict
+import math
 
 import litellm
 
@@ -20,12 +22,6 @@ from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.types import Article, ArticleCluster
 
 logger = logging.getLogger(__name__)
-
-_TOPIC_LIST = (
-    "World News, Geopolitics, Society, Tech Companies - International, "
-    "Tech Companies - China, AI & LLM, Smartphones & Electronics, "
-    "Science & Health, Energy & Climate (English), Games - Platform, Other"
-)
 
 _SYSTEM_PROMPT = (
     "You are a senior news editor grouping wire stories by real-world event.\n"
@@ -44,10 +40,10 @@ def _keep_one_per_source(articles: list[Article]) -> list[Article]:
 
 
 class LLMClusterer:
-    """Groups articles by real-world event using a single LLM call.
+    """Groups articles by real-world event using batched LLM calls.
 
-    Falls back to the embedding-based Clusterer if the LLM call fails or
-    returns fewer clusters than ``min_clusters_fallback``.
+    Falls back to the embedding-based Clusterer if an LLM call fails or
+    the combined result has fewer clusters than ``min_clusters_fallback``.
     """
 
     def __init__(self, cfg: Config) -> None:
@@ -56,6 +52,9 @@ class LLMClusterer:
         self.base_url = cfg.litellm_base_url
         self.source_regions = {s.name: s.region for s in cfg.sources}
         self.min_clusters_fallback = cfg.clustering.get("llm_min_clusters_fallback", 3)
+        self.max_articles_per_call = max(
+            20, int(cfg.clustering.get("llm_max_articles_per_call", 300))
+        )
         self._compat_kwargs = completion_compat_kwargs(cfg.litellm_model, cfg.litellm_base_url)
         self._fallback = Clusterer(cfg)
 
@@ -63,7 +62,7 @@ class LLMClusterer:
         if not articles:
             return []
         try:
-            clusters = self._llm_cluster(articles)
+            clusters = self._cluster_chunked(articles)
             if len(clusters) < self.min_clusters_fallback:
                 logger.warning(
                     "LLM clustering returned %d clusters (< %d) — falling back to embedding clusterer",
@@ -78,14 +77,51 @@ class LLMClusterer:
             )
             return self._fallback.cluster(articles)
 
+    def _cluster_chunked(self, articles: list[Article]) -> list[ArticleCluster]:
+        if len(articles) <= self.max_articles_per_call:
+            chunks = [articles]
+        else:
+            # Time-ordered chunks of roughly equal size; same-event splits across
+            # a boundary are merged later by display dedup.
+            ordered = sorted(articles, key=lambda a: a.published_at, reverse=True)
+            chunk_count = math.ceil(len(ordered) / self.max_articles_per_call)
+            size = math.ceil(len(ordered) / chunk_count)
+            chunks = [ordered[i:i + size] for i in range(0, len(ordered), size)]
+            logger.info(
+                "LLM clustering volume guard: %d articles split into %d chunks of <=%d",
+                len(articles),
+                len(chunks),
+                size,
+            )
+
+        clusters: list[ArticleCluster] = []
+        for chunk in chunks:
+            clusters.extend(self._llm_cluster(chunk))
+
+        # Sort: most diverse (regions, sources, articles) first
+        clusters.sort(
+            key=lambda c: (
+                len({self.source_regions.get(a.source_name, "intl") for a in c.articles}),
+                len(c.sources),
+                len(c.articles),
+            ),
+            reverse=True,
+        )
+        logger.info(
+            "LLM clusterer: %d clusters from %d articles (%d chunks)",
+            len(clusters),
+            len(articles),
+            len(chunks),
+        )
+        return clusters
+
     def _llm_cluster(self, articles: list[Article]) -> list[ArticleCluster]:
         payload = [
             {
                 "id": i,
                 "source": a.source_name,
-                "lang": a.topics[0][:2] if a.topics else "?",
                 "title": a.title,
-                "snippet": (a.content or "")[:300],
+                "snippet": (a.content or "")[:240],
             }
             for i, a in enumerate(articles)
         ]
@@ -94,13 +130,15 @@ class LLMClusterer:
             f"Group the following {len(articles)} news articles into clusters.\n\n"
             "Rules:\n"
             "- Group ONLY articles that cover the exact same real-world event or development.\n"
+            "- Articles in DIFFERENT LANGUAGES covering the same event MUST be grouped together.\n"
+            "- Tightly coupled developments of one event within the window (a strike and the "
+            "same day's response to it) belong in one cluster.\n"
             "- Do NOT group merely topically similar articles "
             "(e.g. two different earthquakes, two unrelated political speeches).\n"
             "- Each cluster should have a concise English event label (≤8 words).\n"
-            f"- Assign the most fitting topic category from this list: {_TOPIC_LIST}\n"
             '- Articles that do not fit any cluster go in "unclustered".\n\n'
             "Return exactly this JSON structure:\n"
-            '{{"clusters": [{{"label": "...", "topic": "...", "ids": [0, 3, 7]}}], "unclustered": [1, 2, 4]}}\n\n'
+            '{{"clusters": [{{"label": "...", "ids": [0, 3, 7]}}], "unclustered": [1, 2, 4]}}\n\n'
             f"Articles:\n{json.dumps(payload, ensure_ascii=False)}"
         )
 
@@ -112,8 +150,9 @@ class LLMClusterer:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=2000,
+            max_tokens=8000,
             temperature=0.1,
+            response_format={"type": "json_object"},
             **self._compat_kwargs,
         )
 
@@ -148,35 +187,12 @@ class LLMClusterer:
             if not cluster_articles:
                 continue
 
-            topic_category = entry.get("topic", "Other") or "Other"
-            label = entry.get("label", topic_category)
-
-            unique_regions = {
-                self.source_regions.get(a.source_name, "intl")
-                for a in cluster_articles
-            }
-
-            logger.debug("LLM cluster label: %r (topic: %r)", label, topic_category)
-            ac = ArticleCluster(
-                topic_category=topic_category,
-                articles=cluster_articles,
+            label = str(entry.get("label") or "").strip() or cluster_articles[0].title[:60]
+            result.append(
+                ArticleCluster(
+                    topic_category=label,
+                    articles=cluster_articles,
+                )
             )
-            result.append(ac)
 
-        # Sort: most diverse (regions, sources, articles) first
-        result.sort(
-            key=lambda c: (
-                len({self.source_regions.get(a.source_name, "intl") for a in c.articles}),
-                len(c.sources),
-                len(c.articles),
-            ),
-            reverse=True,
-        )
-
-        logger.info(
-            "LLM clusterer: %d clusters from %d articles (%d unclustered)",
-            len(result),
-            n,
-            len(parsed.get("unclustered", [])),
-        )
         return result

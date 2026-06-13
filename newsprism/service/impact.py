@@ -135,6 +135,18 @@ class ImpactAssessor:
 
     # ─── PUBLIC API ──────────────────────────────────────────────────────────
 
+    def rank_candidates(self, clusters: list[ArticleCluster], window: int) -> list[ArticleCluster]:
+        """Return the top-`window` clusters by local cross-source signal (no LLM).
+
+        Bounds how many clusters get LLM-scored. Signal rewards multi-source /
+        multi-region / high-tier pickup — a non-keyword proxy for "this story
+        has real coverage" — so the impact call still decides among a broad set.
+        """
+        if len(clusters) <= window:
+            return list(clusters)
+        scored = sorted(clusters, key=lambda c: self._signal(c)[0], reverse=True)
+        return scored[:window]
+
     def assess_clusters(self, clusters: list[ArticleCluster]) -> list[ImpactAssessment]:
         """Evaluate all clusters; attach the assessment to each cluster."""
         if not clusters:

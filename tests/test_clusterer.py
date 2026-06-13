@@ -97,12 +97,14 @@ def test_cluster_prunes_duplicate_source_articles():
 
 def test_clusterer_does_not_apply_report_cap():
     clusterer = Clusterer(_config())
+    # Orthogonal (one-hot) embeddings → 21 genuinely distinct events. With topic
+    # gating removed, separation is purely by cosine similarity.
     articles = [
         _article(
             "Reuters",
             f"Distinct story {i}",
             [f"Unique Topic {i}"],
-            [1.0, float(i + 1)],
+            [1.0 if j == i else 0.0 for j in range(21)],
         )
         for i in range(21)
     ]

@@ -1,154 +1,140 @@
-from __future__ import annotations
-
+"""Tests for the impact-driven editorial planner: selection, 正能量, display dedup."""
 from datetime import datetime, timezone
 
-from newsprism.config import Config, SourceConfig
-from newsprism.service.editorial_planner import EditorialPlanner, _body_only_text
-from newsprism.types import Article, ArticleCluster, ClusterSummary
+from newsprism.config import Config
+from newsprism.service.editorial_planner import (
+    resolve_display_duplicates,
+    select_positive_summaries,
+    select_report_clusters,
+)
+from newsprism.types import Article, ArticleCluster, ClusterSummary, ImpactAssessment
 
 
-def _cfg() -> Config:
+def _config(max_per_category: int = 8, max_clusters: int = 20) -> Config:
     return Config(
         raw={},
-        sources=[
-            SourceConfig("Reuters", "Reuters", "https://reuters.com", None, "rss", 1.0, "en", region="us"),
-        ],
+        sources=[],
         topics={},
         schedule={},
         collection={},
-        filter={"positive_energy_pre_filter": {"topic": "Positive Energy"}},
-        clustering={"max_clusters_per_report": 10},
+        filter={},
+        clustering={"max_clusters_per_report": max_clusters},
         dedup={},
         summarizer={},
         output={
-            "hot_topics": {
-                "enabled": True,
-                "min_items_per_topic": 5,
-                "max_topic_tabs": 3,
-                "tab_name_max_chars": 10,
-                "icon_allowlist": ["globe", "war", "trade", "chip", "ai", "energy"],
-            },
+            "hot_topics": {"enabled": False},
             "positive_energy": {"enabled": True, "max_items": 5},
         },
         active_search={},
-        topic_equivalence={},
+        editorial_values={
+            "impact": {
+                "diversity": {"max_per_category": max_per_category},
+                "positive": {"min_feelgood": 7.0, "max_severity": 4.0},
+            }
+        },
     )
 
 
-def _summary(title: str, key: str | None = None, role: str = "none", body: str | None = None) -> ClusterSummary:
-    cluster = ArticleCluster(
-        topic_category="World News",
-        articles=[
-            Article(
-                url=f"https://example.com/{title.replace(' ', '-')}",
-                title=title,
-                source_name="Reuters",
-                published_at=datetime.now(tz=timezone.utc),
-                content=body or f"{title} body.",
-            )
-        ],
+def _article(title: str, url: str | None = None, region: str = "us", embedding=None) -> Article:
+    return Article(
+        url=url or f"https://example.com/{title}",
+        title=title,
+        source_name="Reuters",
+        published_at=datetime.now(tz=timezone.utc),
+        content=f"{title} body",
+        origin_region=region,
+        embedding=embedding,
     )
-    cluster.storyline_key = key
-    cluster.macro_topic_key = key
-    cluster.storyline_name = "伊朗局势" if key else None
-    cluster.macro_topic_name = "伊朗局势" if key else None
-    cluster.storyline_role = role
-    cluster.storyline_membership_status = role if role in {"core", "spillover"} else "none"
-    return ClusterSummary(cluster=cluster, summary=f"**{title}**\n\n{body or 'Body.'}")
 
 
-def test_editorial_planner_folds_two_story_family_out_of_main_feed():
-    planner = EditorialPlanner(_cfg())
-    first = _summary("Iran war talks update", key="iran", role="core", body="Iran war talks continue.")
-    second = _summary("Iran war disrupts Hormuz shipping", key="iran", role="spillover", body="Iran war disruption affects Hormuz shipping.")
-    standalone = _summary("SpaceX IPO update")
-
-    plan = planner.plan([first, second, standalone], local_positive_summaries=[])
-
-    assert len(plan.focus_storylines) == 1
-    assert plan.focus_storylines[0]["storyline_key"] == "iran"
-    assert plan.regular_summaries == [standalone]
-    assert plan.hot_topics == []
-
-
-def test_editorial_planner_absorbs_related_spillover_into_focus_storyline():
-    planner = EditorialPlanner(_cfg())
-    iran_talks = _summary(
-        "特朗普称美伊协议即将签署",
-        key="middle-east",
-        role="core",
-        body="美国与伊朗围绕战争降级和协议继续谈判。",
+def _cluster(title, composite, category="国际时政", feelgood=0.0, severity=5.0, url=None, embedding=None):
+    cluster = ArticleCluster(topic_category=title, articles=[_article(title, url=url, embedding=embedding)])
+    cluster.impact = ImpactAssessment(
+        cluster_key=title,
+        dims={"feelgood": feelgood, "severity": severity},
+        composite=composite,
+        display_category=category,
+        status="publishable",
     )
-    opec_oil = _summary(
-        "OPEC下调全球石油需求增长预测",
-        key="middle-east",
-        role="spillover",
-        body="OPEC下调石油需求预测，市场关注伊朗战争对能源价格的影响。",
-    )
-    ecb_inflation = _summary(
-        "欧洲央行加息应对伊朗战争引发的通胀",
-        body="欧洲央行加息以应对伊朗战争导致的能源价格飙升和通胀上升。",
-    )
-    standalone = _summary("SpaceX IPO update")
+    cluster.display_category = category
+    return cluster
 
-    plan = planner.plan([iran_talks, opec_oil, ecb_inflation, standalone], local_positive_summaries=[])
 
-    assert len(plan.focus_storylines) == 1
-    assert [summary for summary in plan.focus_storylines[0]["summaries"]] == [
-        iran_talks,
-        opec_oil,
-        ecb_inflation,
+def _summary(title, composite, category="国际时政", feelgood=0.0, severity=5.0, url=None, embedding=None):
+    cluster = _cluster(title, composite, category, feelgood, severity, url=url, embedding=embedding)
+    summary = ClusterSummary(cluster=cluster, summary=f"**{title}**\n\n{title} body")
+    summary.impact = cluster.impact
+    summary.display_category = category
+    summary.quality_status = "publishable"
+    return summary
+
+
+def test_select_ranks_by_composite():
+    clusters = [_cluster("low", 0.20), _cluster("high", 0.80), _cluster("mid", 0.50)]
+    _hot, main = select_report_clusters(clusters, _config())
+    assert [c.topic_category for c in main] == ["high", "mid", "low"]
+
+
+def test_select_respects_main_limit():
+    clusters = [_cluster(f"c{i}", 0.9 - i * 0.01) for i in range(40)]
+    _hot, main = select_report_clusters(clusters, _config(max_clusters=20))
+    assert len(main) == 20
+
+
+def test_select_enforces_category_diversity_cap():
+    clusters = [_cluster(f"geo{i}", 0.9 - i * 0.01, category="国际时政") for i in range(10)]
+    clusters += [_cluster("tech", 0.40, category="科技创新")]
+    _hot, main = select_report_clusters(clusters, _config(max_per_category=3, max_clusters=5))
+    assert "科技创新" in [c.display_category for c in main]
+
+
+def test_positive_selects_high_feelgood_low_severity():
+    summaries = [
+        _summary("serious", 0.8, feelgood=0.0, severity=9.0),
+        _summary("cute animal", 0.4, category="文化艺术", feelgood=9.0, severity=1.0, url="https://a.com/x"),
+        _summary("uplifting", 0.4, category="社会民生", feelgood=8.0, severity=2.0, url="https://b.com/y"),
     ]
-    assert plan.regular_summaries == [standalone]
+    titles = [s.cluster.topic_category for s in select_positive_summaries(summaries, _config())]
+    assert "cute animal" in titles and "uplifting" in titles and "serious" not in titles
 
 
-def test_editorial_planner_does_not_fold_unrelated_ai_items_by_key_only():
-    planner = EditorialPlanner(_cfg())
-    safety = _summary(
-        "Anthropic apologizes for hidden Claude safety guardrail",
-        key="ai-vendors",
-        role="core",
-        body="Anthropic adjusted Claude safety guardrails after user complaints.",
-    )
-    pricing = _summary(
-        "OpenAI plans price cuts to compete with Anthropic",
-        key="ai-vendors",
-        role="core",
-        body="OpenAI is preparing pricing changes to compete with Anthropic for enterprise users.",
-    )
-
-    plan = planner.plan([safety, pricing], local_positive_summaries=[])
-
-    assert plan.focus_storylines == []
-    assert {id(summary) for summary in plan.regular_summaries} == {id(safety), id(pricing)}
+def test_positive_excludes_high_severity_even_if_feelgood():
+    summaries = [_summary("bittersweet", 0.5, feelgood=8.0, severity=7.0)]
+    assert select_positive_summaries(summaries, _config()) == []
 
 
-def test_editorial_planner_finalizes_existing_base_plan():
-    planner = EditorialPlanner(_cfg())
-    first = _summary("Iran war talks update", key="iran", role="core", body="Iran war talks continue.")
-    second = _summary("Iran war disrupts Hormuz shipping", key="iran", role="spillover", body="Iran war disruption affects Hormuz shipping.")
-    standalone = _summary("SpaceX IPO update")
-
-    base_plan = planner.base_plan([first, second, standalone])
-    plan = planner.finalize(base_plan, positive_summaries=[])
-
-    assert len(base_plan.focus_storylines) == 1
-    assert base_plan.regular_summaries == [standalone]
-    assert plan.focus_storylines == base_plan.focus_storylines
-    assert plan.regular_summaries == [standalone]
-    assert plan.positive_summaries == []
+def test_positive_domain_diversity():
+    summaries = [
+        _summary("a", 0.4, feelgood=9.0, severity=1.0, url="https://same.com/1"),
+        _summary("b", 0.4, feelgood=8.5, severity=1.0, url="https://same.com/2"),
+    ]
+    assert len(select_positive_summaries(summaries, _config())) == 1
 
 
-def test_body_only_text_strips_headline_and_perspective_bullets():
-    text = """
+def test_positive_respects_max_items():
+    summaries = [_summary(f"good{i}", 0.4, feelgood=9.0, severity=1.0, url=f"https://d{i}.com/x") for i in range(8)]
+    cfg = _config()
+    cfg.output["positive_energy"]["max_items"] = 3
+    assert len(select_positive_summaries(summaries, cfg)) == 3
 
-**鲸鱼幼崽获救**
 
-救援人员将鲸鱼幼崽带回深水区。
-• 【Reuters】关注救援行动。
-- 【BBC】关注当地志愿者。
-* 【AP】关注海洋保护。
+def test_display_dedup_merges_shared_url():
+    shared = "https://wire.com/story"
+    left = _summary("left", 0.8, url=shared, embedding=[1.0, 0.0])
+    right = _summary("right", 0.6, url=shared, embedding=[0.0, 1.0])
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
+    assert len(regular) == 1 and regular[0].cluster.topic_category == "left"
 
-"""
 
-    assert _body_only_text(text) == "救援人员将鲸鱼幼崽带回深水区。"
+def test_display_dedup_merges_near_identical_embeddings():
+    left = _summary("event A", 0.8, url="https://a.com/1", embedding=[1.0, 0.0, 0.0])
+    right = _summary("event A restated", 0.6, url="https://b.com/2", embedding=[0.99, 0.01, 0.0])
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
+    assert len(regular) == 1
+
+
+def test_display_dedup_keeps_distinct_stories():
+    left = _summary("event A", 0.8, url="https://a.com/1", embedding=[1.0, 0.0, 0.0])
+    right = _summary("event B", 0.6, url="https://b.com/2", embedding=[0.0, 1.0, 0.0])
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
+    assert len(regular) == 2

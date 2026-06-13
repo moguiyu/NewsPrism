@@ -189,7 +189,13 @@ def _md_to_html(text: str) -> Markup:
     return Markup("<br>\n".join(lines))
 
 
-def _broad_category(topic_category: str) -> str:
+_BROAD_CATEGORIES = {meta[0] for meta in _CATEGORY_META}
+
+
+def _broad_category(topic_category: str, display_category: str | None = None) -> str:
+    # Impact evaluation emits one of the 7 canonical Chinese categories directly.
+    if display_category and display_category in _BROAD_CATEGORIES:
+        return display_category
     if topic_category in _BROAD_CATEGORY_MAP:
         return _BROAD_CATEGORY_MAP[topic_category]
     for key, broad in _BROAD_CATEGORY_MAP.items():
@@ -790,7 +796,10 @@ class HtmlRenderer:
         grouped_perspectives_en = perspective_payload_en["grouped_perspectives"]
         perspectives_list = perspective_payload["perspectives_list"]
         perspectives_list_en = perspective_payload_en["perspectives_list"]
-        broad = _broad_category(summary.cluster.topic_category)
+        broad = _broad_category(
+            summary.cluster.topic_category,
+            getattr(summary, "display_category", None) or getattr(summary.cluster, "display_category", None),
+        )
         can_show_source_confirmation = _can_show_source_confirmation(
             summary,
             perspective_payload["distinct_perspective_count"],

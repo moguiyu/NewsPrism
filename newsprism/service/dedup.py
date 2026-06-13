@@ -14,22 +14,12 @@ import logging
 
 import numpy as np
 from rapidfuzz import fuzz
-from sentence_transformers import SentenceTransformer
 
 from newsprism.config import Config
+from newsprism.service.embeddings import get_model as _get_model
 from newsprism.types import Article
 
 logger = logging.getLogger(__name__)
-
-_MODEL: SentenceTransformer | None = None
-
-
-def _get_model() -> SentenceTransformer:
-    global _MODEL
-    if _MODEL is None:
-        # paraphrase-multilingual-mpnet works well for mixed CJK+EN text
-        _MODEL = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
-    return _MODEL
 
 
 class Deduplicator:

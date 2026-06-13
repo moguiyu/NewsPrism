@@ -41,3 +41,7 @@ eval-report-*.png
 report-overview.png
 .playwright-mcp/
 .firecrawl/
+tests/goldens/
+data/*.db
+data/*.db.bak*
+data/newsprism_fnos_*.db

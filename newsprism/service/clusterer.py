@@ -6,8 +6,8 @@ multiple perspectives (source viewpoints) on that topic.
 
 Algorithm:
 1. Use pre-computed embeddings from dedup pass (or compute them now).
-2. Group articles that share ≥1 topic category AND have cosine similarity
-   above threshold AND were published within the time window.
+2. Group articles with cosine similarity above threshold that were published
+   within the time window and pass a title-ngram coherence check.
 3. Within each cluster, articles from the same source are further deduped
    (keep the most representative one).
 4. Clusters with only one source are kept as single-perspective items.
@@ -22,21 +22,12 @@ import re
 from collections import defaultdict
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from newsprism.config import Config
+from newsprism.service.embeddings import get_model as _get_model
 from newsprism.types import Article, ArticleCluster
 
 logger = logging.getLogger(__name__)
-
-_MODEL: SentenceTransformer | None = None
-
-
-def _get_model() -> SentenceTransformer:
-    global _MODEL
-    if _MODEL is None:
-        _MODEL = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
-    return _MODEL
 
 
 class Clusterer:
@@ -47,40 +38,6 @@ class Clusterer:
         self.time_window_h = cfg.clustering.get("time_window_hours", 48)
         # Store source regions for diversity ranking
         self.source_regions = {s.name: s.region for s in cfg.sources}
-        # Topic equivalence mapping
-        self.topic_equivalence = cfg.topic_equivalence
-        # Pre-compute expanded topic sets for efficiency
-        self._topic_cache: dict[str, set[str]] = {}
-
-    def _expand_topics(self, topics: list[str]) -> set[str]:
-        """Expand topic list to include all equivalent topics.
-
-        Bidirectional and transitive: if A≡B and B≡C, then A≡C.
-        Results are cached for efficiency.
-        """
-        result = set(topics)
-        for topic in topics:
-            if topic in self._topic_cache:
-                result |= self._topic_cache[topic]
-                continue
-
-            # Compute expanded set for this topic
-            expanded = {topic}
-            to_process = [topic]
-            while to_process:
-                current = to_process.pop()
-                # Check if current topic has equivalents
-                for canonical, equivalents in self.topic_equivalence.items():
-                    if current == canonical or current in equivalents:
-                        for eq in [canonical] + equivalents:
-                            if eq not in expanded:
-                                expanded.add(eq)
-                                to_process.append(eq)
-
-            self._topic_cache[topic] = expanded
-            result |= expanded
-
-        return result
 
     def cluster(self, articles: list[Article]) -> list[ArticleCluster]:
         """Group articles into event clusters using graph connectivity."""
@@ -90,16 +47,11 @@ class Clusterer:
         self._ensure_embeddings(articles)
 
         sorted_articles = sorted(articles, key=lambda a: a.published_at, reverse=True)
-        expanded_topics = [self._expand_topics(article.topics) for article in sorted_articles]
         adjacency: dict[int, set[int]] = defaultdict(set)
-        equivalence_matches = 0
 
         for i, article in enumerate(sorted_articles):
             for j in range(i + 1, len(sorted_articles)):
                 other = sorted_articles[j]
-                if not expanded_topics[i] & expanded_topics[j]:
-                    continue
-
                 dt = abs((article.published_at - other.published_at).total_seconds())
                 if dt > self.time_window_h * 3600:
                     continue
@@ -114,15 +66,6 @@ class Clusterer:
                 adjacency[i].add(j)
                 adjacency[j].add(i)
 
-                direct_overlap = bool(set(article.topics) & set(other.topics))
-                if not direct_overlap:
-                    equivalence_matches += 1
-                    logger.debug(
-                        "Topic equivalence enabled clustering: '%s' (%s) ↔ '%s' (%s)",
-                        article.title[:50], article.topics,
-                        other.title[:50], other.topics,
-                    )
-
         clusters: list[ArticleCluster] = []
         visited: set[int] = set()
         for idx in range(len(sorted_articles)):
@@ -132,8 +75,8 @@ class Clusterer:
             component = self._collect_component(idx, adjacency)
             visited |= component
             cluster_articles = self._prune_same_source(component, sorted_articles, adjacency)
-            primary = self._primary_topic(cluster_articles)
-            clusters.append(ArticleCluster(topic_category=primary, articles=cluster_articles))
+            label = cluster_articles[0].title[:60] if cluster_articles else "Event"
+            clusters.append(ArticleCluster(topic_category=label, articles=cluster_articles))
 
         # Sort primarily by regional diversity (number of unique countries/regions)
         # then by number of sources, then by number of articles.
@@ -146,8 +89,8 @@ class Clusterer:
 
         multi = sum(1 for c in clusters if c.is_multi_source)
         logger.info(
-            "Clustering: %d articles → %d clusters (%d multi-source, %d via topic equivalence)",
-            len(articles), len(clusters), multi, equivalence_matches,
+            "Clustering: %d articles → %d clusters (%d multi-source)",
+            len(articles), len(clusters), multi,
         )
         return clusters
 
@@ -250,12 +193,3 @@ class Clusterer:
         if len(compact) <= n:
             return {compact}
         return {compact[i : i + n] for i in range(len(compact) - n + 1)}
-
-    def _primary_topic(self, articles: list[Article]) -> str:
-        counts: dict[str, int] = defaultdict(int)
-        for a in articles:
-            for t in a.topics:
-                counts[t] += 1
-        if not counts:
-            return "Other"
-        return max(counts, key=lambda t: counts[t])

@@ -15,7 +15,7 @@ impact:
     review_floor: 0.34
     single_source_severity_review: 6.0
   positive:
-    min_feelgood: 7.0
+    min_feelgood: 6.0     # seed; P2 calibration tunes against the empty-rate target
     max_severity: 4.0
   batch_size: 40
 

@@ -18,7 +18,6 @@ import litellm
 from pydantic import BaseModel, Field
 
 from newsprism.config import Config
-from newsprism.service.language import looks_like_chinese_text
 from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup
 
@@ -116,37 +115,17 @@ class SummaryTranslation(BaseModel):
     )
 
 
-class PositiveSummaryTranslation(BaseModel):
-    headline_zh: str = Field(description="Simplified Chinese headline translated from the source-language positive story.")
-    body_zh: str = Field(description="Simplified Chinese body translated from the source-language positive story.")
-    headline_en: str = Field(description="English headline translated from the source-language positive story.")
-    body_en: str = Field(description="English body translated from the source-language positive story.")
+class BatchTranslationItem(BaseModel):
+    index: int = Field(description="Zero-based index of the summary in the batch.")
+    headline: str = ""
+    body: str = ""
+    short_topic_name: str | None = None
+    perspective_groups: list[PerspectiveGroupItem] = Field(default_factory=list)
 
 
-class LabelTranslation(BaseModel):
-    translation: str = Field(description="Concise English translation for the provided Chinese label.")
-
-
-class PositiveEnergyItem(BaseModel):
-    cluster_index: int = Field(description="1-based cluster index from the provided candidate list.")
-    good_fit: bool = Field(
-        default=False,
-        description="Whether the story is a strict fit for 今日正能量: cheerful, funny, happy, cute, heartwarming, or clearly uplifting.",
-    )
-    positive: bool = Field(description="Whether the story is generally positive or uplifting.")
-    fun: bool = Field(description="Whether the story is generally fun, light, delightful, or entertaining.")
-    low_conflict: bool = Field(description="Whether the story is low-conflict and not dominated by harm, war, disaster, scandal, or market stress.")
-    confidence: float = Field(description="Confidence between 0 and 1.")
-    reason: str = Field(description="Short Chinese reason for inclusion or exclusion.")
-
-
-class PositiveEnergyBatch(BaseModel):
-    items: list[PositiveEnergyItem] = Field(
-        default_factory=list,
-        description="One classification item per candidate story.",
-    )
-
-
+class BatchTranslationResponse(BaseModel):
+    items: list[BatchTranslationItem] = Field(default_factory=list)
+    labels: dict[str, str] = Field(default_factory=dict)
 
 
 class StorylineRelationItem(BaseModel):
@@ -292,40 +271,51 @@ class Summarizer:
                 for group in grouped_perspectives
                 for source_name in group.sources
             }
-            parsed_short = item.short_topic_name
-            parsed_icon = item.topic_icon_key
-
             results.append(
                 ClusterSummary(
                     cluster=cluster,
                     summary=summary_text,
                     perspectives=perspectives,
                     grouped_perspectives=grouped_perspectives,
-                    short_topic_name=parsed_short,
-                    topic_icon_key=parsed_icon,
-                    storyline_key=cluster.storyline_key,
-                    storyline_name=cluster.storyline_name,
-                    storyline_role=cluster.storyline_role,
-                    storyline_confidence=cluster.storyline_confidence,
-                    storyline_state=cluster.storyline_state,
-                    storyline_timeline=list(cluster.storyline_timeline),
-                    storyline_membership_status=cluster.storyline_membership_status,
-                    storyline_anchor_labels=list(cluster.storyline_anchor_labels),
-                    macro_topic_key=cluster.macro_topic_key,
-                    macro_topic_name=cluster.macro_topic_name,
-                    macro_topic_icon_key=cluster.macro_topic_icon_key,
-                    macro_topic_member_count=cluster.macro_topic_member_count,
-                    quality_report=cluster.quality_report,
-                    quality_status=cluster.quality_report.status if cluster.quality_report else "unknown",
-                    quality_score=cluster.quality_report.overall_score if cluster.quality_report else 0.0,
-                    quality_flags=list(cluster.quality_report.flags) if cluster.quality_report else [],
-                    confirmed_claims=list(cluster.quality_report.confirmed_claims) if cluster.quality_report else [],
-                    contested_claims=list(cluster.quality_report.contested_claims) if cluster.quality_report else [],
-                    evidence_summary=cluster.quality_report.evidence_summary if cluster.quality_report else "",
+                    short_topic_name=item.short_topic_name,
+                    topic_icon_key=item.topic_icon_key,
+                    **self._cluster_metadata_kwargs(cluster),
                 )
             )
 
         return results
+
+    def _cluster_metadata_kwargs(self, cluster: ArticleCluster) -> dict[str, object]:
+        """Storyline/impact fields copied from the cluster onto its summary."""
+        impact = getattr(cluster, "impact", None)
+        regions = {
+            article.origin_region for article in cluster.articles if article.origin_region
+        }
+        evidence_summary = (
+            f"{len(cluster.sources)} 个来源、{max(len(regions), 1)} 个地区参与评估。"
+            if impact is not None
+            else ""
+        )
+        return {
+            "storyline_key": cluster.storyline_key,
+            "storyline_name": cluster.storyline_name,
+            "storyline_role": cluster.storyline_role,
+            "storyline_confidence": cluster.storyline_confidence,
+            "storyline_state": cluster.storyline_state,
+            "storyline_timeline": list(cluster.storyline_timeline),
+            "storyline_membership_status": cluster.storyline_membership_status,
+            "storyline_anchor_labels": list(cluster.storyline_anchor_labels),
+            "macro_topic_key": cluster.macro_topic_key,
+            "macro_topic_name": cluster.macro_topic_name,
+            "macro_topic_icon_key": cluster.macro_topic_icon_key,
+            "macro_topic_member_count": cluster.macro_topic_member_count,
+            "impact": impact,
+            "display_category": getattr(cluster, "display_category", None),
+            "quality_status": impact.status if impact is not None else "unknown",
+            "quality_score": impact.composite if impact is not None else 0.0,
+            "quality_flags": list(impact.flags) if impact is not None else [],
+            "evidence_summary": evidence_summary,
+        }
 
     def translate_report_content(
         self,
@@ -333,84 +323,114 @@ class Summarizer:
         hot_topics: list[dict[str, object]] | None = None,
         focus_storylines: list[dict[str, object]] | None = None,
     ) -> bool:
+        """Translate the whole report in one batched LLM call (chunked if large)."""
         if not summaries:
             return False
 
         hot_topics = hot_topics or []
         focus_storylines = focus_storylines or []
-        label_cache: dict[str, str] = {}
+
+        labels: set[str] = set()
+        for summary in summaries:
+            if summary.storyline_name:
+                labels.add(summary.storyline_name)
+            if summary.macro_topic_name:
+                labels.add(summary.macro_topic_name)
+        for family in hot_topics + focus_storylines:
+            family_name = str(family.get("macro_topic_name") or family.get("storyline_name") or "").strip()
+            if family_name:
+                labels.add(family_name)
 
         try:
-            for summary in summaries:
-                self._translate_cluster_summary(summary)
+            label_map: dict[str, str] = {}
+            chunk_size = 18
+            for start in range(0, len(summaries), chunk_size):
+                chunk = summaries[start:start + chunk_size]
+                chunk_labels = sorted(labels) if start == 0 else []
+                label_map.update(self._translate_summary_chunk(chunk, chunk_labels))
 
             for summary in summaries:
-                if summary.storyline_name:
-                    summary.storyline_name_en = label_cache.setdefault(
-                        summary.storyline_name,
-                        self._translate_short_label(summary.storyline_name),
-                    )
-                if summary.macro_topic_name:
-                    summary.macro_topic_name_en = label_cache.setdefault(
-                        summary.macro_topic_name,
-                        self._translate_short_label(summary.macro_topic_name),
-                    )
-
+                if summary.storyline_name and summary.storyline_name in label_map:
+                    summary.storyline_name_en = label_map[summary.storyline_name]
+                if summary.macro_topic_name and summary.macro_topic_name in label_map:
+                    summary.macro_topic_name_en = label_map[summary.macro_topic_name]
             for family in hot_topics:
                 family_name = str(family.get("macro_topic_name") or family.get("storyline_name") or "").strip()
-                if not family_name:
-                    continue
-                translation = label_cache.setdefault(family_name, self._translate_short_label(family_name))
-                family["macro_topic_name_en"] = translation
-                family["storyline_name_en"] = translation
-
+                if family_name and family_name in label_map:
+                    family["macro_topic_name_en"] = label_map[family_name]
+                    family["storyline_name_en"] = label_map[family_name]
             for family in focus_storylines:
                 family_name = str(family.get("storyline_name") or "").strip()
-                if not family_name:
-                    continue
-                translation = label_cache.setdefault(family_name, self._translate_short_label(family_name))
-                family["storyline_name_en"] = translation
-
+                if family_name and family_name in label_map:
+                    family["storyline_name_en"] = label_map[family_name]
             return True
         except Exception as exc:
             logger.warning("English translation failed; rendering Chinese-only report: %s", exc)
             self._clear_translated_report_content(summaries, hot_topics, focus_storylines)
             return False
 
-    def normalize_positive_energy_summaries(
+    def _translate_summary_chunk(
         self,
         summaries: list[ClusterSummary],
-        include_english: bool = False,
-    ) -> list[ClusterSummary]:
-        """Ensure positive-energy primary fields are Chinese; drop untranslatable source-language items."""
-        normalized: list[ClusterSummary] = []
-        for summary in summaries:
-            if self._summary_has_chinese_primary(summary):
-                if include_english and not summary.summary_en:
-                    try:
-                        self._translate_cluster_summary(summary)
-                    except Exception as exc:
-                        logger.warning(
-                            "Positive-energy English translation failed; keeping Chinese-only item '%s': %s",
-                            _extract_headline(summary.summary) or summary.cluster.topic_category,
-                            exc,
-                        )
-                normalized.append(summary)
-                continue
-
-            try:
-                self._translate_positive_energy_summary(summary, include_english=include_english)
-            except Exception as exc:
+        labels: list[str],
+    ) -> dict[str, str]:
+        """Translate one chunk of summaries + shared labels; apply results in place."""
+        payload_items = []
+        for index, summary in enumerate(summaries):
+            payload_items.append(
+                {
+                    "index": index,
+                    "headline": _extract_headline(summary.summary),
+                    "body": _body_only(summary.summary),
+                    "short_topic_name": summary.short_topic_name or "",
+                    "perspective_groups": [
+                        {"sources": list(group.sources), "perspective": group.perspective}
+                        for group in summary.grouped_perspectives
+                    ],
+                }
+            )
+        prompt = (
+            "Translate this Chinese news digest JSON into English.\n"
+            "Rules:\n"
+            "1. Preserve facts exactly; do not add or remove information.\n"
+            "2. Return the same items array with the same index values.\n"
+            "3. Keep every source name in perspective_groups exactly unchanged; "
+            "preserve grouping and ordering.\n"
+            "4. short_topic_name: concise natural English suitable for a tab label.\n"
+            "5. labels: translate each Chinese label to a concise English tab label "
+            "(2-5 words), returned as {\"原文\": \"English\"}.\n"
+            "6. Return compact JSON only: {\"items\": [...], \"labels\": {...}}.\n\n"
+            f"{json.dumps({'items': payload_items, 'labels': labels}, ensure_ascii=False)}"
+        )
+        content = self._json_completion(
+            system_prompt="You are a precise translator for structured news digests.",
+            user_prompt=prompt,
+            max_tokens=min(16000, 600 + len(summaries) * 420 + len(labels) * 20),
+            temperature=0.1,
+        )
+        parsed = BatchTranslationResponse.model_validate_json(content)
+        items_by_index = {item.index: item for item in parsed.items}
+        for index, summary in enumerate(summaries):
+            item = items_by_index.get(index)
+            if item is None:
                 logger.warning(
-                    "Positive-energy story omitted because Chinese normalization failed: source=%s headline=%s error=%s",
-                    summary.cluster.sources[0] if summary.cluster.sources else "",
-                    _extract_headline(summary.summary) or summary.cluster.topic_category,
-                    exc,
+                    "Translation batch missing index %d ('%s'); keeping Chinese-only",
+                    index,
+                    summary.cluster.topic_category,
                 )
                 continue
-            normalized.append(summary)
-        return normalized
-
+            headline_clean = item.headline.strip().strip("*")
+            body_clean = item.body.strip()
+            if not headline_clean or not body_clean:
+                continue
+            summary.summary_en = f"**{headline_clean}**\n\n{body_clean}"
+            summary.grouped_perspectives_en = self._align_translated_perspective_groups(
+                summary,
+                item.perspective_groups,
+            )
+            if item.short_topic_name and item.short_topic_name.strip():
+                summary.short_topic_name_en = self._clean_short_label(item.short_topic_name)
+        return {key: self._clean_short_label(value) for key, value in parsed.labels.items() if value}
 
     def classify_storyline_relations(
         self,
@@ -454,62 +474,6 @@ class Summarizer:
                     }
                 )
         return relations
-
-    def classify_positive_energy(self, summaries: list[ClusterSummary]) -> list[dict[str, object]]:
-        """Classify main-lane summaries for the 今日正能量 section."""
-        if not summaries:
-            return []
-
-        prompt = self._build_positive_energy_prompt(summaries)
-        try:
-            content = self._json_completion(
-                system_prompt=(
-                    "You classify daily news digests for a light positive highlights section. "
-                    "Return compact JSON only."
-                ),
-                user_prompt=prompt,
-                max_tokens=min(self.max_tokens, max(500, len(summaries) * 130)),
-                temperature=0.1,
-            )
-            parsed = self._parse_positive_energy_content(content)
-            if parsed is None:
-                logger.warning("Retrying positive-energy classification with compact JSON prompt after parse failure")
-                retry_content = self._json_completion(
-                    system_prompt=(
-                        "You classify daily news digests for a light positive highlights section. "
-                        "Return compact JSON only."
-                    ),
-                    user_prompt=f"{prompt}\n\n最后要求：只输出紧凑 JSON，不要解释，不要 Markdown。",
-                    max_tokens=min(self.max_tokens, max(500, len(summaries) * 130)),
-                    temperature=0.1,
-                )
-                parsed = self._parse_positive_energy_content(retry_content)
-            if parsed is None:
-                logger.error("Failed to parse positive-energy classification output")
-                return []
-        except Exception as exc:
-            logger.warning("Positive-energy classification failed; section will be omitted: %s", exc)
-            return []
-
-        valid_indices = set(range(1, len(summaries) + 1))
-        normalized: list[dict[str, object]] = []
-        seen: set[int] = set()
-        for item in parsed.items:
-            if item.cluster_index not in valid_indices or item.cluster_index in seen:
-                continue
-            seen.add(item.cluster_index)
-            normalized.append(
-                {
-                    "cluster_index": item.cluster_index,
-                    "good_fit": bool(item.good_fit),
-                    "positive": bool(item.positive),
-                    "fun": bool(item.fun),
-                    "low_conflict": bool(item.low_conflict),
-                    "confidence": max(0.0, min(1.0, float(item.confidence))),
-                    "reason": item.reason.strip(),
-                }
-            )
-        return normalized
 
     def name_storyline(self, anchor_clusters: list[ArticleCluster]) -> str | None:
         if not anchor_clusters:
@@ -617,34 +581,6 @@ class Summarizer:
                     return None
         return None
 
-    def _parse_positive_energy_content(self, content: str) -> PositiveEnergyBatch | None:
-        if not content.strip():
-            return None
-        try:
-            return PositiveEnergyBatch.model_validate_json(content)
-        except Exception:
-            extracted = self._extract_json_object(content)
-            if extracted and extracted != content:
-                try:
-                    return PositiveEnergyBatch.model_validate_json(extracted)
-                except Exception:
-                    return None
-        return None
-
-    def _parse_positive_summary_translation_content(self, content: str) -> PositiveSummaryTranslation | None:
-        if not content.strip():
-            return None
-        try:
-            return PositiveSummaryTranslation.model_validate_json(content)
-        except Exception:
-            extracted = self._extract_json_object(content)
-            if extracted and extracted != content:
-                try:
-                    return PositiveSummaryTranslation.model_validate_json(extracted)
-                except Exception:
-                    return None
-        return None
-
     def _extract_json_object(self, content: str) -> str | None:
         start = content.find("{")
         end = content.rfind("}")
@@ -688,35 +624,6 @@ class Summarizer:
             )
         return salvaged
 
-
-    def _build_positive_energy_prompt(self, summaries: list[ClusterSummary]) -> str:
-        candidates = []
-        for index, summary in enumerate(summaries, 1):
-            headline = _extract_headline(summary.summary) or summary.cluster.topic_category
-            body = _body_only(summary.summary)
-            candidates.append(
-                {
-                    "cluster_index": index,
-                    "topic_category": summary.cluster.topic_category,
-                    "headline": headline,
-                    "body": body[:500],
-                    "sources": list(summary.cluster.sources),
-                    "article_titles": [article.title for article in summary.cluster.articles[:4]],
-                }
-            )
-        return (
-            "请从每日新闻主线中判断哪些适合放入“今日正能量”轻量板块。\n"
-            "选择标准：\n"
-            "1. good_fit=true 只给真正让读者感到开心、可爱、好笑、暖心、治愈、轻松愉快或明确振奋的新闻。\n"
-            "2. positive=true 表示故事整体积极、温暖、鼓舞或有明确好消息；仅仅“没有坏消息”不算。\n"
-            "3. fun=true 表示故事轻松、有趣、文化娱乐、体育、科学发现、生活方式或让读者会心一笑。\n"
-            "4. low_conflict=true 表示不是战争、灾害、伤亡、严重政治冲突、犯罪、制裁、诉讼、市场暴跌或丑闻主导。\n"
-            "5. 中性、严肃、程序性、政策、商业、地缘政治、诉讼、事故、灾害、犯罪、市场压力类新闻，即使 low_conflict，也必须 good_fit=false。\n"
-            "6. 可以全部 false；不要为了凑数强行标 good_fit 或 positive。\n"
-            "7. reason 用不超过 24 个中文字符说明原因。\n"
-            "只输出 JSON：{\"items\":[{\"cluster_index\":1,\"good_fit\":true,\"positive\":true,\"fun\":false,\"low_conflict\":true,\"confidence\":0.83,\"reason\":\"...\"}]}\n\n"
-            f"候选新闻：\n{json.dumps(candidates, ensure_ascii=False, indent=2)}"
-        )
 
     def _summarize_cluster(self, cluster: ArticleCluster) -> ClusterSummary:
         articles_block = self._format_articles(cluster)
@@ -769,145 +676,8 @@ class Summarizer:
             grouped_perspectives=grouped_perspectives,
             short_topic_name=parsed.short_topic_name,
             topic_icon_key=parsed.topic_icon_key,
-            storyline_key=cluster.storyline_key,
-            storyline_name=cluster.storyline_name,
-            storyline_role=cluster.storyline_role,
-            storyline_confidence=cluster.storyline_confidence,
-            storyline_state=cluster.storyline_state,
-            storyline_timeline=list(cluster.storyline_timeline),
-            storyline_membership_status=cluster.storyline_membership_status,
-            storyline_anchor_labels=list(cluster.storyline_anchor_labels),
-            macro_topic_key=cluster.macro_topic_key,
-            macro_topic_name=cluster.macro_topic_name,
-            macro_topic_icon_key=cluster.macro_topic_icon_key,
-            macro_topic_member_count=cluster.macro_topic_member_count,
-            quality_report=cluster.quality_report,
-            quality_status=cluster.quality_report.status if cluster.quality_report else "unknown",
-            quality_score=cluster.quality_report.overall_score if cluster.quality_report else 0.0,
-            quality_flags=list(cluster.quality_report.flags) if cluster.quality_report else [],
-            confirmed_claims=list(cluster.quality_report.confirmed_claims) if cluster.quality_report else [],
-            contested_claims=list(cluster.quality_report.contested_claims) if cluster.quality_report else [],
-            evidence_summary=cluster.quality_report.evidence_summary if cluster.quality_report else "",
+            **self._cluster_metadata_kwargs(cluster),
         )
-
-    def _translate_cluster_summary(self, summary: ClusterSummary) -> None:
-        headline = _extract_headline(summary.summary)
-        body = _body_only(summary.summary)
-        if not headline or not body:
-            raise ValueError(f"Missing structured Chinese summary for '{summary.cluster.topic_category}'")
-
-        perspective_groups = [
-            {
-                "sources": list(group.sources),
-                "perspective": group.perspective,
-            }
-            for group in summary.grouped_perspectives
-        ]
-        prompt_payload = {
-            "headline": headline,
-            "body": body,
-            "short_topic_name": summary.short_topic_name or "",
-            "perspective_groups": perspective_groups,
-        }
-        prompt = (
-            "Translate the following Chinese news digest JSON into English.\n"
-            "Rules:\n"
-            "1. Preserve facts exactly; do not add or remove information.\n"
-            "2. Keep the exact same JSON shape.\n"
-            "3. Keep every source name in perspective_groups exactly unchanged.\n"
-            "4. Preserve the exact source grouping and ordering in perspective_groups.\n"
-            "5. short_topic_name should be concise natural English suitable for a tab label.\n"
-            "6. Return compact JSON only.\n\n"
-            f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2)}"
-        )
-        content = self._json_completion(
-            system_prompt="You are a precise translator for structured news digests.",
-            user_prompt=prompt,
-            max_tokens=min(self.max_tokens, 1400),
-            temperature=0.1,
-        )
-        parsed = SummaryTranslation.model_validate_json(content)
-
-        headline_clean = parsed.headline.strip().strip("*")
-        body_clean = parsed.body.strip()
-        if not headline_clean or not body_clean:
-            raise ValueError(f"Incomplete English translation for '{summary.cluster.topic_category}'")
-
-        translated_groups = self._align_translated_perspective_groups(
-            summary,
-            parsed.perspective_groups,
-        )
-
-        summary.summary_en = f"**{headline_clean}**\n\n{body_clean}"
-        summary.grouped_perspectives_en = translated_groups
-        if parsed.short_topic_name and parsed.short_topic_name.strip():
-            summary.short_topic_name_en = self._clean_short_label(parsed.short_topic_name)
-        elif summary.short_topic_name:
-            summary.short_topic_name_en = self._translate_short_label(summary.short_topic_name)
-
-    def _summary_has_chinese_primary(self, summary: ClusterSummary) -> bool:
-        headline = _extract_headline(summary.summary)
-        body = _body_only(summary.summary)
-        return looks_like_chinese_text(f"{headline}\n{body}")
-
-    def _translate_positive_energy_summary(self, summary: ClusterSummary, include_english: bool) -> None:
-        headline = _extract_headline(summary.summary)
-        if not headline and summary.cluster.articles:
-            headline = summary.cluster.articles[0].title
-        body = _body_only(summary.summary)
-        if not body and summary.cluster.articles:
-            body = summary.cluster.articles[0].content
-        source_language = self._source_language_for_summary(summary)
-        prompt_payload = {
-            "source_language": source_language,
-            "headline": headline,
-            "body": body[:1200],
-            "source": summary.cluster.sources[0] if summary.cluster.sources else "",
-        }
-        prompt = (
-            "Normalize this 今日正能量 positive-highlight story for a bilingual Chinese report.\n"
-            "Return JSON with exactly these keys: headline_zh, body_zh, headline_en, body_en.\n"
-            "Rules:\n"
-            "1. headline_zh and body_zh must be Simplified Chinese.\n"
-            "2. headline_en and body_en must be natural English.\n"
-            "3. Preserve facts exactly; do not add context, claims, dates, names, or numbers.\n"
-            "4. Keep body_zh to 1-2 short sentences and under 120 Chinese characters.\n"
-            "5. Keep body_en to 1-2 short sentences.\n"
-            "6. Return compact JSON only.\n\n"
-            f"{json.dumps(prompt_payload, ensure_ascii=False, indent=2)}"
-        )
-        content = self._json_completion(
-            system_prompt="You translate short positive news highlights without adding facts.",
-            user_prompt=prompt,
-            max_tokens=min(self.max_tokens, 700),
-            temperature=0.1,
-        )
-        parsed = self._parse_positive_summary_translation_content(content)
-        if parsed is None:
-            raise ValueError("Could not parse positive summary translation JSON")
-
-        headline_zh = self._clean_positive_text(parsed.headline_zh).strip("*")
-        body_zh = self._clean_positive_text(parsed.body_zh)
-        headline_en = self._clean_positive_text(parsed.headline_en).strip("*")
-        body_en = self._clean_positive_text(parsed.body_en)
-        if not headline_zh or not body_zh or not looks_like_chinese_text(f"{headline_zh}\n{body_zh}"):
-            raise ValueError("Translated positive summary does not contain a Chinese primary digest")
-        if include_english and (not headline_en or not body_en):
-            raise ValueError("Translated positive summary is missing English fields")
-
-        summary.summary = f"**{headline_zh}**\n\n{body_zh}"
-        summary.summary_en = f"**{headline_en}**\n\n{body_en}" if include_english else None
-
-    def _source_language_for_summary(self, summary: ClusterSummary) -> str:
-        source_languages = {source.name: source.language for source in self.cfg.sources}
-        for article in summary.cluster.articles:
-            language = source_languages.get(article.source_name)
-            if language:
-                return language
-        return "unknown"
-
-    def _clean_positive_text(self, text: str) -> str:
-        return re.sub(r"\s+", " ", (text or "").strip())
 
     def _align_translated_perspective_groups(
         self,
@@ -948,34 +718,6 @@ class Summarizer:
                 )
             )
         return aligned
-
-    def _translate_short_label(self, label: str) -> str:
-        normalized = self._clean_short_label(label)
-        if not normalized:
-            raise ValueError("Cannot translate empty label")
-        if re.fullmatch(r"[A-Za-z0-9&/\- +]+", normalized):
-            return normalized
-
-        prompt = (
-            "Translate this short Chinese news topic label into concise natural English.\n"
-            "Rules:\n"
-            "1. Keep it short, usually 2-5 words.\n"
-            "2. Make it suitable for a navigation tab.\n"
-            "3. Do not add explanations or punctuation decoration.\n"
-            "4. Return JSON only: {\"translation\": \"...\"}\n\n"
-            f"label: {normalized}"
-        )
-        content = self._json_completion(
-            system_prompt="You translate short news labels into concise English.",
-            user_prompt=prompt,
-            max_tokens=120,
-            temperature=0.1,
-        )
-        parsed = LabelTranslation.model_validate_json(content)
-        translation = self._clean_short_label(parsed.translation)
-        if not translation:
-            raise ValueError(f"Empty translated label for '{normalized}'")
-        return translation
 
     def _clear_translated_report_content(
         self,
@@ -1128,25 +870,20 @@ class Summarizer:
         return f"{instruction}\n\n{quality_block}\n\n{articles_block}"
 
     def _quality_prompt_block(self, cluster: ArticleCluster) -> str:
-        report = getattr(cluster, "quality_report", None)
-        decision = getattr(cluster, "quality_decision", None)
-        if report is None:
+        impact = getattr(cluster, "impact", None)
+        if impact is None:
             return ""
-        constraints = list(getattr(decision, "summary_constraints", []) or [])
-        confirmed = list(getattr(report, "confirmed_claims", []) or [])[:6]
-        contested = list(getattr(report, "contested_claims", []) or [])[:6]
         payload = {
-            "quality_status": report.status,
-            "quality_score": round(float(report.overall_score), 3),
-            "evidence_summary": report.evidence_summary,
-            "confirmed_claims": confirmed,
-            "contested_claims": contested,
-            "summary_constraints": constraints,
+            "quality_status": impact.status,
+            "impact_score": round(float(impact.composite), 3),
+            "source_signal": round(float(impact.signal), 3),
+            "flags": list(impact.flags),
+            "summary_constraints": list(impact.summary_constraints),
         }
         return (
-            "质量评估约束：\n"
-            "请严格依据以下质量评估结果写摘要；confirmed_claims 可以作为事实陈述，"
-            "contested_claims 必须显式归因或避免定论。\n"
+            "编辑约束：\n"
+            "请严格遵守 summary_constraints；flags 提示来源结构风险（如单一来源、仅官方来源），"
+            "对应内容必须显式归因，不要写成已被独立证实的事实。\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
 

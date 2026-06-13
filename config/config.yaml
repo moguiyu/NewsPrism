@@ -1031,14 +1031,12 @@ sources:
     name_en: AP News
     url: https://apnews.com
     rss_url: null                                              # ✗ AP removed public RSS; rsshub.app rate-limited
-    rsshub_url: http://rsshub:1200/apnews/topics/technology    # optional local RSSHub fallback
-    # Deployment: docker run -d --name rsshub -p 1200:1200 diygod/rssfeed
+    rsshub_url: http://rsshub:1200/apnews/topics/technology    # self-hosted rsshub container (verified working in prod)
     type: rss
     weight: 0.95
     language: en
     region: us
     tier: editorial
-    enabled: false
     perspective: "美联社，中立事实报道，重大事件权威来源"
 
   - name: NPR

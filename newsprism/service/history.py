@@ -1,0 +1,748 @@
+"""Cross-day story history — freshness, cluster validation, storyline grouping.
+
+Merges the former freshness.py and storyline.py into one keyword-free module.
+Everything here answers the same question at different granularities: how does
+today's cluster relate to recent coverage?
+
+- FreshnessEvaluator     new / developing / stale vs the recent cluster history
+- EventClusterValidator  splits incoherent clusters (embedding + title ngrams)
+- StorylineResolver      groups related clusters into storyline families using
+                         centroid similarity + the LLM relation classifier
+- StorylineStateMachine  lifecycle state + compact persisted timeline
+
+No curated vocabulary: decisions come from embeddings, character-ngram string
+overlap, shared history keys, and LLM relation judgments.
+
+Layer: service (imports types, config; never imports runtime)
+"""
+from __future__ import annotations
+
+import logging
+import re
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import date
+
+import numpy as np
+
+from newsprism.config import Config
+from newsprism.service.embeddings import get_model
+from newsprism.types import Article, ArticleCluster, Cluster, StorylineEvent
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_ICON = "globe"
+_MAX_PAIR_CANDIDATES = 24
+_NEIGHBORS_PER_NODE = 4
+
+# Cluster-validation thresholds (stable across releases; not editorial tuning)
+_PAIR_SPLIT_SIMILARITY = 0.50
+_PAIR_SPLIT_TITLE_OVERLAP = 0.03
+_OUTLIER_AVG_SIMILARITY = 0.58
+_OUTLIER_AVG_TITLE_OVERLAP = 0.05
+
+
+# ─── SHARED TEXT/VECTOR HELPERS ───────────────────────────────────────────────
+
+def _char_ngrams(text: str, n: int = 3) -> set[str]:
+    compact = re.sub(r"[^\w一-鿿]+", "", text.lower())
+    if not compact:
+        return set()
+    if len(compact) <= n:
+        return {compact}
+    return {compact[i : i + n] for i in range(len(compact) - n + 1)}
+
+
+def _title_overlap(left: str, right: str) -> float:
+    left_ngrams = _char_ngrams(left)
+    right_ngrams = _char_ngrams(right)
+    if not left_ngrams or not right_ngrams:
+        return 0.0
+    union = left_ngrams | right_ngrams
+    if not union:
+        return 0.0
+    return len(left_ngrams & right_ngrams) / len(union)
+
+
+def _cluster_text(cluster: ArticleCluster) -> str:
+    titles = " ".join(article.title for article in cluster.articles[:3])
+    return f"{cluster.topic_category} {titles}".strip()
+
+
+def _cluster_centroid(cluster: ArticleCluster) -> np.ndarray | None:
+    embeddings = [
+        np.array(article.embedding, dtype=float)
+        for article in cluster.articles
+        if article.embedding is not None
+    ]
+    if not embeddings:
+        return None
+    centroid = np.mean(embeddings, axis=0)
+    norm = np.linalg.norm(centroid)
+    if norm == 0:
+        return None
+    return centroid / norm
+
+
+def _cosine(left: np.ndarray | None, right: np.ndarray | None) -> float:
+    if left is None or right is None:
+        return 0.0
+    return float(np.dot(left, right))
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9\-]+", "-", value.lower()).strip("-")
+    return slug or "storyline"
+
+
+def _short_name(value: str, max_chars: int) -> str:
+    compact = re.sub(r"\s+", "", value).strip()
+    compact = re.sub(r"^(热点专题[-:：]?|专题[-:：]?)", "", compact).strip()
+    compact = compact[:max_chars].strip(" -:：，,、。.；;")
+    return compact or "焦点话题"
+
+
+# ─── FRESHNESS ────────────────────────────────────────────────────────────────
+
+@dataclass
+class FreshnessResult:
+    """Result of freshness evaluation for a cluster."""
+    state: str  # "new" | "developing" | "stale"
+    continues_cluster_id: int | None = None
+    similarity_score: float = 0.0
+    new_sources: list[str] | None = None
+
+
+class FreshnessEvaluator:
+    """Classifies clusters as new, developing, or stale vs recent history."""
+
+    def __init__(self, cfg: Config) -> None:
+        self.similarity_threshold = 0.85  # high bar for "same story as before"
+        self.window_days = cfg.dedup.get("window_days", 3)
+        self._embedding_cache: dict[int, np.ndarray] = {}
+        self._text_embedding_cache: dict[str, np.ndarray] = {}
+
+    def evaluate(
+        self,
+        cluster: ArticleCluster,
+        summary: str,
+        historical_clusters: list[Cluster],
+    ) -> FreshnessResult:
+        if not historical_clusters or self.window_days <= 0:
+            return FreshnessResult(state="new")
+
+        new_embedding = self._get_text_embedding(summary)
+        best_match: Cluster | None = None
+        best_similarity = 0.0
+        for hist in historical_clusters:
+            if not hist.summary:
+                continue
+            similarity = float(np.dot(new_embedding, self._get_cached_embedding(hist)))
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_match = hist
+
+        if best_similarity < self.similarity_threshold or best_match is None:
+            return FreshnessResult(state="new", similarity_score=best_similarity)
+
+        new_sources = list(set(cluster.sources) - set(best_match.perspectives.keys()))
+        if new_sources:
+            return FreshnessResult(
+                state="developing",
+                continues_cluster_id=best_match.id,
+                similarity_score=best_similarity,
+                new_sources=new_sources,
+            )
+        return FreshnessResult(
+            state="stale",
+            continues_cluster_id=best_match.id,
+            similarity_score=best_similarity,
+        )
+
+    def classify_all(
+        self,
+        cluster_summaries: list[tuple[ArticleCluster, str]],
+        historical_clusters: list[Cluster],
+    ) -> list[tuple[ArticleCluster, str, FreshnessResult]]:
+        return [
+            (cluster, summary, self.evaluate(cluster, summary, historical_clusters))
+            for cluster, summary in cluster_summaries
+        ]
+
+    def score_text_to_historical_cluster(self, text: str, historical_cluster: Cluster) -> float:
+        if not historical_cluster.summary:
+            return 0.0
+        new_embedding = self._get_text_embedding(text)
+        return float(np.dot(new_embedding, self._get_cached_embedding(historical_cluster)))
+
+    def _compute_embedding(self, text: str) -> np.ndarray:
+        return get_model().encode([text], normalize_embeddings=True, show_progress_bar=False)[0]
+
+    def _get_cached_embedding(self, cluster: Cluster) -> np.ndarray:
+        if cluster.id in self._embedding_cache:
+            return self._embedding_cache[cluster.id]
+        embedding = self._compute_embedding(cluster.summary)
+        if cluster.id is not None:
+            self._embedding_cache[cluster.id] = embedding
+        return embedding
+
+    def _get_text_embedding(self, text: str) -> np.ndarray:
+        cached = self._text_embedding_cache.get(text)
+        if cached is not None:
+            return cached
+        embedding = self._compute_embedding(text)
+        self._text_embedding_cache[text] = embedding
+        return embedding
+
+
+# ─── EVENT CLUSTER VALIDATION ─────────────────────────────────────────────────
+
+class EventClusterValidator:
+    """Splits clusters whose members do not cohere (embedding + title ngrams)."""
+
+    def __init__(self, cfg: Config) -> None:
+        hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
+        self.enabled = hot_cfg.get("enabled", False)
+
+    def validate(self, clusters: list[ArticleCluster]) -> list[ArticleCluster]:
+        if not self.enabled:
+            return clusters
+        validated: list[ArticleCluster] = []
+        for cluster in clusters:
+            validated.extend(self._validate_cluster(cluster))
+        return validated
+
+    def _validate_cluster(self, cluster: ArticleCluster) -> list[ArticleCluster]:
+        if len(cluster.articles) <= 1:
+            return [cluster]
+
+        articles = list(cluster.articles)
+        if len(articles) == 2:
+            left, right = articles
+            similarity = _cosine(
+                np.array(left.embedding, dtype=float) if left.embedding is not None else None,
+                np.array(right.embedding, dtype=float) if right.embedding is not None else None,
+            )
+            if (
+                similarity < _PAIR_SPLIT_SIMILARITY
+                and _title_overlap(left.title, right.title) < _PAIR_SPLIT_TITLE_OVERLAP
+            ):
+                return [
+                    ArticleCluster(topic_category=left.title[:60], articles=[left]),
+                    ArticleCluster(topic_category=right.title[:60], articles=[right]),
+                ]
+            return [cluster]
+
+        outliers: list[Article] = []
+        retained: list[Article] = []
+        for idx, article in enumerate(articles):
+            sims: list[float] = []
+            overlaps: list[float] = []
+            left_vec = np.array(article.embedding, dtype=float) if article.embedding is not None else None
+            for other_idx, other in enumerate(articles):
+                if idx == other_idx:
+                    continue
+                right_vec = np.array(other.embedding, dtype=float) if other.embedding is not None else None
+                sims.append(_cosine(left_vec, right_vec))
+                overlaps.append(_title_overlap(article.title, other.title))
+            avg_sim = sum(sims) / len(sims) if sims else 1.0
+            avg_overlap = sum(overlaps) / len(overlaps) if overlaps else 1.0
+            if avg_sim < _OUTLIER_AVG_SIMILARITY and avg_overlap < _OUTLIER_AVG_TITLE_OVERLAP:
+                outliers.append(article)
+            else:
+                retained.append(article)
+
+        if not outliers:
+            return [cluster]
+
+        logger.info(
+            "Event cluster validator split %d outlier article(s) from cluster '%s': %s",
+            len(outliers),
+            cluster.topic_category,
+            ", ".join(article.title for article in outliers[:3]),
+        )
+        validated: list[ArticleCluster] = []
+        if retained:
+            validated.append(ArticleCluster(topic_category=cluster.topic_category, articles=retained))
+        validated.extend(
+            ArticleCluster(topic_category=article.title[:60], articles=[article])
+            for article in outliers
+        )
+        return validated
+
+
+# ─── STORYLINE LIFECYCLE ──────────────────────────────────────────────────────
+
+class StorylineStateMachine:
+    """Assign lifecycle state and a compact timeline for storyline clusters."""
+
+    STATES = {"emerging", "developing", "stabilized", "archived"}
+
+    def resolve_state(
+        self,
+        cluster: ArticleCluster,
+        historical_clusters: list[Cluster],
+    ) -> str:
+        related_history = self._related_history(cluster, historical_clusters)
+        if not related_history:
+            return "emerging"
+        impact = cluster.impact
+        regions = {
+            article.origin_region for article in cluster.articles if article.origin_region
+        }
+        if impact is not None and impact.composite >= 0.55 and (len(cluster.sources) >= 3 or len(regions) >= 2):
+            return "stabilized"
+        return "developing"
+
+    def apply(
+        self,
+        clusters: list[ArticleCluster],
+        historical_clusters: list[Cluster],
+        current_date: date,
+    ) -> list[ArticleCluster]:
+        for cluster in clusters:
+            state = self.resolve_state(cluster, historical_clusters)
+            cluster.storyline_state = state
+            cluster.storyline_timeline = self.timeline_for_cluster(cluster, historical_clusters, current_date, state)
+        return clusters
+
+    def timeline_for_cluster(
+        self,
+        cluster: ArticleCluster,
+        historical_clusters: list[Cluster],
+        current_date: date,
+        state: str | None = None,
+    ) -> list[StorylineEvent]:
+        key = cluster.storyline_key or cluster.macro_topic_key or _slugify(cluster.topic_category)
+        related = self._related_history(cluster, historical_clusters)
+        events: list[StorylineEvent] = []
+        for historical in related[:4]:
+            events.append(
+                StorylineEvent(
+                    storyline_key=key,
+                    event_date=historical.report_date,
+                    title=_short_name(historical.summary or historical.topic_category, 80),
+                    state=getattr(historical, "storyline_state", "developing") or "developing",
+                    summary=historical.summary,
+                    cluster_id=historical.id,
+                    quality_score=float(getattr(historical, "quality_score", 0.0) or 0.0),
+                    event_type="history",
+                )
+            )
+        lead_title = cluster.articles[0].title if cluster.articles else cluster.topic_category
+        events.append(
+            StorylineEvent(
+                storyline_key=key,
+                event_date=current_date.isoformat(),
+                title=lead_title,
+                state=state or cluster.storyline_state,
+                summary=cluster.topic_category,
+                cluster_id=None,
+                quality_score=(cluster.impact.composite if cluster.impact else 0.0),
+                event_type="current",
+            )
+        )
+        events.sort(key=lambda event: event.event_date)
+        return events[-5:]
+
+    def _related_history(self, cluster: ArticleCluster, historical_clusters: list[Cluster]) -> list[Cluster]:
+        key = cluster.storyline_key or cluster.macro_topic_key
+        if not key:
+            return []
+        related = [historical for historical in historical_clusters if historical.storyline_key == key]
+        related.sort(key=lambda historical: (historical.report_date, historical.id or 0), reverse=True)
+        return related
+
+
+# ─── STORYLINE RESOLUTION ─────────────────────────────────────────────────────
+
+class StorylineResolver:
+    """Group related event clusters into storyline families.
+
+    Pair candidates come from centroid cosine + title-ngram overlap + shared
+    history; the LLM relation classifier accepts/rejects each pair; union-find
+    over accepted edges forms families. Roles derive from edge relations.
+    """
+
+    def __init__(self, cfg: Config, summarizer, similarity_fn) -> None:
+        self.cfg = cfg
+        self.summarizer = summarizer
+        self.similarity_fn = similarity_fn
+        hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
+        self.max_name_chars = int(hot_cfg.get("tab_name_max_chars", 10))
+        self.edge_confidence_threshold = float(hot_cfg.get("edge_confidence_threshold", 0.56))
+        self.candidate_similarity = float(hot_cfg.get("admission_similarity", 0.62))
+        self.history_similarity_threshold = float(hot_cfg.get("history_similarity_threshold", 0.48))
+        self.icon_allowlist = list(hot_cfg.get("icon_allowlist", [_DEFAULT_ICON]))
+
+    def resolve(
+        self,
+        clusters: list[ArticleCluster],
+        historical_clusters: list[Cluster],
+        current_date: date,
+    ) -> list[ArticleCluster]:
+        if not clusters:
+            return []
+
+        profiles = [self._build_profile(cluster, index) for index, cluster in enumerate(clusters)]
+        history_matches = self._match_history(profiles, historical_clusters, current_date)
+        pair_candidates = self._build_pair_candidates(profiles, history_matches)
+        relations = self._classify_pairs(pair_candidates)
+        accepted_edges = [
+            edge
+            for edge in relations
+            if edge["relation"] != "not_related"
+            and float(edge["confidence"]) >= self.edge_confidence_threshold
+        ]
+        components = self._build_components(len(clusters), accepted_edges)
+        logger.info(
+            "Storyline resolver: clusters=%d history_matches=%d pairs=%d accepted_edges=%d families=%d",
+            len(clusters),
+            len(history_matches),
+            len(pair_candidates),
+            len(accepted_edges),
+            sum(1 for members in components.values() if len(members) > 1),
+        )
+        self._assign_storylines(clusters, profiles, components, accepted_edges, history_matches)
+        return clusters
+
+    # ── profile / history ────────────────────────────────────────────────────
+
+    def _build_profile(self, cluster: ArticleCluster, index: int) -> dict[str, object]:
+        lead_title = cluster.articles[0].title if cluster.articles else cluster.topic_category
+        return {
+            "index": index,
+            "cluster": cluster,
+            "text": _cluster_text(cluster),
+            "lead_title": lead_title,
+            "title_ngrams": _char_ngrams(lead_title),
+            "centroid": _cluster_centroid(cluster),
+        }
+
+    def _match_history(
+        self,
+        profiles: list[dict[str, object]],
+        historical_clusters: list[Cluster],
+        current_date: date,
+    ) -> dict[int, dict[str, object]]:
+        matches: dict[int, dict[str, object]] = {}
+        for profile in profiles:
+            best_score = 0.0
+            best_match: dict[str, object] | None = None
+            for historical in historical_clusters:
+                if not historical.storyline_key:
+                    continue
+                similarity = self.similarity_fn(str(profile["text"]), historical)
+                if similarity < self.history_similarity_threshold:
+                    continue
+                recency_bonus = 0.0
+                try:
+                    days_old = max((current_date - date.fromisoformat(historical.report_date)).days, 0)
+                    recency_bonus = max(0.0, (5 - days_old) / 5.0) * 0.08
+                except ValueError:
+                    pass
+                score = similarity + recency_bonus
+                if score <= best_score:
+                    continue
+                best_score = score
+                best_match = {
+                    "storyline_key": historical.storyline_key,
+                    "storyline_name": historical.storyline_name,
+                    "storyline_role": historical.storyline_role,
+                    "score": score,
+                    "cluster_id": historical.id,
+                }
+            if best_match is not None:
+                matches[int(profile["index"])] = best_match
+        return matches
+
+    # ── pair candidates / relations ──────────────────────────────────────────
+
+    def _build_pair_candidates(
+        self,
+        profiles: list[dict[str, object]],
+        history_matches: dict[int, dict[str, object]],
+    ) -> list[dict[str, object]]:
+        pair_candidates: list[dict[str, object]] = []
+        seen: set[tuple[int, int]] = set()
+        for idx, left in enumerate(profiles):
+            scored_neighbors: list[tuple[float, dict[str, object]]] = []
+            for right in profiles[idx + 1 :]:
+                pair_key = (int(left["index"]), int(right["index"]))
+                if pair_key in seen:
+                    continue
+                similarity = _cosine(left["centroid"], right["centroid"])
+                title_overlap = _title_overlap(str(left["lead_title"]), str(right["lead_title"]))
+                left_hist = history_matches.get(int(left["index"]), {})
+                right_hist = history_matches.get(int(right["index"]), {})
+                shared_history = bool(
+                    left_hist.get("storyline_key")
+                    and left_hist.get("storyline_key") == right_hist.get("storyline_key")
+                )
+                score = 0.0
+                if similarity >= self.candidate_similarity:
+                    score += 2.0 + similarity
+                if title_overlap >= 0.06:
+                    score += 1.0 + title_overlap
+                if shared_history:
+                    score += 1.5
+                if score <= 0:
+                    continue
+                seen.add(pair_key)
+                scored_neighbors.append(
+                    (
+                        score,
+                        {
+                            "left_index": pair_key[0],
+                            "right_index": pair_key[1],
+                            "left_cluster": left["cluster"],
+                            "right_cluster": right["cluster"],
+                            "left_history": left_hist,
+                            "right_history": right_hist,
+                            "similarity": similarity,
+                            "title_overlap": title_overlap,
+                            "signal_overlap": 1 if shared_history else 0,
+                        },
+                    )
+                )
+            scored_neighbors.sort(key=lambda item: item[0], reverse=True)
+            for score, context in scored_neighbors[:_NEIGHBORS_PER_NODE]:
+                pair_candidates.append({"score": score, **context})
+
+        pair_candidates.sort(key=lambda item: float(item["score"]), reverse=True)
+        return pair_candidates[:_MAX_PAIR_CANDIDATES]
+
+    def _classify_pairs(self, pair_candidates: list[dict[str, object]]) -> list[dict[str, object]]:
+        if not pair_candidates:
+            return []
+        try:
+            results = self.summarizer.classify_storyline_relations(pair_candidates)
+        except Exception as exc:
+            logger.warning("Storyline pair classification failed, falling back to heuristics: %s", exc)
+            results = []
+
+        by_pair = {
+            (int(result["left_index"]), int(result["right_index"])): result
+            for result in results
+            if isinstance(result.get("left_index"), int) and isinstance(result.get("right_index"), int)
+        }
+        normalized: list[dict[str, object]] = []
+        for candidate in pair_candidates:
+            pair_key = (int(candidate["left_index"]), int(candidate["right_index"]))
+            result = by_pair.get(pair_key)
+            if result is None:
+                result = self._heuristic_relation(candidate)
+            normalized.append(result)
+        return normalized
+
+    def _heuristic_relation(self, candidate: dict[str, object]) -> dict[str, object]:
+        similarity = float(candidate.get("similarity", 0.0))
+        title_overlap = float(candidate.get("title_overlap", 0.0))
+        shared_history = bool(candidate.get("signal_overlap", 0))
+        if similarity >= 0.80 and (title_overlap >= 0.06 or shared_history):
+            relation = "same_core_storyline"
+            confidence = min(0.92, 0.60 + similarity * 0.28)
+        elif similarity >= 0.66 and (title_overlap >= 0.06 or shared_history):
+            relation = "same_direct_spillover_storyline"
+            confidence = min(0.85, 0.5 + similarity * 0.22 + title_overlap * 0.15)
+        else:
+            relation = "not_related"
+            confidence = max(0.15, 0.45 - similarity * 0.2)
+        return {
+            "left_index": int(candidate["left_index"]),
+            "right_index": int(candidate["right_index"]),
+            "relation": relation,
+            "confidence": confidence,
+        }
+
+    def _build_components(self, node_count: int, edges: list[dict[str, object]]) -> dict[int, list[int]]:
+        parents = list(range(node_count))
+
+        def find(idx: int) -> int:
+            while parents[idx] != idx:
+                parents[idx] = parents[parents[idx]]
+                idx = parents[idx]
+            return idx
+
+        def union(left: int, right: int) -> None:
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parents[right_root] = left_root
+
+        for edge in edges:
+            union(int(edge["left_index"]), int(edge["right_index"]))
+
+        components: dict[int, list[int]] = defaultdict(list)
+        for idx in range(node_count):
+            components[find(idx)].append(idx)
+        return components
+
+    # ── assignment ───────────────────────────────────────────────────────────
+
+    def _assign_storylines(
+        self,
+        clusters: list[ArticleCluster],
+        profiles: list[dict[str, object]],
+        components: dict[int, list[int]],
+        edges: list[dict[str, object]],
+        history_matches: dict[int, dict[str, object]],
+    ) -> None:
+        edge_map: dict[int, list[dict[str, object]]] = defaultdict(list)
+        for edge in edges:
+            edge_map[int(edge["left_index"])].append(edge)
+            edge_map[int(edge["right_index"])].append(edge)
+
+        storyline_counter = 1
+        for component_nodes in components.values():
+            if len(component_nodes) == 1:
+                idx = component_nodes[0]
+                self._apply_singleton(clusters[idx], profiles[idx], history_matches.get(idx))
+                continue
+
+            roles = {
+                idx: (
+                    "core"
+                    if any(edge["relation"] == "same_core_storyline" for edge in edge_map.get(idx, []))
+                    else "spillover"
+                )
+                for idx in component_nodes
+            }
+            core_nodes = sorted(idx for idx, role in roles.items() if role == "core")
+            if not core_nodes:
+                # A pure-spillover component still needs a core anchor: pick the
+                # highest-composite node (ties broken by index) as the core event.
+                anchor = max(
+                    component_nodes,
+                    key=lambda idx: (
+                        clusters[idx].impact.composite if clusters[idx].impact else 0.0,
+                        -idx,
+                    ),
+                )
+                roles[anchor] = "core"
+                core_nodes = [anchor]
+
+            history_keys = {
+                match["storyline_key"]
+                for idx in component_nodes
+                if (match := history_matches.get(idx)) and match.get("storyline_key")
+            }
+            reuse_key = history_keys.pop() if len(history_keys) == 1 else None
+            if reuse_key:
+                storyline_key = str(reuse_key)
+                reuse_match = next(
+                    (
+                        match
+                        for idx in component_nodes
+                        if (match := history_matches.get(idx)) and match.get("storyline_key") == reuse_key
+                    ),
+                    None,
+                )
+                storyline_name = _short_name(
+                    str((reuse_match or {}).get("storyline_name") or reuse_key), self.max_name_chars
+                )
+            else:
+                storyline_name = self._build_storyline_name([clusters[idx] for idx in core_nodes])
+                storyline_key = f"{_slugify(storyline_name)}-{storyline_counter}"
+                storyline_counter += 1
+
+            component_edges = [
+                edge
+                for edge in edges
+                if int(edge["left_index"]) in component_nodes and int(edge["right_index"]) in component_nodes
+            ]
+            confidence = (
+                sum(float(edge["confidence"]) for edge in component_edges) / len(component_edges)
+                if component_edges
+                else 0.6
+            )
+            icon_key = self._pick_icon_key([clusters[idx] for idx in component_nodes])
+            anchor_labels = [
+                _short_name(str(profiles[idx]["lead_title"]), self.max_name_chars)
+                for idx in core_nodes[:3]
+            ]
+            for idx in sorted(component_nodes):
+                self._apply_storyline(
+                    clusters[idx],
+                    storyline_key=storyline_key,
+                    storyline_name=storyline_name,
+                    storyline_role=roles[idx],
+                    storyline_confidence=confidence,
+                    icon_key=icon_key,
+                    membership_status=roles[idx],
+                    anchor_labels=anchor_labels,
+                )
+
+    def _build_storyline_name(self, anchor_clusters: list[ArticleCluster]) -> str:
+        name_storyline = getattr(self.summarizer, "name_storyline", None)
+        if callable(name_storyline) and len(anchor_clusters) > 1:
+            generated = name_storyline(anchor_clusters)
+            if generated:
+                return _short_name(generated, self.max_name_chars)
+        lead = anchor_clusters[0]
+        candidate = lead.impact.short_topic_name if lead.impact and lead.impact.short_topic_name else None
+        if candidate:
+            return _short_name(candidate, self.max_name_chars)
+        if lead.articles:
+            return _short_name(lead.articles[0].title, self.max_name_chars)
+        return _short_name(lead.topic_category, self.max_name_chars)
+
+    def _pick_icon_key(self, clusters: list[ArticleCluster]) -> str:
+        counts: dict[str, int] = defaultdict(int)
+        for cluster in clusters:
+            icon = cluster.impact.topic_icon_key if cluster.impact else None
+            if icon:
+                counts[icon] += 1
+        if counts:
+            best = max(counts, key=lambda key: counts[key])
+            if best in self.icon_allowlist:
+                return best
+        return self.icon_allowlist[0] if self.icon_allowlist else _DEFAULT_ICON
+
+    def _apply_storyline(
+        self,
+        cluster: ArticleCluster,
+        storyline_key: str,
+        storyline_name: str,
+        storyline_role: str,
+        storyline_confidence: float,
+        icon_key: str,
+        membership_status: str,
+        anchor_labels: list[str],
+    ) -> None:
+        cluster.storyline_key = storyline_key
+        cluster.storyline_name = storyline_name
+        cluster.storyline_role = storyline_role
+        cluster.storyline_confidence = storyline_confidence
+        cluster.storyline_membership_status = membership_status
+        cluster.storyline_anchor_labels = list(anchor_labels)
+        # Compatibility with the renderer/report contract
+        cluster.macro_topic_key = storyline_key
+        cluster.macro_topic_name = storyline_name
+        cluster.macro_topic_icon_key = icon_key
+
+    def _apply_singleton(
+        self,
+        cluster: ArticleCluster,
+        profile: dict[str, object],
+        history_match: dict[str, object] | None,
+    ) -> None:
+        if history_match and history_match.get("storyline_key"):
+            storyline_key = str(history_match["storyline_key"])
+            storyline_name = _short_name(
+                str(history_match.get("storyline_name") or storyline_key), self.max_name_chars
+            )
+            confidence = float(history_match.get("score", 0.0))
+        else:
+            storyline_key = f"single-{int(profile['index']) + 1}"
+            storyline_name = _short_name(str(profile["lead_title"]), self.max_name_chars)
+            confidence = 0.0
+        self._apply_storyline(
+            cluster,
+            storyline_key=storyline_key,
+            storyline_name=storyline_name,
+            storyline_role="none",
+            storyline_confidence=confidence,
+            icon_key=self._pick_icon_key([cluster]),
+            membership_status="none",
+            anchor_labels=[],
+        )

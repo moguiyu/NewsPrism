@@ -35,7 +35,6 @@ from newsprism.repo import (
     insert_article,
     insert_cluster,
     insert_cluster_evaluation,
-    insert_cluster_quality_report,
     link_cluster_evaluation,
     mark_articles_clustered,
     reset_articles_clustered,
@@ -51,17 +50,17 @@ from newsprism.service.collector import Collector
 from newsprism.service.dedup import Deduplicator
 from newsprism.service.editorial_planner import (
     EditorialPlanner,
-    positive_energy_classification_pool,
-    select_positive_energy_summaries,
+    select_positive_summaries,
     select_report_clusters,
 )
-from newsprism.service.feelgood_scorer import FeelgoodScorer
-from newsprism.service.filter import TopicTagger
-from newsprism.service.freshness import FreshnessEvaluator
+from newsprism.service.history import (
+    EventClusterValidator,
+    FreshnessEvaluator,
+    StorylineResolver,
+    StorylineStateMachine,
+)
 from newsprism.service.impact import ImpactAssessor
-from newsprism.service.quality import QualityAssessor
 from newsprism.service.seeker import ActiveSeeker
-from newsprism.service.storyline import EventClusterValidator, StorylineResolver, StorylineStateMachine
 from newsprism.service.summarizer import Summarizer
 from newsprism.types import Article, ArticleCluster, Cluster, ClusterSummary, raw_to_articles
 
@@ -174,14 +173,11 @@ class Scheduler:
         self._apscheduler: AsyncIOScheduler | None = None
 
         self.collector = Collector(cfg)
-        self.feelgood_scorer = FeelgoodScorer(cfg)
-        self.tagger = TopicTagger(cfg)
         self.deduplicator = Deduplicator(cfg)
         self.clusterer = LLMClusterer(cfg) if cfg.use_llm_clustering else Clusterer(cfg)
         self.cluster_validator = EventClusterValidator(cfg)
         self.seeker = ActiveSeeker(cfg)
         self.summarizer = Summarizer(cfg)
-        self.quality_assessor = QualityAssessor(cfg)
         self.impact_assessor = ImpactAssessor(cfg)
         seed_calibration_weights(self.impact_assessor.seed_weights)
         self.freshness_evaluator = FreshnessEvaluator(cfg)
@@ -202,33 +198,27 @@ class Scheduler:
     def _positive_energy_cfg(self) -> dict:
         return self.cfg.output.get("positive_energy", {}) if isinstance(self.cfg.output, dict) else {}
 
-    def _use_feelgood_pipeline(self) -> bool:
-        positive_cfg = self._positive_energy_cfg()
-        return bool(positive_cfg.get("enabled", True)) and not bool(positive_cfg.get("use_llm_classifier", False))
-
-    def _select_positive_article_summaries(self, articles: list[Article]) -> list[ClusterSummary]:
-        positive_cfg = self._positive_energy_cfg()
-        target_items = max(
-            1,
-            int(positive_cfg.get("target_items", positive_cfg.get("max_items", 5)) or 5),
-        )
-        candidate_min_items = int(positive_cfg.get("candidate_min_items", 20) or 20)
-        if len(articles) < candidate_min_items:
-            logger.warning(
-                "Positive energy article pool below target: input=%d target_min=%d",
-                len(articles),
-                candidate_min_items,
-            )
-        summaries = self.feelgood_scorer.select_articles(articles, limit=target_items)
-        if not summaries:
-            logger.warning("Positive energy local selection empty after scoring existing articles")
-        elif len(summaries) < target_items:
-            logger.info(
-                "Positive energy local selection below display target: selected=%d target=%d",
-                len(summaries),
-                target_items,
-            )
-        return summaries
+    def _persist_impact_evaluations(self, clusters: list[ArticleCluster], report_date: date) -> None:
+        """Persist every candidate's impact scores (training/audit record)."""
+        assessments = [c.impact for c in clusters if c.impact is not None]
+        ranked = sorted(assessments, key=lambda a: -a.composite)
+        rank_by_key = {a.cluster_key: position for position, a in enumerate(ranked, 1)}
+        for assessment in assessments:
+            with contextlib.suppress(Exception):
+                insert_cluster_evaluation(
+                    report_date=report_date.isoformat(),
+                    cluster_key=assessment.cluster_key,
+                    dims=assessment.dims,
+                    rationale=assessment.rationale,
+                    signal=assessment.signal,
+                    composite=assessment.composite,
+                    rank=rank_by_key.get(assessment.cluster_key),
+                    display_category=assessment.display_category,
+                    status=assessment.status,
+                    flags=assessment.flags,
+                    evaluated_by_llm=assessment.evaluated_by_llm,
+                    model=assessment.model,
+                )
 
     def _resolve_output_path(self, configured: str | None, default: str) -> Path:
         path = Path(configured or default)
@@ -363,7 +353,7 @@ class Scheduler:
     # ─── PHASES ──────────────────────────────────────────────────────────────
 
     async def collect(self, mode: str = "full") -> None:
-        """Phase 1: Collect → tag → dedup → persist."""
+        """Phase 1: Collect → dedup → persist (selection is deferred to impact)."""
         phase_name = "COLLECT_DELTA" if mode == "delta" else "COLLECT"
         async with self._pipeline_lock:
             started = time.perf_counter()
@@ -372,8 +362,7 @@ class Scheduler:
             raw_articles = await self.collector.collect_all(mode=mode)
             db_articles = raw_to_articles(raw_articles)
 
-            tagged = self.tagger.tag_all(db_articles)
-            deduped = self.deduplicator.deduplicate(tagged)
+            deduped = self.deduplicator.deduplicate(db_articles)
 
             saved = 0
             for article in deduped:
@@ -439,19 +428,9 @@ class Scheduler:
                 logger.warning("No unclustered articles found — skipping %s", phase_name.lower())
                 return
 
-            feelgood_task: asyncio.Task[list[ClusterSummary]] | None = None
-            if self._use_feelgood_pipeline():
-                feelgood_task = asyncio.create_task(
-                    asyncio.to_thread(self._select_positive_article_summaries, list(articles))
-                )
-
             clusters = self.clusterer.cluster(articles)
             if not clusters:
                 logger.warning("No clusters formed — skipping %s", phase_name.lower())
-                if feelgood_task is not None:
-                    feelgood_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await feelgood_task
                 return
             logger.info("Event cluster stage: %d clusters formed", len(clusters))
 
@@ -459,46 +438,25 @@ class Scheduler:
             logger.info("Event cluster validation stage: %d clusters after validation", len(clusters))
 
             hot_cfg = self.cfg.output.get("hot_topics", {}) if isinstance(self.cfg.output, dict) else {}
-            candidate_window = hot_cfg.get(
-                "candidate_window",
-                self.cfg.clustering.get("max_clusters_per_report", 20) * 2,
+            impact_cfg = (self.cfg.editorial_values or {}).get("impact", {})
+            # Bound the impact-evaluation window by the local cross-source signal
+            # (no LLM, no keywords): the strongest multi-source/multi-region stories
+            # plus the strongest single-source ones get LLM-scored.
+            candidate_window = max(
+                int(impact_cfg.get("candidate_window", 90)),
+                self.cfg.clustering.get("max_clusters_per_report", 20),
             )
-            candidate_window = max(candidate_window, self.cfg.clustering.get("max_clusters_per_report", 20))
-            candidate_clusters = clusters[:candidate_window]
+            candidate_clusters = self.impact_assessor.rank_candidates(clusters, candidate_window)
             logger.info(
-                "Hot topic candidate window: %d of %d clusters retained before enrichment",
+                "Impact candidate window: %d of %d clusters retained (signal-ranked)",
                 len(candidate_clusters),
                 len(clusters),
             )
             for index, cluster in enumerate(candidate_clusters):
                 cluster._storyline_candidate_index = index  # type: ignore[attr-defined]
 
-            # Impact evaluation (shadow): scores are persisted for calibration and
-            # ranking comparison; selection below still runs the legacy path.
-            try:
-                impact_assessments = self.impact_assessor.assess_clusters(candidate_clusters)
-                ranked_keys = [
-                    assessment.cluster_key
-                    for assessment in sorted(impact_assessments, key=lambda a: -a.composite)
-                ]
-                rank_by_key = {key: position for position, key in enumerate(ranked_keys, 1)}
-                for assessment in impact_assessments:
-                    insert_cluster_evaluation(
-                        report_date=today.isoformat(),
-                        cluster_key=assessment.cluster_key,
-                        dims=assessment.dims,
-                        rationale=assessment.rationale,
-                        signal=assessment.signal,
-                        composite=assessment.composite,
-                        rank=rank_by_key.get(assessment.cluster_key),
-                        display_category=assessment.display_category,
-                        status=assessment.status,
-                        flags=assessment.flags,
-                        evaluated_by_llm=assessment.evaluated_by_llm,
-                        model=assessment.model,
-                    )
-            except Exception:
-                logger.exception("Impact shadow evaluation failed; continuing with legacy selection")
+            # Impact evaluation — the selection brain.
+            self.impact_assessor.assess_clusters(candidate_clusters)
 
             if hot_cfg.get("enabled", False):
                 history_window_days = hot_cfg.get("history_window_days", 5)
@@ -532,9 +490,11 @@ class Scheduler:
                 len(candidate_clusters),
             )
 
-            # Phase 2.5: Actively seek missing perspectives using Tavily
+            # Phase 2.5: Actively seek missing perspectives (impact status decides where)
             selected_clusters = self.seeker.enhance_clusters(selected_clusters)
             for cluster in selected_clusters:
+                # Seeker may have added articles → refresh the local signal/status.
+                self.impact_assessor.recompute_local(cluster)
                 for article in cluster.articles:
                     if article.id is not None:
                         continue
@@ -542,16 +502,15 @@ class Scheduler:
                     if article.id is None and callable(get_article_id_by_url):
                         article.id = get_article_id_by_url(article.url)
 
-            precheck_reports = self.quality_assessor.assess_clusters(selected_clusters)
-            quality_stats = Counter(report.status for report in precheck_reports)
             selected_clusters = [
                 cluster
                 for cluster in selected_clusters
-                if not (cluster.quality_report and cluster.quality_report.status == "suppress")
+                if not (cluster.impact and cluster.impact.status == "suppress")
             ]
+            self._persist_impact_evaluations(candidate_clusters, today)
             logger.info(
-                "Quality precheck: %s; %d clusters retained",
-                dict(quality_stats),
+                "Impact selection: %s; %d clusters retained for summarization",
+                dict(Counter(c.impact.status for c in selected_clusters if c.impact)),
                 len(selected_clusters),
             )
             self.storyline_state_machine.apply(
@@ -564,8 +523,6 @@ class Scheduler:
             )
 
             summaries = self.summarizer.summarize_all_batch(selected_clusters)
-            for summary in summaries:
-                self.quality_assessor.postcheck_summary(summary)
 
             # Phase 2.6: Evaluate freshness against historical clusters
             historical = get_recent_clusters(
@@ -614,8 +571,6 @@ class Scheduler:
                     quality_score=cs.quality_score,
                 )
                 cluster_id = insert_cluster(cluster_record)
-                if cs.quality_report is not None:
-                    insert_cluster_quality_report(cluster_id, cs.quality_report)
                 if cs.cluster.impact is not None:
                     with contextlib.suppress(Exception):
                         link_cluster_evaluation(
@@ -635,49 +590,14 @@ class Scheduler:
             )
 
             base_plan = self.editorial_planner.base_plan(kept_summaries)
-            hot_topics = base_plan.hot_topics
-            focus_storylines = base_plan.focus_storylines
-            main_summaries = base_plan.regular_summaries
-            positive_summaries: list[ClusterSummary] = []
-            positive_cfg = self._positive_energy_cfg()
-            if self._use_feelgood_pipeline():
-                if feelgood_task is not None:
-                    try:
-                        positive_summaries = await feelgood_task
-                    except Exception as exc:
-                        logger.warning("Feelgood micro-pipeline failed; positive section omitted: %s", exc)
-                        positive_summaries = []
-            else:
-                positive_pool = positive_energy_classification_pool(
-                    kept_summaries,
-                    main_summaries,
-                    hot_topics,
-                    focus_storylines,
-                    self.cfg,
-                )
-                if bool(positive_cfg.get("enabled", True)) and positive_pool:
-                    logger.info(
-                        "Positive energy candidate pool: %d main summaries + %d positive extras",
-                        len(main_summaries),
-                        max(0, len(positive_pool) - len(main_summaries)),
-                    )
-                    positive_classifications = self.summarizer.classify_positive_energy(positive_pool)
-                    positive_summaries = select_positive_energy_summaries(
-                        positive_pool,
-                        positive_classifications,
-                        self.cfg,
-                    )
-
+            # 今日正能量 is the feelgood dimension of the same impact evaluation.
+            positive_summaries = select_positive_summaries(kept_summaries, self.cfg)
             plan = self.editorial_planner.finalize(base_plan, positive_summaries=positive_summaries)
             hot_topics = plan.hot_topics
             focus_storylines = plan.focus_storylines
             regular_summaries = plan.regular_summaries
             positive_summaries = plan.positive_summaries
-            if self._use_feelgood_pipeline():
-                logger.info(
-                    "Positive energy local pipeline from existing articles: selected=%d use_llm_classifier=false",
-                    len(positive_summaries),
-                )
+
             english_cfg = self.cfg.output.get("english", {}) if isinstance(self.cfg.output, dict) else {}
             english_enabled = bool(english_cfg.get("enabled", False))
             if english_enabled:
@@ -686,10 +606,6 @@ class Scheduler:
                     hot_topics=hot_topics,
                     focus_storylines=focus_storylines,
                 )
-            positive_summaries = self.summarizer.normalize_positive_energy_summaries(
-                positive_summaries,
-                include_english=english_enabled,
-            )
             focus_storyline_story_count = sum(
                 len(family.get("summaries", []))
                 for family in focus_storylines

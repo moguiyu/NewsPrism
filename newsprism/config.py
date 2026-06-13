@@ -72,9 +72,17 @@ class Config:
     youtube_api_key: str = field(default_factory=lambda: os.environ.get("YOUTUBE_API_KEY", ""))
 
 
-def _parse_keywords(keywords_file: str) -> dict[str, list[str]]:
-    """Parse keywords.txt into {category: [keywords]} dict."""
+def _parse_keywords(keywords_file: str | None) -> dict[str, list[str]]:
+    """Parse keywords.txt into {category: [keywords]} dict.
+
+    Selection is impact-driven, not keyword-driven; this only survives for
+    optional legacy keyword files. Missing/unset → empty taxonomy.
+    """
+    if not keywords_file:
+        return {}
     path = Path(keywords_file)
+    if not path.exists():
+        return {}
     topics: dict[str, list[str]] = {}
     current_category: str | None = None
 
@@ -147,7 +155,7 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         if s.get("enabled", True)
     ]
 
-    topics = _parse_keywords(raw["filter"]["keywords_file"])
+    topics = _parse_keywords(raw.get("filter", {}).get("keywords_file"))
 
     schedule = raw.get("schedule", {})
     if tz_override := os.environ.get("SCHEDULE_TIMEZONE"):

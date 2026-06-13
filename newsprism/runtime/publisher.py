@@ -24,7 +24,7 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 from newsprism.config import Config
-from newsprism.runtime.renderer import _BROAD_CATEGORY_MAP, _CATEGORY_META, _DEFAULT_BROAD, _body_only, _extract_headline
+from newsprism.runtime.renderer import _CATEGORY_META, _DEFAULT_BROAD, _broad_category, _body_only, _extract_headline
 from newsprism.service.language import looks_like_chinese_text
 from newsprism.types import ClusterSummary
 
@@ -36,8 +36,11 @@ MAX_MSG_LEN = 4000  # leave headroom below Telegram's 4096-char limit
 _CAT_EMOJI: dict[str, str] = {cat: emoji for cat, emoji, _ in _CATEGORY_META}
 
 
-def _broad(topic_category: str) -> str:
-    return _BROAD_CATEGORY_MAP.get(topic_category, _DEFAULT_BROAD)
+def _broad(item: dict[str, str]) -> str:
+    precomputed = item.get("broad_category")
+    if precomputed:
+        return precomputed
+    return _broad_category(item.get("topic_category", "")) or _DEFAULT_BROAD
 
 
 def _body_to_tg_html(text: str) -> str:
@@ -63,6 +66,11 @@ class TelegramPublisher:
         items = [
             {
                 "topic_category": summary.cluster.topic_category,
+                "broad_category": _broad_category(
+                    summary.cluster.topic_category,
+                    getattr(summary, "display_category", None)
+                    or getattr(summary.cluster, "display_category", None),
+                ),
                 "summary": summary.summary,
             }
             for summary in summaries
@@ -76,6 +84,7 @@ class TelegramPublisher:
         items = [
             {
                 "topic_category": str(cluster.get("topic", "")),
+                "broad_category": str(cluster.get("broad_category", "")),
                 "summary": (
                     f"**{cluster.get('headline')}**\n\n{cluster.get('summary', '')}"
                     if cluster.get("headline") and "**" not in str(cluster.get("summary", ""))
@@ -105,6 +114,7 @@ class TelegramPublisher:
             items.append(
                 {
                     "topic_category": str(cluster.get("topic", "")),
+                    "broad_category": str(cluster.get("broad_category", "")),
                     "summary": rendered_summary,
                 }
             )
@@ -136,7 +146,7 @@ class TelegramPublisher:
 
         current_broad = ""
         for i, item in enumerate(items, 1):
-            broad = _broad(item["topic_category"])
+            broad = _broad(item)
             if broad != current_broad:
                 emoji = _CAT_EMOJI.get(broad, "")
                 messages.append(f"\n<b>{emoji} {broad}</b>")
