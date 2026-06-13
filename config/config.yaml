@@ -1,7 +1,5 @@
 # NewsPrism Configuration
 
-feelgood_keywords_file: "config/feelgood_keywords.yaml"
-
 # ─── SCHEDULE ──────────────────────────────────────────────────────────────────
 schedule:
   # Full collection runs 4/day. A smaller pre-publish delta run catches
@@ -40,86 +38,6 @@ collection:
   retry_attempts: 3
   retry_backoff: 2.0
 
-# ─── FILTERING ─────────────────────────────────────────────────────────────────
-filter:
-  keywords_file: "config/keywords.txt"
-  min_topic_score: 0.1
-  max_topics_per_article: 3
-  positive_energy_pre_filter:
-    enabled: true
-    topic: "Positive Energy"
-    include_keywords:
-      - "whale calf"
-      - "baby whale"
-      - "baby animal"
-      - "cute"
-      - "adorable"
-      - "heartwarming"
-      - "happy"
-      - "delight"
-      - "joy"
-      - "funny"
-      - "rescued"
-      - "rescue"
-      - "reunion"
-      - "festival"
-      - "celebration"
-      - "breakthrough"
-      - "小鲸"
-      - "鲸宝宝"
-      - "幼鲸"
-      - "动物宝宝"
-      - "可爱"
-      - "暖心"
-      - "开心"
-      - "快乐"
-      - "有趣"
-      - "搞笑"
-      - "治愈"
-      - "团圆"
-      - "庆祝"
-      - "节日"
-      - "获救"
-    exclude_keywords:
-      - "war"
-      - "attack"
-      - "death"
-      - "dead"
-      - "killed"
-      - "injury"
-      - "injured"
-      - "crime"
-      - "shooting"
-      - "murder"
-      - "lawsuit"
-      - "scandal"
-      - "disaster"
-      - "crash"
-      - "sanction"
-      - "tariff"
-      - "conflict"
-      - "crisis"
-      - "collapse"
-      - "plunge"
-      - "战争"
-      - "袭击"
-      - "死亡"
-      - "遇难"
-      - "伤亡"
-      - "受伤"
-      - "犯罪"
-      - "枪击"
-      - "谋杀"
-      - "诉讼"
-      - "丑闻"
-      - "灾难"
-      - "坠毁"
-      - "制裁"
-      - "关税"
-      - "冲突"
-      - "危机"
-      - "暴跌"
-
 # ─── CLUSTERING ────────────────────────────────────────────────────────────────
 clustering:
   semantic_threshold: 0.72
@@ -128,15 +46,6 @@ clustering:
   time_window_hours: 48      # group articles within 48h window
   min_sources_for_multi: 2
   max_clusters_per_report: 20
-
-  # Topic equivalence: treat these topic categories as semantically equivalent
-  # for clustering purposes. Keys are canonical topics, values are topics that
-  # should be treated as equivalent. Bidirectional and transitive.
-  topic_equivalence:
-    "World News": ["Geopolitics", "Regions", "Society"]
-    "Geopolitics": ["World News", "Regions", "Geopolitics - Extended (English for international sources)"]
-    "Tech-General": ["Tech Companies - International", "Tech Companies - China", "AI & LLM", "Smartphones & Electronics"]
-    "Energy & Climate (English)": ["Society"]
 
 # ─── DEDUPLICATION ─────────────────────────────────────────────────────────────
 dedup:
@@ -205,7 +114,6 @@ active_search:
   max_existing_title_overlap: 0.82
   allow_unknown_freshness_for_official: false
   search_profiles:
-    # Major powers
     us:
       language: en
     gb:
@@ -218,270 +126,18 @@ active_search:
       language: ko
     ru:
       language: ru
-      x_final_fallback: true
     de:
       language: de
     fr:
       language: fr
-    # Middle East / conflict regions
-    ir:
-      language: fa
-      x_final_fallback: true
-    il:
-      language: he
-      x_final_fallback: true
-    iq:
-      language: ar
-    sa:
-      language: ar
-    ae:
-      language: ar
-    jo:
-      language: ar
-    lb:
-      language: ar
-    sy:
-      language: ar
-    ye:
-      language: ar
-    qa:
-      language: ar
-    # Europe
-    ch:
-      language: de
-    ua:
-      language: uk
-      x_final_fallback: true
-    pl:
-      language: pl
-    # Asia-Pacific
     in:
       language: en
-    pk:
-      language: ur
-    id:
-      language: id
-    th:
-      language: th
-    vn:
-      language: vi
-    ph:
-      language: en
-    my:
-      language: ms
-    tr:
-      language: tr
-    # Americas
-    br:
-      language: pt
-    mx:
-      language: es
-    ar:
-      language: es
-    cl:
-      language: es
-    co:
-      language: es
-    # Africa (original)
-    ng:
-      language: en
-    eg:
-      language: ar
-    za:
-      language: en
-    # Africa (extended)
-    cd:
-      language: fr
-    ug:
-      language: en
-    tz:
-      language: sw
-    et:
-      language: am
-    gh:
-      language: en
-    ao:
-      language: pt
-    cm:
-      language: fr
-    sn:
-      language: fr
-    ci:
-      language: fr
-    ml:
-      language: fr
-    mg:
-      language: fr
-    mz:
-      language: pt
-    rw:
-      language: fr
-    zm:
-      language: en
-    zw:
-      language: en
-    so:
-      language: so
-    sd:
-      language: ar
-    # Middle East gaps
-    ps:
-      language: ar
-    bh:
-      language: ar
-    tn:
-      language: ar
-    dz:
-      language: ar
-    # Europe (extended)
-    se:
-      language: sv
-    no:
-      language: no
-    dk:
-      language: da
-    fi:
-      language: fi
-    ie:
-      language: en
-    pt:
-      language: pt
-    gr:
-      language: el
-    at:
-      language: de
-    cz:
-      language: cs
-    sk:
-      language: sk
-    ro:
-      language: ro
-    hu:
-      language: hu
-    bg:
-      language: bg
-    rs:
-      language: sr
-    hr:
-      language: hr
-    si:
-      language: sl
-    ee:
-      language: et
-    lv:
-      language: lv
-    lt:
-      language: lt
-    ba:
-      language: bs
-    al:
-      language: sq
-    # Asia gaps
-    kp:
-      language: ko
-      x_final_fallback: true
-    mm:
-      language: my
-    af:
-      language: fa
-      x_final_fallback: true
-    kz:
-      language: ru
-    uz:
-      language: uz
-    ge:
-      language: ka
-    am:
-      language: hy
-    lk:
-      language: en
-    kh:
-      language: km
-    nz:
-      language: en
-    hk:
-      language: zh
-    # Americas gaps
-    cu:
-      language: es
-      x_final_fallback: true
-  official_web_sources:
-    cn:
-      - platform: static_html
-        source_name: Chinese MFA News
-        region: cn
-        url: https://www.mfa.gov.cn/eng/xw/wjbxw/index.html
-        item_selector: ".news_list > div"
-        title_selector: "a"
-        link_selector: "a"
-        date_selector: "div:last-child"
-        max_results: 6
-      - platform: static_html
-        source_name: Xinhua World
-        region: cn
-        url: https://english.news.cn/world/index.htm
-        item_selector: "#list .item"
-        title_selector: ".tit a"
-        link_selector: ".tit a"
-        date_selector: ".time"
-        max_results: 6
-    ir:
-      - platform: static_html
-        source_name: PressTV Iran
-        region: ir
-        url: https://www.presstv.ir/Section/101
-        item_selector: ".section-latest-news-link"
-        title_selector: ".topnews-title"
-        link_selector: ":self"
-        date_selector: ".section-latest-news-publish"
-        max_results: 6
-  official_social_sources:
-    ir:
-      - platform: x
-        source_name: Iran MFA (EN)
-        user_id: "1051066584100429824"
-        username: IRIMFA_EN
-        region: ir
-      - platform: x
-        source_name: PressTV
-        user_id: "192547775"
-        username: PressTV
-        region: ir
-    ru:
-      - platform: x
-        source_name: Russian MFA
-        user_id: "255471924"
-        username: mfa_russia
-        region: ru
-    cn:
-      - platform: x
-        source_name: Chinese MFA
-        user_id: "1183694592433983489"
-        username: MFA_China
-        region: cn
-      - platform: x
-        source_name: CGTN
-        user_id: "1115874631"
-        username: CGTNOfficial
-        region: cn
-    il:
-      - platform: x
-        source_name: Israel MFA
-        user_id: "85796380"
-        username: IsraelMFA
-        region: il
     ua:
-      - platform: x
-        source_name: Ukraine MFA
-        user_id: "143427448"
-        username: MFA_Ukraine
-        region: ua
-    us:
-      - platform: x
-        source_name: US State Dept
-        user_id: "9624742"
-        username: StateDept
-        region: us
+      language: uk
+    il:
+      language: he
+    sa:
+      language: ar
 
 # ─── SOURCES ───────────────────────────────────────────────────────────────────
 # Status legend:
