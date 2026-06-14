@@ -22,7 +22,11 @@ from newsprism.types import ArticleCluster, ClusterSummary, EditorialReportPlan
 logger = logging.getLogger(__name__)
 
 _DEFAULT_HOT_TOPIC_ICON_KEY = "globe"
-_DISPLAY_DEDUP_SIMILARITY = 0.80
+# Cross-language coverage of the same event (multilingual mpnet) sits a notch
+# below same-language pairs, so 0.80 missed e.g. a zh/en NBA-final pair at 0.778.
+# 0.75 catches those while staying well above the 0.62–0.64 related-but-distinct
+# storyline range, so genuinely different stories are not merged.
+_DISPLAY_DEDUP_SIMILARITY = 0.75
 
 
 def _extract_markdown_headline(summary_text: str) -> str:
@@ -136,10 +140,17 @@ class EditorialPlanner:
         positive_summaries: list[ClusterSummary] | None = None,
     ) -> EditorialReportPlan:
         positive = positive_summaries or []
+        # The 正能量 lane is exclusive: a cluster claimed for it is removed from
+        # every other lane (regular *and* families). Without this a cluster that
+        # is also a storyline/hot-topic member appears twice in the display set,
+        # collides with itself in dedup, and is suppressed out of all lanes.
+        positive_ids = {id(summary) for summary in positive}
+        hot_topics = _strip_summaries_from_families(base_plan.hot_topics, positive_ids)
+        focus_storylines = _strip_summaries_from_families(base_plan.focus_storylines, positive_ids)
         regular_summaries = split_positive_energy_lane(base_plan.regular_summaries, positive)
         hot_topics, focus_storylines, regular_summaries, positive = resolve_display_duplicates(
-            base_plan.hot_topics,
-            base_plan.focus_storylines,
+            hot_topics,
+            focus_storylines,
             regular_summaries,
             positive,
         )
@@ -457,6 +468,30 @@ def split_positive_energy_lane(
     return [summary for summary in main_summaries if id(summary) not in positive_ids]
 
 
+def _strip_summaries_from_families(
+    families: list[dict[str, object]],
+    drop_ids: set[int],
+) -> list[dict[str, object]]:
+    """Remove the given summaries from each family; drop families left empty."""
+    kept: list[dict[str, object]] = []
+    for family in families:
+        family_summaries = family.get("summaries", [])
+        if not isinstance(family_summaries, list):
+            kept.append(family)
+            continue
+        remaining = [
+            summary
+            for summary in family_summaries
+            if not (isinstance(summary, ClusterSummary) and id(summary) in drop_ids)
+        ]
+        if not remaining:
+            continue
+        family["summaries"] = remaining
+        family["member_count"] = len(remaining)
+        kept.append(family)
+    return kept
+
+
 # ─── DISPLAY DEDUP (embedding-based) ──────────────────────────────────────────
 
 def _prefer_summary(left: ClusterSummary, right: ClusterSummary) -> ClusterSummary:
@@ -574,6 +609,7 @@ def resolve_display_duplicates(
     positive_summaries: list[ClusterSummary],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary], list[ClusterSummary]]:
     displayed = _flatten_display_summaries(hot_topics, focus_storylines, regular_summaries, positive_summaries)
+    positive_ids = {id(summary) for summary in positive_summaries}
     centroids: dict[int, np.ndarray | None] = {}
     for summary in displayed:
         centroids[id(summary)] = _summary_centroid(summary)
@@ -591,7 +627,16 @@ def resolve_display_duplicates(
             duplicate, reason, confidence = _display_duplicate(left, right, centroids)
             if not duplicate:
                 continue
-            preferred = _prefer_summary(left, right)
+            # A cluster already claimed for the 正能量 lane keeps its slot; its
+            # duplicate elsewhere is suppressed. feelgood carries no composite
+            # weight, so without this the positive copy always loses the tiebreak
+            # and the lane silently empties.
+            left_positive = id(left) in positive_ids
+            right_positive = id(right) in positive_ids
+            if left_positive != right_positive:
+                preferred = left if left_positive else right
+            else:
+                preferred = _prefer_summary(left, right)
             suppressed = right if preferred is left else left
             _merge_duplicate_summary(preferred, suppressed, reason, confidence)
             suppressed_ids.add(id(suppressed))

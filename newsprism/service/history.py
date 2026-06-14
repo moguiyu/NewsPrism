@@ -373,6 +373,11 @@ class StorylineResolver:
         self.edge_confidence_threshold = float(hot_cfg.get("edge_confidence_threshold", 0.56))
         self.candidate_similarity = float(hot_cfg.get("admission_similarity", 0.62))
         self.history_similarity_threshold = float(hot_cfg.get("history_similarity_threshold", 0.48))
+        # A storyline family must be internally coherent: the mean pairwise
+        # centroid cosine across *all* its members must clear this bar. Union-find
+        # over accepted edges otherwise chains unrelated clusters transitively
+        # (A~B, B~C, … each an edge, but A and Z share nothing).
+        self.coherence_min_similarity = float(hot_cfg.get("storyline_coherence_min", 0.60))
         self.icon_allowlist = list(hot_cfg.get("icon_allowlist", [_DEFAULT_ICON]))
 
     def resolve(
@@ -395,6 +400,7 @@ class StorylineResolver:
             and float(edge["confidence"]) >= self.edge_confidence_threshold
         ]
         components = self._build_components(len(clusters), accepted_edges)
+        components = self._enforce_coherence(components, profiles)
         logger.info(
             "Storyline resolver: clusters=%d history_matches=%d pairs=%d accepted_edges=%d families=%d",
             len(clusters),
@@ -404,6 +410,7 @@ class StorylineResolver:
             sum(1 for members in components.values() if len(members) > 1),
         )
         self._assign_storylines(clusters, profiles, components, accepted_edges, history_matches)
+        self._split_incoherent_families(clusters, profiles, history_matches)
         return clusters
 
     # ── profile / history ────────────────────────────────────────────────────
@@ -576,6 +583,102 @@ class StorylineResolver:
         for idx in range(node_count):
             components[find(idx)].append(idx)
         return components
+
+    def _enforce_coherence(
+        self,
+        components: dict[int, list[int]],
+        profiles: list[dict[str, object]],
+    ) -> dict[int, list[int]]:
+        """Split transitively-chained components into internally-coherent families.
+
+        Each multi-node component is re-grown from its medoid, admitting a member
+        only while the family's mean pairwise centroid cosine stays above
+        ``coherence_min_similarity``. Members that don't fit are ejected and
+        recursively re-grouped, so a genuine second storyline survives while
+        unrelated clusters fall out to singletons.
+        """
+        centroids = {int(p["index"]): p["centroid"] for p in profiles}
+        refined: dict[int, list[int]] = {}
+        for members in components.values():
+            if len(members) < 3:
+                refined[members[0]] = members
+                continue
+            for sub in self._coherent_split(members, centroids):
+                refined[sub[0]] = sub
+        return refined
+
+    def _coherent_split(
+        self,
+        nodes: list[int],
+        centroids: dict[int, np.ndarray | None],
+    ) -> list[list[int]]:
+        if len(nodes) <= 1:
+            return [list(nodes)]
+        medoid = max(nodes, key=lambda n: sum(_cosine(centroids[n], centroids[m]) for m in nodes if m != n))
+        core = [medoid]
+        remaining = [n for n in nodes if n != medoid]
+        while remaining:
+            best = max(remaining, key=lambda n: self._mean_pairwise(core + [n], centroids))
+            if self._mean_pairwise(core + [best], centroids) < self.coherence_min_similarity:
+                break
+            core.append(best)
+            remaining.remove(best)
+        result = [sorted(core)]
+        if remaining:
+            result.extend(self._coherent_split(remaining, centroids))
+        return result
+
+    def _split_incoherent_families(
+        self,
+        clusters: list[ArticleCluster],
+        profiles: list[dict[str, object]],
+        history_matches: dict[int, dict[str, object]],
+    ) -> None:
+        """Final authority on family coherence, over the *assigned* storyline keys.
+
+        History reuse can glue the same stale storyline_key onto many unrelated
+        singletons (a bloated historical storyline acts as a magnet), bypassing
+        the component-level pass. Here every same-key group is re-checked: the
+        coherent sub-family that genuinely continues the story (strongest history
+        match to this key, else the largest coherent sub) keeps the storyline;
+        every other member detaches to a standalone story.
+        """
+        centroids = {int(p["index"]): p["centroid"] for p in profiles}
+        groups: dict[str, list[int]] = defaultdict(list)
+        for idx, cluster in enumerate(clusters):
+            if cluster.storyline_key:
+                groups[str(cluster.storyline_key)].append(idx)
+
+        for key, members in groups.items():
+            if len(members) < 3:
+                continue
+            subs = self._coherent_split(members, centroids)
+            if len(subs) == 1:
+                continue
+
+            def _history_score(idx: int, key: str = key) -> float:
+                match = history_matches.get(idx)
+                return float(match["score"]) if match and match.get("storyline_key") == key else -1.0
+
+            anchor = max(members, key=_history_score)
+            primary = next((sub for sub in subs if anchor in sub), max(subs, key=len))
+            if len(primary) < 2:
+                primary = max(subs, key=len)
+            keep = set(primary) if len(primary) >= 2 else set()
+            for idx in members:
+                if idx not in keep:
+                    self._apply_singleton(clusters[idx], profiles[idx], None)
+
+    @staticmethod
+    def _mean_pairwise(nodes: list[int], centroids: dict[int, np.ndarray | None]) -> float:
+        if len(nodes) < 2:
+            return 1.0
+        sims = [
+            _cosine(centroids[a], centroids[b])
+            for i, a in enumerate(nodes)
+            for b in nodes[i + 1 :]
+        ]
+        return sum(sims) / len(sims)
 
     # ── assignment ───────────────────────────────────────────────────────────
 

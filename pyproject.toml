@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "newsprism"
-version = "0.4.1"
+version = "0.5.0"
 description = "Self-hosted news analysis tool that groups the same event across 46 sources and surfaces how different outlets frame the same facts"
 readme = "README.md"
 license = { text = "MIT" }

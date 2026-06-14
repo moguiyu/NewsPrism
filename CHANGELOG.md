@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.5.0 - 2026-06-14
+
+Selection rebuilt from keyword matching to LLM multi-dimensional impact
+evaluation, with a self-evolving feedback loop. The keyword paradigm is fully
+removed.
+
+### Added
+
+- `service/impact.py`: one batched LLM call scores every candidate cluster on
+  six 0–10 dimensions (scope, severity, novelty, actor_influence,
+  decision_relevance, feelgood) plus a locally-computed cross-source `signal`.
+  A calibrated composite drives selection, status, the `今日正能量` lane, the
+  display category, and seeker targeting. LLM failure degrades to a
+  deterministic signal-only ranking.
+- Self-evolution loop (`service/calibrate.py`, `runtime/feedback.py`): editor
+  👍/👎 via Telegram inline buttons (polled hourly) or `newsprism feedback`
+  → weekly bounded weight nudges → an `editorial_policy` memo distilled by LLM
+  and injected into subsequent impact prompts. CLI: `newsprism calibrate
+  run|show|reset`, `newsprism feedback add|list|poll`.
+- New SQLite tables: `cluster_evaluations` (per-pick scores + rationale audit
+  trail), `editorial_feedback`, `calibration_weights`, `calibration_log`,
+  `editorial_policy`. Weekly retention prune of unclustered articles.
+- `service/history.py`: merged freshness + keyword-free storyline grouping
+  (union-find over LLM relation edges); `service/embeddings.py` single shared
+  sentence-transformers loader.
+
+### Changed
+
+- Selection is calibrated impact, not coverage breadth. `今日正能量` is the
+  feelgood dimension of the same evaluation. Display categories come from the
+  LLM, not a keyword→section map.
+- Seeker slimmed (~2100 → ~430 lines): Tavily-only, 12 major regions,
+  impact-status-triggered. LLM calls per publish dropped from ~60–100 to ~8–12.
+- Sources: AP News re-enabled via the live RSSHub; Reuters stays disabled.
+
+### Removed
+
+- The entire keyword paradigm: `keywords.txt`, `feelgood_keywords.yaml`,
+  `filter.py`, `feelgood_scorer.py`, the claim/evidence half of `quality.py`,
+  storyline signal-keyword tables, the event-signature entity engines, and
+  `clustering.topic_equivalence`. Net `newsprism/` ~13.2k → ~9.4k lines.
+
+### Fixed
+
+- Storyline families no longer chain unrelated events. A coherence pass gates
+  every multi-node family on mean pairwise centroid cosine
+  (`output.hot_topics.storyline_coherence_min`, default 0.60), and a final
+  pass over assigned storyline keys detaches members glued on by a stale
+  historical key. A 14-member "中东局势升级" family (mean cosine 0.272) now
+  resolves to its genuine 2-member core.
+- The `今日正能量` lane is exclusive: a story claimed for it is removed from the
+  main/family lanes, so it can no longer be suppressed out of every lane by
+  self-collision in display dedup.
+- Display dedup similarity lowered 0.80 → 0.75 so cross-language coverage of the
+  same event (which sits below same-language pairs under multilingual mpnet)
+  merges — e.g. a zh/en NBA-final pair at cosine 0.778.
+
 ## v0.4.1 - 2026-06-12
 
 Editorial planning and deployment maintenance patch.
