@@ -4,7 +4,7 @@
 # they diverge and the user does not confirm.
 set -euo pipefail
 
-SSH="ssh -i ~/.ssh/fnoskey -p 123 aiagent@192.168.10.5"
+SSH="ssh -i ~/.ssh/fnoskey -p 123 aiagent@100.83.198.109"
 REMOTE_PATH="/vol1/1000/Docker/newsprism"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -14,7 +14,7 @@ PRODUCTION_ENV="$ROOT/.env.production"
 
 if [[ ! -f "$PRODUCTION_ENV" ]]; then
   echo "⚠️  .env.production not found — skipping env diff check."
-  echo "   Run: scp -i ~/.ssh/fnoskey -P 123 aiagent@192.168.10.5:$REMOTE_PATH/.env .env.production"
+  echo "   Run: scp -i ~/.ssh/fnoskey -P 123 aiagent@100.83.198.109:$REMOTE_PATH/.env .env.production"
 else
   REMOTE_ENV=$(mktemp)
   trap 'rm -f "$REMOTE_ENV"' EXIT
@@ -30,7 +30,7 @@ else
     if [[ ! "$answer" =~ ^[Yy]$ ]]; then
       echo "Aborted. Fix the drift first:"
       echo "  • Update .env.production to match what fnOS should have, then:"
-      echo "    scp -i ~/.ssh/fnoskey -P 123 .env.production aiagent@192.168.10.5:$REMOTE_PATH/.env"
+      echo "    scp -i ~/.ssh/fnoskey -P 123 .env.production aiagent@100.83.198.109:$REMOTE_PATH/.env"
       exit 1
     fi
   else
@@ -55,7 +55,7 @@ rsync -av \
   --exclude .env \
   --exclude .env.production \
   --exclude 'eval-report-*.png' \
-  "$ROOT/" aiagent@192.168.10.5:"$REMOTE_PATH/"
+  "$ROOT/" aiagent@100.83.198.109:"$REMOTE_PATH/"
 
 # ── 3. Rebuild & restart ──────────────────────────────────────────────────────
 echo ""

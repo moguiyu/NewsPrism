@@ -17,11 +17,12 @@ Current major release: `v0.5.0`.
 - Groups the same event across multiple sources and shows how each outlet frames it differently — state media, independent press, regional correspondents, tech reporters
 - Active perspective-seeking: if a major story is missing a regional voice, the pipeline searches for it and adds it to the cluster
 - LLM-driven event clustering (single API call) groups articles by real-world event identity, not just topic overlap; falls back to embedding-based clustering automatically
-- Cluster quality gates with claim/evidence tracking, source reliability scoring, and audit counters
-- Storyline lifecycle state and compact timelines for developing topics
+- LLM multi-dimensional impact evaluation ranks stories by real-world consequence — scope, severity, novelty, actor influence, decision relevance, feelgood — blended with a cross-source signal under calibrated weights (no keyword matching)
+- Self-evolving selection: editor 👍/👎 feedback nudges the impact weights weekly and distills a persistent editorial-policy memo back into the scoring prompt
+- Keyword-free storyline grouping with a coherence gate, plus compact cross-day timelines for developing topics
 - Batch summarisation processes all stories in one LLM call (~36 s → ~10 s per publish cycle)
 - Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
-- Dedicated `今日正能量` lane selected locally from the existing source catalog with zero extra LLM tokens
+- Dedicated `今日正能量` lane derived from the same impact evaluation's feelgood dimension
 - WIRED-inspired static HTML reports with system/light/dark modes and self-hosted fonts
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 
@@ -32,8 +33,8 @@ newsprism/
 ├── types.py          Shared dataclasses and typed records
 ├── config.py         YAML + environment loader
 ├── repo/             SQLite persistence
-├── service/          collect, filter, dedup, cluster (LLM + embedding fallback), summarize
-└── runtime/          schedule, render, publish
+├── service/          collect, dedup, cluster (LLM + embedding fallback), impact eval, storyline, calibrate, summarize
+└── runtime/          schedule, render, publish, feedback poll
 ```
 
 Layer rule: `types -> config -> repo -> service -> runtime`. Higher layers must not be imported downward.
@@ -118,9 +119,8 @@ For the default image-based install, those files live inside the container image
 | Surface | What you can change |
 |---|---|
 | `.env` | provider keys, public report URL, scheduler timezone, optional integrations |
-| `config/config.yaml` | schedule, source list, clustering thresholds, dedup rules, English report toggle, active-search behavior |
-| `config/editorial-values.yaml` | quality thresholds, source reliability scores, and evidence rules |
-| `config/keywords.txt` | topic groups and keyword filters |
+| `config/config.yaml` | schedule, source list, clustering thresholds, dedup rules, storyline coherence, English report toggle, active-search behavior |
+| `config/editorial-values.yaml` | impact dimension weights, status floors, positive-lane thresholds, source tier scores |
 | `config/style-guide.md` | editorial prompt and no-fabrication rules used by the summarizer |
 | `templates/report-template.html` | HTML branding and presentation |
 
@@ -129,7 +129,7 @@ Common examples:
 - disable sources by setting `enabled: false` under `sources:`
 - enable the English report toggle under `output.english.enabled`
 - edit `schedule.collect_cron` and `schedule.publish_cron`
-- tighten or broaden topic matching in `config/keywords.txt` and `filter.min_topic_score`
+- adjust selection by editing impact weights / status floors in `config/editorial-values.yaml`, or send 👍/👎 feedback and let weekly calibration tune them
 - set `clustering.use_llm_clustering: false` to use embedding-only clustering (no LLM API call for clustering)
 
 ## CLI Commands
@@ -141,6 +141,8 @@ Common examples:
 | `python -m newsprism once` | Run collection and publish in one pass |
 | `python -m newsprism replay --date YYYY-MM-DD` | Rebuild one report date from its saved article set |
 | `python -m newsprism run` | Start the long-running scheduler |
+| `python -m newsprism feedback add\|list\|poll` | Record editor 👍/👎 on a cluster, list recent feedback, or poll Telegram |
+| `python -m newsprism calibrate run\|show\|reset` | Run weight calibration + policy distillation, inspect, or reset to seeds |
 
 ## Testing and Packaging
 
@@ -157,11 +159,9 @@ Most behavior is file-based:
 
 | File | Purpose |
 |---|---|
-| `config/config.yaml` | Sources, schedules, thresholds, template selection |
-| `config/editorial-values.yaml` | Editorial quality gates and reliability scoring |
-| `config/keywords.txt` | Topic taxonomy and keyword mapping |
+| `config/config.yaml` | Sources, schedules, thresholds, storyline/hot-topic behavior |
+| `config/editorial-values.yaml` | Impact dimension weights, status floors, positive-lane thresholds, source tier scores |
 | `config/style-guide.md` | Editorial prompt and no-fabrication constraints |
-| `docs/generated/db-schema.md` | Current SQLite schema reference |
 
 ## Project Docs
 
