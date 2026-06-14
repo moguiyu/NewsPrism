@@ -167,11 +167,6 @@ Most behavior is file-based:
 
 | Topic | File |
 |---|---|
-| Docker self-hosting | `docs/deploy-docker.md` |
-| Contributor setup | `docs/onboarding.md` |
-| Design philosophy | `docs/design-docs/core-beliefs.md` |
-| Key decisions | `docs/design-docs/decisions.md` |
-| Database schema | `docs/generated/db-schema.md` |
 | Contributing process | `CONTRIBUTING.md` |
 | Security reporting | `SECURITY.md` |
 
