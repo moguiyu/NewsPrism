@@ -118,6 +118,85 @@ def test_resolver_unions_core_and_spillover_from_edges():
     assert resolved[2].storyline_key != resolved[0].storyline_key
 
 
+def test_resolver_splits_incoherent_chain_into_coherent_families():
+    """Transitively-chained edges must not merge unrelated clusters into one
+    family. A Middle East trio chained to an unrelated AI pair should split into
+    two internally-coherent families, not one family of five."""
+    from collections import Counter
+
+    # Two genuinely-distinct stories (a tight A-pair and a tight B-pair). The
+    # shared title token makes every pair a candidate; the LLM stub asserts a
+    # bogus A→B bridge edge (1↔2) that union-find would chain into one family.
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer(
+            [
+                {"left_index": 0, "right_index": 1, "relation": "same_core_storyline", "confidence": 0.80},
+                {"left_index": 1, "right_index": 2, "relation": "same_core_storyline", "confidence": 0.78},
+                {"left_index": 2, "right_index": 3, "relation": "same_core_storyline", "confidence": 0.80},
+            ]
+        ),
+        similarity_fn=lambda _t, _h: 0.0,
+    )
+    clusters = [
+        ArticleCluster(topic_category="World", articles=[_article("美伊协议签署 全球快讯", [1.0, 0.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="World", articles=[_article("伊朗回应美方 全球快讯", [1.0, 0.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="Tech", articles=[_article("英伟达发布新芯片 全球快讯", [0.0, 1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="Tech", articles=[_article("台积电扩产芯片 全球快讯", [0.0, 1.0, 0.0, 0.0])]),
+    ]
+    resolved = resolver.resolve(clusters, [], datetime(2026, 3, 15, tzinfo=timezone.utc).date())
+    keys = [c.storyline_key for c in resolved]
+    # The A-pair and B-pair each cohere, but must not be chained together.
+    assert keys[0] == keys[1]
+    assert keys[2] == keys[3]
+    assert keys[0] != keys[2]
+    assert max(Counter(keys).values()) == 2
+
+
+def test_resolver_detaches_history_magnet_singletons():
+    """A stale historical storyline must not glue unrelated singletons together.
+
+    Three clusters each independently match the same historical key, but only two
+    are mutually coherent; the third (orthogonal embedding) must detach."""
+    from collections import Counter
+
+    class _HistSim:
+        """Matches every cluster to the same historical storyline above threshold."""
+
+        def __call__(self, _text, _hist):
+            return 0.9
+
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer([]),  # no LLM edges → all singletons pre-assignment
+        similarity_fn=_HistSim(),
+    )
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="World",
+            article_ids=[99],
+            summary="",
+            perspectives={},
+            report_date="2026-03-14",
+            storyline_key="mideast",
+            storyline_name="中东局势",
+            storyline_role="core",
+        )
+    ]
+    clusters = [
+        ArticleCluster(topic_category="World", articles=[_article("US Iran deal nears", [1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="World", articles=[_article("Iran responds to US", [0.98, 0.05, 0.0])]),
+        ArticleCluster(topic_category="Sports", articles=[_article("Team wins the final", [0.0, 1.0, 0.0])]),
+    ]
+    resolved = resolver.resolve(clusters, historical, datetime(2026, 3, 15, tzinfo=timezone.utc).date())
+    keys = [c.storyline_key for c in resolved]
+    # The coherent Iran pair keeps the storyline; the sports cluster detaches.
+    assert keys[0] == keys[1] == "mideast"
+    assert keys[2] != "mideast"
+    assert max(Counter(keys).values()) == 2
+
+
 def test_resolver_ignores_subthreshold_edges():
     resolver = StorylineResolver(
         _config(),

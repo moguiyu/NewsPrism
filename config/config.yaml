@@ -94,6 +94,9 @@ output:
     storyline_history_similarity_threshold: 0.48
     storyline_admission_similarity: 0.64
     storyline_admission_title_overlap: 0.06
+    # Min mean pairwise centroid cosine for all members of a storyline family;
+    # incoherent transitively-chained components are split below this bar.
+    storyline_coherence_min: 0.60
     cluster_validation_pair_similarity: 0.50
     cluster_validation_pair_title_overlap: 0.03
     cluster_validation_outlier_similarity: 0.58

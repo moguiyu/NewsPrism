@@ -138,3 +138,48 @@ def test_display_dedup_keeps_distinct_stories():
     right = _summary("event B", 0.6, url="https://b.com/2", embedding=[0.0, 1.0, 0.0])
     _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
     assert len(regular) == 2
+
+
+def test_display_dedup_merges_crosslang_same_event_in_positive_lane():
+    """Two clusters covering the same event in different languages (centroid
+    cosine ~0.78, no shared URL, no title overlap) must collapse to one entry."""
+    # cos ≈ 0.78: below the old 0.80 bar, above the new 0.75 bar.
+    zh = _summary("尼克斯夺冠", 0.4, category="社会民生", feelgood=9.0, severity=1.0,
+                  url="https://cn.example/nba", embedding=[0.78, 0.626, 0.0])
+    en = _summary("Knicks win title", 0.4, category="社会民生", feelgood=9.0, severity=1.0,
+                  url="https://en.example/nba", embedding=[1.0, 0.0, 0.0])
+    _h, _f, _r, pos = resolve_display_duplicates([], [], [], [zh, en])
+    assert len(pos) == 1
+
+
+def test_finalize_positive_member_of_family_renders_in_positive_lane():
+    """A positive pick that is also a storyline member must render once, in the
+    positive lane — not be suppressed out of every lane by self-collision."""
+    from newsprism.service.editorial_planner import EditorialPlanner
+    from newsprism.types import EditorialReportPlan
+
+    story = _summary("nba final", 0.4, category="社会民生", feelgood=9.0, severity=1.0)
+    base = EditorialReportPlan(
+        hot_topics=[],
+        focus_storylines=[{"storyline_key": "s1", "summaries": [story], "member_count": 1}],
+        regular_summaries=[],
+        positive_summaries=[],
+    )
+    plan = EditorialPlanner.__new__(EditorialPlanner)
+    result = plan.finalize(base, positive_summaries=[story])
+    assert len(result.positive_summaries) == 1
+    assert result.focus_storylines == []
+
+
+def test_display_dedup_keeps_positive_over_main_duplicate():
+    """A positive pick must win dedup against its higher-composite main twin.
+
+    feelgood carries no composite weight, so without lane priority the positive
+    copy always loses the tiebreak and the 正能量 lane silently empties.
+    """
+    shared = "https://wire.com/feelgood"
+    main = _summary("main twin", 0.8, url=shared, feelgood=9.0, severity=1.0)
+    positive = _summary("positive twin", 0.4, url=shared, feelgood=9.0, severity=1.0)
+    _h, _f, regular, pos = resolve_display_duplicates([], [], [main], [positive])
+    assert len(pos) == 1 and pos[0].cluster.topic_category == "positive twin"
+    assert regular == []
