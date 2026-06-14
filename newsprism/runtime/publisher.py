@@ -33,8 +33,16 @@ logger = logging.getLogger(__name__)
 
 MAX_MSG_LEN = 4000  # leave headroom below Telegram's 4096-char limit
 
+# The 正能量 lane is its own trailing group in the digest, after all news categories.
+_POSITIVE_CATEGORY = "今日正能量"
+
 # Build emoji lookup from renderer metadata
 _CAT_EMOJI: dict[str, str] = {cat: emoji for cat, emoji, _ in _CATEGORY_META}
+_CAT_EMOJI[_POSITIVE_CATEGORY] = "🌟"
+
+# Canonical category order for the digest — mirrors the report's _CATEGORY_META,
+# with 今日正能量 last. Unknown categories sort between the known ones and positive.
+_CATEGORY_ORDER: list[str] = [cat for cat, _, _ in _CATEGORY_META]
 
 
 def _broad(item: dict[str, str]) -> str:
@@ -42,6 +50,24 @@ def _broad(item: dict[str, str]) -> str:
     if precomputed:
         return precomputed
     return _broad_category(item.get("topic_category", "")) or _DEFAULT_BROAD
+
+
+def _category_rank(broad: str) -> int:
+    if broad == _POSITIVE_CATEGORY:
+        return len(_CATEGORY_ORDER) + 1
+    try:
+        return _CATEGORY_ORDER.index(broad)
+    except ValueError:
+        return len(_CATEGORY_ORDER)
+
+
+def _group_by_category(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Stable-sort items into contiguous category blocks (positive lane last).
+
+    A stable sort preserves each item's incoming order — which is impact-composite
+    descending — so stories stay impact-ranked within their category.
+    """
+    return sorted(items, key=lambda item: _category_rank(_broad(item)))
 
 
 def _body_to_tg_html(text: str) -> str:
@@ -67,16 +93,20 @@ class TelegramPublisher:
         items = [
             {
                 "topic_category": summary.cluster.topic_category,
-                "broad_category": _broad_category(
-                    summary.cluster.topic_category,
-                    getattr(summary, "display_category", None)
-                    or getattr(summary.cluster, "display_category", None),
+                "broad_category": (
+                    _POSITIVE_CATEGORY
+                    if getattr(summary, "positive_energy_score", None) is not None
+                    else _broad_category(
+                        summary.cluster.topic_category,
+                        getattr(summary, "display_category", None)
+                        or getattr(summary.cluster, "display_category", None),
+                    )
                 ),
                 "summary": summary.summary,
             }
             for summary in summaries
         ]
-        await self._publish_items(items, report_date)
+        await self._publish_items(_group_by_category(items), report_date)
 
     async def publish_rendered(self, data_json_path: str | Path, report_date: date) -> None:
         payload = json.loads(Path(data_json_path).read_text(encoding="utf-8"))
@@ -86,6 +116,7 @@ class TelegramPublisher:
             {
                 "topic_category": str(cluster.get("topic", "")),
                 "broad_category": str(cluster.get("broad_category", "")),
+                "cluster_id": cluster.get("cluster_id"),
                 "summary": (
                     f"**{cluster.get('headline')}**\n\n{cluster.get('summary', '')}"
                     if cluster.get("headline") and "**" not in str(cluster.get("summary", ""))
@@ -115,19 +146,22 @@ class TelegramPublisher:
             items.append(
                 {
                     "topic_category": str(cluster.get("topic", "")),
-                    "broad_category": str(cluster.get("broad_category", "")),
+                    "broad_category": _POSITIVE_CATEGORY,
+                    "cluster_id": cluster.get("cluster_id"),
                     "summary": rendered_summary,
                 }
             )
+        items = _group_by_category(items)
         await self._publish_items(items, report_date)
 
-        # Best-effort: send inline feedback keyboard for main clusters
+        # Best-effort: send inline feedback keyboard, numbered to match the
+        # grouped digest order above (global 1..N over the same item list).
         if self.token and self.chat_id:
             try:
                 stories = [
-                    {"index": cluster.get("seq_index") or (i + 1), "cluster_id": cluster.get("cluster_id")}
-                    for i, cluster in enumerate(clusters)
-                    if cluster.get("summary") and cluster.get("cluster_id")
+                    {"index": index, "cluster_id": item["cluster_id"]}
+                    for index, item in enumerate(items, 1)
+                    if item.get("cluster_id")
                 ]
                 kb = feedback_keyboard(stories)
                 if kb["inline_keyboard"]:
