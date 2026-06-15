@@ -938,6 +938,21 @@
       min-width: 0;
     }
 
+    /* ── 认证徽标：细边框小方框，flat newsprint 风格 ── */
+    .cert-badge {
+      display: inline-block;
+      font-size: 0.62em;
+      font-weight: 600;
+      line-height: 1;
+      padding: 1px 3px;
+      margin-left: 4px;
+      vertical-align: 1px;
+      border: 1px solid var(--theme-source-label);
+      color: var(--theme-source-label);
+      cursor: help;
+      user-select: none;
+    }
+
     .src-chip {
       display: inline-flex;
       align-items: center;
@@ -2663,6 +2678,11 @@
     }
   </style>
 </head>
+
+{# ── 认证徽标宏 ── 给持国际背书的源名后跟一个细边框小方框，hover 展示详情 #}
+{% macro cert_badge(src) -%}
+{% if src.has_certification %}<span class="cert-badge" title="{{ bilingual_text(src.cert_detail_zh, src.cert_detail_en or src.cert_detail_zh) }}" aria-label="{{ bilingual_text('已认证', 'Certified') }}">✓</span>{% endif %}
+{%- endmacro %}
 
 {% macro bilingual_text(zh, en=None) -%}
 <span data-lang-zh>{{ zh }}</span><span data-lang-en>{{ en if en is not none else zh }}</span>
