@@ -2681,7 +2681,7 @@
 
 {# ── 认证徽标宏 ── 给持国际背书的源名后跟一个细边框小方框，hover 展示详情 #}
 {% macro cert_badge(src) -%}
-{% if src.has_certification %}<span class="cert-badge" title="{{ bilingual_text(src.cert_detail_zh, src.cert_detail_en or src.cert_detail_zh) }}" aria-label="{{ bilingual_text('已认证', 'Certified') }}">✓</span>{% endif %}
+{% if src.has_certification %}<span class="cert-badge" title="{{ src.cert_detail_zh }} / {{ src.cert_detail_en or src.cert_detail_zh }}" aria-label="已认证 / Certified">✓</span>{% endif %}
 {%- endmacro %}
 
 {% macro bilingual_text(zh, en=None) -%}

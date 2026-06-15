@@ -172,3 +172,56 @@ class TestRendererCertificationInjection:
         from newsprism.runtime.renderer import HtmlRenderer
         r = HtmlRenderer()
         assert r.source_certifications == {}
+
+
+class TestCertBadgeMacroRendering:
+    """模板级渲染测试：确认 cert_badge 宏输出正确的 HTML（防回归）。"""
+
+    def _render_badge(self, src_dict):
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        env = Environment(
+            loader=FileSystemLoader("templates"),
+            autoescape=select_autoescape(["html"]),
+        )
+        template = env.get_template("report-template.html")
+        return str(template.module.cert_badge(src_dict))
+
+    def test_certified_source_emits_badge_span(self):
+        src = {
+            "has_certification": True,
+            "cert_detail_zh": "BBC 持 TNI 认证",
+            "cert_detail_en": "BBC holds TNI",
+            "cert_codes": ["TNI", "NG"],
+        }
+        html = self._render_badge(src)
+        assert 'class="cert-badge"' in html
+        assert "✓" in html
+
+    def test_uncertified_source_emits_nothing(self):
+        src = {
+            "has_certification": False,
+            "cert_detail_zh": "",
+            "cert_detail_en": "",
+            "cert_codes": [],
+        }
+        html = self._render_badge(src)
+        assert "cert-badge" not in html
+        assert html.strip() == ""
+
+    def test_title_uses_plain_text_not_html_tags(self):
+        """回归测试：title 属性不能含 <span> 标签（bilingual_text 会注入标签）。"""
+        src = {
+            "has_certification": True,
+            "cert_detail_zh": "BBC 详情",
+            "cert_detail_en": "BBC detail",
+            "cert_codes": ["TNI"],
+        }
+        html = self._render_badge(src)
+        # title 属性值应是纯文本，不能含 data-lang-zh/en 的 span 标签
+        assert "data-lang-zh" not in html, (
+            f"title 属性含 HTML 标签（应为纯文本）: {html}"
+        )
+        assert "data-lang-en" not in html
+        # 应同时含中英详情
+        assert "BBC 详情" in html
+        assert "BBC detail" in html
