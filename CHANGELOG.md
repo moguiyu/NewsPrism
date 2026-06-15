@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Admin quality portal (`newsprism portal`): local-only FastAPI app to inspect
+  selection quality (day inspector, category×dimension / subject-country×category
+  / source×subject matrices, trends, source review) and capture structured
+  feedback (verdict, per-dimension corrections, wrong-category, promote) that
+  feeds weekly calibration. Adds a `subject_regions` field to the impact
+  evaluation and a `feedback_corrections` table. Runs loopback-only via the
+  `newsprism-portal` compose profile, reached over an SSH tunnel.
+
 ## v0.5.0 - 2026-06-14
 
 Selection rebuilt from keyword matching to LLM multi-dimensional impact
