@@ -133,3 +133,42 @@ class TestRealCertificationConfig:
         bbc = result["BBC News"]
         assert "TNI" in [c.code for c in bbc.certifications]
         assert "NG" in [c.code for c in bbc.certifications]
+
+
+class TestRendererCertificationInjection:
+    def test_source_entry_has_certification_fields(self):
+        from newsprism.runtime.renderer import HtmlRenderer
+        cert_map = {
+            "BBC News": SourceCertification(
+                source_name="BBC News",
+                certifications=(Certification("TNI", "x", "y"),),
+                detail_zh="BBC 详情",
+                detail_en="BBC detail",
+            ),
+        }
+        r = HtmlRenderer(source_certifications=cert_map)
+        # _build_source_entry 需要 article_meta dict
+        entry = r._build_source_entry("BBC News", {})
+        assert entry["has_certification"] is True
+        assert entry["cert_detail_zh"] == "BBC 详情"
+        assert entry["cert_detail_en"] == "BBC detail"
+        assert entry["cert_codes"] == ["TNI"]
+
+    def test_source_entry_without_certification(self):
+        from newsprism.runtime.renderer import HtmlRenderer
+        r = HtmlRenderer(source_certifications={})
+        entry = r._build_source_entry("IT之家", {})
+        assert entry["has_certification"] is False
+        assert entry["cert_detail_zh"] == ""
+        assert entry["cert_codes"] == []
+
+    def test_renderer_accepts_source_certifications_kwarg(self):
+        from newsprism.runtime.renderer import HtmlRenderer
+        # 确认 __init__ 接受该参数且不报错
+        r = HtmlRenderer(source_certifications={"X": SourceCertification("X", (), "", "")})
+        assert "X" in r.source_certifications
+
+    def test_renderer_defaults_to_empty_certifications(self):
+        from newsprism.runtime.renderer import HtmlRenderer
+        r = HtmlRenderer()
+        assert r.source_certifications == {}
