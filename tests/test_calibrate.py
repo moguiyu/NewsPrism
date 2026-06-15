@@ -103,6 +103,8 @@ def test_run_calibration_skipped_when_insufficient_feedback():
     few_rows = [_make_row(+1, 8.0), _make_row(-1, 2.0), _make_row(+1, 7.0)]
 
     with patch.object(calibrate_mod, "_get_feedback_rows", return_value=few_rows), \
+         patch.object(calibrate_mod, "_get_correction_rows", return_value=[]), \
+         patch.object(calibrate_mod, "_get_all_corrections", return_value=[]), \
          patch("litellm.completion") as mock_llm:
         result = calibrate_mod.run_calibration(cfg)
 
@@ -129,6 +131,8 @@ def test_severity_weight_increases_when_accepted_rows_have_high_severity():
     canned = _canned_llm_response(bullets)
 
     with patch.object(calibrate_mod, "_get_feedback_rows", return_value=rows), \
+         patch.object(calibrate_mod, "_get_correction_rows", return_value=[]), \
+         patch.object(calibrate_mod, "_get_all_corrections", return_value=[]), \
          patch.object(calibrate_mod, "_get_weights", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_get_seeds", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_update_weight") as mock_update, \
@@ -166,6 +170,8 @@ def test_severity_weight_stays_within_bounds_at_upper_limit():
     canned = _canned_llm_response(["test bullet"])
 
     with patch.object(calibrate_mod, "_get_feedback_rows", return_value=rows), \
+         patch.object(calibrate_mod, "_get_correction_rows", return_value=[]), \
+         patch.object(calibrate_mod, "_get_all_corrections", return_value=[]), \
          patch.object(calibrate_mod, "_get_weights", return_value={
              "severity": upper, **{k: v for k, v in _SEED_WEIGHTS.items() if k != "severity"}
          }), \
@@ -196,6 +202,8 @@ def test_policy_bullets_stored_on_success():
     canned = _canned_llm_response(bullets)
 
     with patch.object(calibrate_mod, "_get_feedback_rows", return_value=rows), \
+         patch.object(calibrate_mod, "_get_correction_rows", return_value=[]), \
+         patch.object(calibrate_mod, "_get_all_corrections", return_value=[]), \
          patch.object(calibrate_mod, "_get_weights", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_get_seeds", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_update_weight"), \
@@ -222,6 +230,8 @@ def test_policy_failure_does_not_block_quantitative_result():
     )
 
     with patch.object(calibrate_mod, "_get_feedback_rows", return_value=rows), \
+         patch.object(calibrate_mod, "_get_correction_rows", return_value=[]), \
+         patch.object(calibrate_mod, "_get_all_corrections", return_value=[]), \
          patch.object(calibrate_mod, "_get_weights", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_get_seeds", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_update_weight"), \
@@ -250,6 +260,8 @@ def test_dim_with_no_signal_is_not_updated():
     canned = _canned_llm_response(["bullet"])
 
     with patch.object(calibrate_mod, "_get_feedback_rows", return_value=rows), \
+         patch.object(calibrate_mod, "_get_correction_rows", return_value=[]), \
+         patch.object(calibrate_mod, "_get_all_corrections", return_value=[]), \
          patch.object(calibrate_mod, "_get_weights", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_get_seeds", return_value=dict(_SEED_WEIGHTS)), \
          patch.object(calibrate_mod, "_update_weight") as mock_update, \
