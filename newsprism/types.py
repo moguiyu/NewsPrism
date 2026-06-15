@@ -102,6 +102,7 @@ class ImpactAssessment:
     display_category: str = ""
     short_topic_name: str | None = None
     topic_icon_key: str | None = None
+    subject_regions: list[str] = field(default_factory=list)
     signal: float = 0.0
     composite: float = 0.0
     status: str = "publishable"     # publishable|needs_review|seek_more_evidence|suppress
