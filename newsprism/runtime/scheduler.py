@@ -192,6 +192,7 @@ class Scheduler:
         self.renderer = HtmlRenderer(
             output_dir=cfg.output.get("html_dir", "output"),
             source_regions={s.name: s.region for s in cfg.sources},
+            source_certifications=cfg.certifications,
         )
         self.renderer.day_navigation_cfg = cfg.output.get("day_navigation", {}) if isinstance(cfg.output, dict) else {}
 
