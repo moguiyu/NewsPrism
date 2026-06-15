@@ -90,3 +90,15 @@ def test_calibration_page_ok(client):
 
 def test_sources_page_ok(client):
     assert client.get("/sources?date_from=2026-06-01&date_to=2026-06-14").status_code == 200
+
+
+def test_bad_numeric_filter_does_not_500(client):
+    # non-numeric composite_min must be ignored, not crash the route
+    r = client.get("/day?date=2026-06-14&composite_min=abc")
+    assert r.status_code == 200
+
+
+def test_has_feedback_and_composite_max_filters_in_form(client):
+    # both backend-wired filters are now exposed in the shared filter form
+    html = client.get("/day?date=2026-06-14").text
+    assert 'name="composite_max"' in html and 'name="has_feedback"' in html

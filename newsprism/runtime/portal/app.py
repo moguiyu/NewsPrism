@@ -40,6 +40,13 @@ def _parse_list(value: str | None) -> list[str]:
     return [v for v in (value or "").split(",") if v] if value else []
 
 
+def _parse_float(value: str | None) -> float | None:
+    try:
+        return float(value) if value else None
+    except ValueError:
+        return None
+
+
 def create_app(db_path: Path = DB_PATH) -> FastAPI:
     app = FastAPI(title="NewsPrism Quality Portal")
     app.state.db_path = db_path
@@ -58,8 +65,8 @@ def create_app(db_path: Path = DB_PATH) -> FastAPI:
             categories=_parse_list(q.get("categories")),
             statuses=_parse_list(q.get("statuses")),
             selection=q.get("selection", "all"),
-            composite_min=float(q["composite_min"]) if q.get("composite_min") else None,
-            composite_max=float(q["composite_max"]) if q.get("composite_max") else None,
+            composite_min=_parse_float(q.get("composite_min")),
+            composite_max=_parse_float(q.get("composite_max")),
             subject_regions=_parse_list(q.get("subject_regions")),
             has_feedback={"1": True, "0": False}.get(q.get("has_feedback")),
         )

@@ -8,7 +8,7 @@
 <th>信号</th><th>综合</th><th>入选</th><th>标题/摘要</th><th>反馈</th></tr>
 {% for r in rows %}
 <tr>
-<td>{{ r.rank }}</td><td>{{ r.display_category }}</td>
+<td>{{ r.rank or '' }}</td><td>{{ r.display_category }}</td>
 <td>{{ r.subject_regions|join(', ') }}</td><td>{{ r.status }}</td>
 {% for d in DIMENSIONS %}<td class="{{ heat_class(r.dims.get(d,0), 10) }}">{{ r.dims.get(d,0) }}</td>{% endfor %}
 <td>{{ '%.2f'|format(r.signal) }}</td><td>{{ '%.3f'|format(r.composite) }}</td>
