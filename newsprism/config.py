@@ -128,7 +128,9 @@ def load_certifications(path: Path) -> dict[str, SourceCertification]:
     返回 source_name → SourceCertification 映射。
     - 文件不存在：返回 {}（功能可选，不阻断启动）
     - 认证代号不在 CERTIFICATION_CODES：raise ValueError（配置错误必须暴露）
-    - 源名不在 config.yaml：log warning，保留条目（不阻断）
+
+    孤儿 key 检测（源名不在 config.yaml）由 tests/test_certification.py 的
+    TestRealCertificationConfig 负责，不在加载器内执行。
     """
     if not path.exists():
         return {}
