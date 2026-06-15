@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NewsPrism 质量后台</title>
+<style>
+  body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;color:#1a1a1a;background:#fff}
+  header{border-bottom:2px solid #1a1a1a;padding:10px 18px}
+  header a{color:#057dbc;text-decoration:none;margin-right:16px;font-weight:600}
+  main{padding:18px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:1px solid #ddd;padding:4px 7px;text-align:left}
+  th{background:#f3f3f3;position:sticky;top:0}
+  .c0{background:#f5fafd}.c1{background:#d6ebf6}.c2{background:#9fd0ea}.c3{background:#4ea7d6;color:#fff}.c4{background:#1f7fbf;color:#fff}
+  form.filters{margin:0 0 14px;padding:10px;border:1px solid #ddd;background:#fafafa}
+  form.filters label{margin-right:12px}
+  .muted{color:#888}.pill{padding:1px 6px;border:1px solid #ccc;border-radius:2px;font-size:11px}
+  button{cursor:pointer}
+</style>
+</head>
+<body>
+<header>
+  <a href="/">概览</a><a href="/day">单日审查</a><a href="/matrices">矩阵</a>
+  <a href="/trends">趋势</a><a href="/calibration">校准</a><a href="/sources">来源评估</a>
+</header>
+<main>{% block body %}{% endblock %}</main>
+</body>
+</html>

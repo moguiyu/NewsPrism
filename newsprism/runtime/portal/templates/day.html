@@ -1,0 +1,43 @@
+{% extends "base.html" %}{% block body %}
+<h2>单日审查 · {{ date }}</h2>
+{% include "_filters.html" %}
+<p class="muted">来源国仅对已入选报道可见（候选无来源展开）。</p>
+<table>
+<tr><th>#</th><th>类别</th><th>主题国</th><th>状态</th>
+{% for d in DIMENSIONS %}<th>{{ d[:4] }}</th>{% endfor %}
+<th>信号</th><th>综合</th><th>入选</th><th>标题/摘要</th><th>反馈</th></tr>
+{% for r in rows %}
+<tr>
+<td>{{ r.rank }}</td><td>{{ r.display_category }}</td>
+<td>{{ r.subject_regions|join(', ') }}</td><td>{{ r.status }}</td>
+{% for d in DIMENSIONS %}<td class="{{ heat_class(r.dims.get(d,0), 10) }}">{{ r.dims.get(d,0) }}</td>{% endfor %}
+<td>{{ '%.2f'|format(r.signal) }}</td><td>{{ '%.3f'|format(r.composite) }}</td>
+<td>{{ '✓' if r.selected else '' }}</td>
+<td>{{ (r.cluster_summary or r.rationale or '')[:80] }}</td>
+<td>
+  {% if r.selected %}
+    <button onclick="fb('verdict',{{ r.cluster_id }},1)">👍</button>
+    <button onclick="fb('verdict',{{ r.cluster_id }},-1)">👎</button>
+  {% else %}
+    <button onclick="corr('promote',{{ r.id }})">应入选</button>
+  {% endif %}
+  <button onclick="corr('category',{{ r.id }})">改类别</button>
+  {% for d in DIMENSIONS %}<button onclick="corr('dimension',{{ r.id }},'{{ d }}')" title="修正{{ d }}">{{ d[:2] }}±</button>{% endfor %}
+</td>
+</tr>
+{% endfor %}
+</table>
+<script>
+async function post(url, data){
+  const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  if(r.ok){location.reload();}else{alert('失败: '+r.status);}
+}
+function fb(_k, clusterId, verdict){ post('/api/verdict',{cluster_id:clusterId,verdict:verdict}); }
+function corr(kind, evalId, dim){
+  let payload={evaluation_id:evalId, kind:kind};
+  if(kind==='dimension'){ const v=prompt('该维度应为(0-10)：'); if(v===null)return; payload.dimension=dim; payload.suggested_value=parseFloat(v); }
+  if(kind==='category'){ const c=prompt('正确类别：'); if(!c)return; payload.payload=c; }
+  post('/api/correction',payload);
+}
+</script>
+{% endblock %}

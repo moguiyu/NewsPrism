@@ -1,0 +1,15 @@
+<form class="filters" method="get">
+  {% if date is defined %}<input type="hidden" name="date" value="{{ date }}">{% endif %}
+  {% if date_from is defined %}<label>从 <input type="date" name="date_from" value="{{ date_from }}"></label>
+  <label>到 <input type="date" name="date_to" value="{{ date_to }}"></label>{% endif %}
+  <label>类别 <input name="categories" placeholder="国际时政,科技创新"></label>
+  <label>状态 <input name="statuses" placeholder="publishable,suppress"></label>
+  <label>选择
+    <select name="selection">
+      <option value="all">全部</option><option value="selected">已入选</option>
+      <option value="candidate">候选</option>
+    </select></label>
+  <label>综合分≥ <input name="composite_min" size="4"></label>
+  <label>主题国 <input name="subject_regions" placeholder="il,us"></label>
+  <button type="submit">筛选</button>
+</form>

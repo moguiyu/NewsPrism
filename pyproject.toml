@@ -46,6 +46,9 @@ dependencies = [
     "python-telegram-bot>=21.0",
     # Templating
     "jinja2>=3.1",
+    # Admin portal
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
     # Scheduling
     "apscheduler>=3.10",
     # Config / utils
