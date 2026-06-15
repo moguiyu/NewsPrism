@@ -1,0 +1,26 @@
+{% extends "base.html" %}{% block body %}
+<h2>矩阵 · {{ date_from }} → {{ date_to }}</h2>
+{% include "_filters.html" %}
+
+<h3>A · 类别 × 影响维度（均分）</h3>
+<table><tr><th></th>{% for d in DIMENSIONS %}<th>{{ d[:4] }}</th>{% endfor %}</tr>
+{% for cat, dims in cat_dim.items() %}
+<tr><th>{{ cat }}</th>{% for d in DIMENSIONS %}<td class="{{ heat_class(dims[d],10) }}">{{ dims[d] }}</td>{% endfor %}</tr>
+{% endfor %}</table>
+
+<h3>B · 主题国 × 类别（已入选计数）</h3>
+{% set cats = [] %}
+{% for region, row in subj_cat.items() %}{% for c in row.keys() %}{% if c not in cats %}{% set _ = cats.append(c) %}{% endif %}{% endfor %}{% endfor %}
+<table><tr><th></th>{% for c in cats %}<th>{{ c }}</th>{% endfor %}</tr>
+{% for region, row in subj_cat.items() %}
+<tr><th>{{ region }}</th>{% for c in cats %}<td class="{{ heat_class(row.get(c,0),5) }}">{{ row.get(c,0) }}</td>{% endfor %}</tr>
+{% endfor %}</table>
+
+<h3>C · 来源国 × 主题国（已入选计数）</h3>
+{% set subs = [] %}
+{% for src, row in src_subj.items() %}{% for s in row.keys() %}{% if s not in subs %}{% set _ = subs.append(s) %}{% endif %}{% endfor %}{% endfor %}
+<table><tr><th>来源↓ / 主题→</th>{% for s in subs %}<th>{{ s }}</th>{% endfor %}</tr>
+{% for src, row in src_subj.items() %}
+<tr><th>{{ src }}</th>{% for s in subs %}<td class="{{ heat_class(row.get(s,0),5) }}">{{ row.get(s,0) }}</td>{% endfor %}</tr>
+{% endfor %}</table>
+{% endblock %}

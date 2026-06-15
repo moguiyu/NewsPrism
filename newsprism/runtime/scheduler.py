@@ -218,6 +218,7 @@ class Scheduler:
                     flags=assessment.flags,
                     evaluated_by_llm=assessment.evaluated_by_llm,
                     model=assessment.model,
+                    subject_regions=assessment.subject_regions,
                 )
 
     def _resolve_output_path(self, configured: str | None, default: str) -> Path:

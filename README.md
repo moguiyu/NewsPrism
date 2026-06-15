@@ -143,6 +143,7 @@ Common examples:
 | `python -m newsprism run` | Start the long-running scheduler |
 | `python -m newsprism feedback add\|list\|poll` | Record editor 👍/👎 on a cluster, list recent feedback, or poll Telegram |
 | `python -m newsprism calibrate run\|show\|reset` | Run weight calibration + policy distillation, inspect, or reset to seeds |
+| `python -m newsprism portal --host 127.0.0.1 --port 8081` | Run the local admin quality portal (inspect selection + give structured feedback) |
 
 ## Testing and Packaging
 

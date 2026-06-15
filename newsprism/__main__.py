@@ -66,6 +66,11 @@ def main() -> None:
     calibrate_sub.add_parser("show", help="Show current weights and editorial policy")
     calibrate_sub.add_parser("reset", help="Restore all weights to seed values")
 
+    portal_parser = sub.add_parser("portal", help="Run the local admin quality portal")
+    portal_parser.add_argument("--host", default="127.0.0.1")
+    portal_parser.add_argument("--port", type=int, default=8081)
+    portal_parser.add_argument("--db-path", default="data/newsprism.db")
+
     args = parser.parse_args()
 
     _setup_logging(verbose=args.verbose)
@@ -141,6 +146,15 @@ def main() -> None:
             else:
                 calibrate_parser.print_help()
                 sys.exit(1)
+        elif args.cmd == "portal":
+            import uvicorn
+            from pathlib import Path
+            from newsprism.repo.db import init_db
+            from newsprism.runtime.portal.app import create_app
+
+            db_path = Path(args.db_path)
+            init_db(db_path)
+            uvicorn.run(create_app(db_path=db_path), host=args.host, port=args.port)
         elif args.cmd == "run":
             sched.start()
         else:

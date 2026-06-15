@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block body %}
+<h2>趋势 · {{ date_from }} → {{ date_to }}</h2>
+{% include "_filters.html" %}
+<p>平均综合分走势：{{ spark|safe }}</p>
+<table>
+<tr><th>日期</th><th>入选</th><th>候选</th><th>接受率</th><th>平均综合分</th></tr>
+{% for t in series %}
+<tr><td>{{ t.date }}</td><td>{{ t.selected }}</td><td>{{ t.candidates }}</td>
+<td>{{ '%.0f%%'|format(t.accept_rate*100) if t.accept_rate is not none else '—' }}</td>
+<td>{{ t.composite_avg }}</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

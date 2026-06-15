@@ -45,3 +45,6 @@ tests/goldens/
 data/*.db
 data/*.db.bak*
 data/newsprism_fnos_*.db
+
+# brainstorming visual companion
+.superpowers/

@@ -23,9 +23,11 @@ import litellm
 from newsprism.repo import (
     get_calibration_state,
     get_calibration_weights,
+    get_correction_training_rows,
     get_feedback_training_rows,
     get_latest_editorial_policy,
     insert_editorial_policy,
+    list_corrections,
     reset_calibration_weights,
     seed_calibration_weights,
     update_calibration_weight,
@@ -49,6 +51,14 @@ _LLM_DIMS = (
 
 def _get_feedback_rows(days: int) -> list[dict]:
     return get_feedback_training_rows(days=days)
+
+
+def _get_correction_rows(days: int) -> list[dict]:
+    return get_correction_training_rows(days=days)
+
+
+def _get_all_corrections(days: int) -> list[dict]:
+    return list_corrections(days=days)
 
 
 def _get_weights() -> dict[str, float]:
@@ -124,6 +134,19 @@ def _build_feedback_summary(rows: list[dict]) -> str:
         if note:
             line += f" (备注: {note})"
         lines.append(line)
+    return "\n".join(lines)
+
+
+def _summarize_corrections(corrections: list[dict]) -> str:
+    """Compact Chinese summary of dimension/category corrections for the memo LLM."""
+    lines = []
+    for c in corrections:
+        if c.get("kind") == "dimension" and c.get("dimension") is not None:
+            lines.append(
+                f"维度修正：{c['dimension']} 应约为 {c.get('suggested_value')}（类别 {c.get('display_category')}）"
+            )
+        elif c.get("kind") == "category":
+            lines.append(f"分类修正：应为 {c.get('payload')}（原 {c.get('display_category')}）")
     return "\n".join(lines)
 
 
@@ -205,7 +228,7 @@ def run_calibration(cfg) -> dict:
     min_feedback: int = int(cal_cfg.get("min_feedback_to_run", 10))
     policy_max_bullets: int = int(cal_cfg.get("policy_max_bullets", 10))
 
-    rows = _get_feedback_rows(window_days)
+    rows = _get_feedback_rows(window_days) + _get_correction_rows(window_days)
     if len(rows) < min_feedback:
         return {
             "status": "skipped",
@@ -251,6 +274,9 @@ def run_calibration(cfg) -> dict:
     policy_bullets = 0
     try:
         feedback_summary = _build_feedback_summary(rows)
+        correction_notes = _summarize_corrections(_get_all_corrections(window_days))
+        if correction_notes:
+            feedback_summary = f"{feedback_summary}\n\n编辑的维度/分类修正：\n{correction_notes}"
         bullets = _call_policy_llm(cfg, feedback_summary, policy_max_bullets)
         if bullets:
             policy_text = "\n".join(f"• {b}" for b in bullets)

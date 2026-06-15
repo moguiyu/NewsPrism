@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block body %}
+<h2>校准状态</h2>
+<h3>维度权重</h3>
+<table><tr><th>维度</th><th>当前</th><th>种子</th><th>倍率</th><th>更新</th></tr>
+{% for w in weights %}
+<tr><td>{{ w.dimension }}</td><td>{{ '%.4f'|format(w.weight) }}</td>
+<td>{{ '%.4f'|format(w.seed) }}</td>
+<td>{{ '%.2fx'|format(w.weight / w.seed) if w.seed else 'n/a' }}</td>
+<td class="muted">{{ w.updated_at }}</td></tr>
+{% endfor %}</table>
+<h3>当前编辑政策备忘</h3>
+<pre>{{ policy or '（暂无）' }}</pre>
+<h3>近 30 天修正（{{ corrections|length }}）</h3>
+<table><tr><th>时间</th><th>类型</th><th>维度</th><th>建议值</th><th>内容</th></tr>
+{% for c in corrections %}
+<tr><td class="muted">{{ c.created_at }}</td><td><span class="pill">{{ c.kind }}</span></td>
+<td>{{ c.dimension or '' }}</td><td>{{ c.suggested_value if c.suggested_value is not none else '' }}</td>
+<td>{{ c.payload }}</td></tr>
+{% endfor %}</table>
+{% endblock %}

@@ -20,6 +20,7 @@ DB_PATH = Path("data/newsprism.db")
 def init_db(db_path: Path = DB_PATH) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS articles (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,6 +175,17 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS feedback_corrections (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                evaluation_id   INTEGER NOT NULL,
+                kind            TEXT NOT NULL,        -- dimension | category | promote | demote
+                dimension       TEXT,
+                suggested_value REAL,
+                payload         TEXT NOT NULL DEFAULT '',
+                channel         TEXT NOT NULL DEFAULT 'portal',
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS storylines (
                 storyline_key TEXT PRIMARY KEY,
                 storyline_name TEXT,
@@ -217,6 +229,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 ON cluster_evaluations(report_date);
             CREATE INDEX IF NOT EXISTS idx_editorial_feedback_cluster
                 ON editorial_feedback(cluster_id);
+            CREATE INDEX IF NOT EXISTS idx_feedback_corrections_eval
+                ON feedback_corrections(evaluation_id);
         """)
 
         # Migration: Add new columns if they don't exist (for existing databases)
@@ -267,6 +281,13 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_reason TEXT")
         if "rejection_count" not in search_event_columns:
             conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_count INTEGER")
+
+        cursor = conn.execute("PRAGMA table_info(cluster_evaluations)")
+        eval_columns = {row[1] for row in cursor.fetchall()}
+        if "subject_regions" not in eval_columns:
+            conn.execute(
+                "ALTER TABLE cluster_evaluations ADD COLUMN subject_regions TEXT NOT NULL DEFAULT '[]'"
+            )
 
 
 @contextmanager
@@ -639,6 +660,7 @@ def insert_cluster_evaluation(
     flags: list[str],
     evaluated_by_llm: bool,
     model: str | None,
+    subject_regions: list[str] | None = None,
     db_path: Path = DB_PATH,
 ) -> int:
     """Persist one cluster's impact evaluation (upsert on report_date+cluster_key)."""
@@ -646,9 +668,10 @@ def insert_cluster_evaluation(
         cur = conn.execute(
             """INSERT INTO cluster_evaluations (
                    report_date, cluster_key, dims, rationale, signal, composite,
-                   rank, display_category, status, flags, evaluated_by_llm, model
+                   rank, display_category, status, flags, evaluated_by_llm, model,
+                   subject_regions
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(report_date, cluster_key) DO UPDATE SET
                    dims = excluded.dims,
                    rationale = excluded.rationale,
@@ -660,6 +683,7 @@ def insert_cluster_evaluation(
                    flags = excluded.flags,
                    evaluated_by_llm = excluded.evaluated_by_llm,
                    model = excluded.model,
+                   subject_regions = excluded.subject_regions,
                    cluster_id = NULL,
                    selected = 0""",
             (
@@ -675,6 +699,7 @@ def insert_cluster_evaluation(
                 json.dumps(flags, ensure_ascii=False),
                 1 if evaluated_by_llm else 0,
                 model,
+                json.dumps(list(subject_regions or []), ensure_ascii=False),
             ),
         )
         return cur.lastrowid
@@ -841,6 +866,130 @@ def insert_editorial_policy(content: str, db_path: Path = DB_PATH) -> int:
             (version, content),
         )
         return cur.lastrowid
+
+
+# ─── PORTAL: CORRECTIONS + READ AGGREGATIONS ───────────────────────────────────
+
+def insert_feedback_correction(
+    evaluation_id: int,
+    kind: str,
+    dimension: str | None = None,
+    suggested_value: float | None = None,
+    payload: str = "",
+    channel: str = "portal",
+    db_path: Path = DB_PATH,
+) -> int:
+    """Record one structured correction against a cluster_evaluations row."""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO feedback_corrections
+                   (evaluation_id, kind, dimension, suggested_value, payload, channel)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (evaluation_id, kind, dimension, suggested_value, payload, channel),
+        )
+        return cur.lastrowid
+
+
+def list_corrections(days: int = 30, db_path: Path = DB_PATH) -> list[dict[str, object]]:
+    """Recent corrections joined to their evaluation's dims (for memo + analytics)."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT fc.id, fc.evaluation_id, fc.kind, fc.dimension, fc.suggested_value,
+                      fc.payload, fc.channel, fc.created_at,
+                      e.dims, e.display_category, e.composite, e.report_date
+               FROM feedback_corrections fc
+               JOIN cluster_evaluations e ON e.id = fc.evaluation_id
+               WHERE fc.created_at >= datetime('now', ?)
+               ORDER BY fc.id DESC""",
+            (f"-{days} days",),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["dims"] = json.loads(item["dims"]) if item.get("dims") else {}
+        except (TypeError, ValueError):
+            item["dims"] = {}
+        result.append(item)
+    return result
+
+
+def query_evaluations(
+    date_from: str,
+    date_to: str,
+    db_path: Path = DB_PATH,
+) -> list[dict[str, object]]:
+    """All evaluations (selected + candidates) in [date_from, date_to], with the
+    cluster summary (selected only), parsed dims/flags/subject_regions, and the
+    latest verdict for selected clusters. Caller filters further in Python."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT e.id, e.cluster_id, e.report_date, e.cluster_key, e.dims,
+                      e.rationale, e.signal, e.composite, e.rank, e.selected,
+                      e.display_category, e.status, e.flags, e.subject_regions,
+                      e.evaluated_by_llm, c.summary AS cluster_summary, c.article_ids,
+                      (SELECT f.verdict FROM editorial_feedback f
+                       WHERE f.cluster_id = e.cluster_id
+                       ORDER BY f.id DESC LIMIT 1) AS verdict
+               FROM cluster_evaluations e
+               LEFT JOIN clusters c ON c.id = e.cluster_id
+               WHERE e.report_date BETWEEN ? AND ?
+               ORDER BY e.composite DESC""",
+            (date_from, date_to),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        for key in ("dims", "flags", "subject_regions"):
+            try:
+                item[key] = json.loads(item[key]) if item.get(key) else ([] if key != "dims" else {})
+            except (TypeError, ValueError):
+                item[key] = [] if key != "dims" else {}
+        result.append(item)
+    return result
+
+
+def selected_source_regions(
+    date_from: str,
+    date_to: str,
+    db_path: Path = DB_PATH,
+) -> list[dict[str, object]]:
+    """For selected clusters in the window, expand article_ids → (cluster_id,
+    origin_region, source_name). Used for source-country matrices/source review."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT c.id AS cluster_id, a.origin_region, a.source_name
+               FROM clusters c, json_each(c.article_ids) j
+               JOIN articles a ON a.id = j.value
+               WHERE c.report_date BETWEEN ? AND ?""",
+            (date_from, date_to),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_correction_training_rows(days: int = 30, db_path: Path = DB_PATH) -> list[dict[str, object]]:
+    """promote/demote corrections as accept/reject training rows (dims from the
+    evaluation itself — no clusters join, so candidates are included)."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT fc.kind, fc.payload AS note, e.dims, e.rationale,
+                      e.composite, e.signal, e.display_category, e.report_date
+               FROM feedback_corrections fc
+               JOIN cluster_evaluations e ON e.id = fc.evaluation_id
+               WHERE fc.kind IN ('promote', 'demote')
+                 AND fc.created_at >= datetime('now', ?)""",
+            (f"-{days} days",),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["verdict"] = 1 if item["kind"] == "promote" else -1
+        try:
+            item["dims"] = json.loads(item["dims"]) if item.get("dims") else {}
+        except (TypeError, ValueError):
+            item["dims"] = {}
+        result.append(item)
+    return result
 
 
 def delete_old_unclustered_articles(days: int = 30, db_path: Path = DB_PATH) -> int:
