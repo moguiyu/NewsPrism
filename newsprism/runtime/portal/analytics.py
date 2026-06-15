@@ -97,3 +97,82 @@ def matrix_source_subject(rows: list[dict], source_rows: list[dict]) -> dict[str
             for subj in subjects:
                 out[src][subj] += 1
     return {k: dict(v) for k, v in out.items()}
+
+
+def trends(rows: list[dict]) -> list[dict]:
+    """Per-date selection/feedback/composite trend, ascending by date."""
+    by_date: dict[str, dict] = defaultdict(
+        lambda: {"selected": 0, "candidates": 0, "accepts": 0, "verdicts": 0, "composite_sum": 0.0, "n": 0}
+    )
+    for r in rows:
+        d = by_date[r.get("report_date") or "?"]
+        d["n"] += 1
+        d["composite_sum"] += float(r.get("composite", 0.0))
+        if r.get("selected"):
+            d["selected"] += 1
+        else:
+            d["candidates"] += 1
+        if r.get("verdict") is not None:
+            d["verdicts"] += 1
+            if r.get("verdict") == 1:
+                d["accepts"] += 1
+    out = []
+    for date in sorted(by_date):
+        d = by_date[date]
+        out.append({
+            "date": date,
+            "selected": d["selected"],
+            "candidates": d["candidates"],
+            "accept_rate": round(d["accepts"] / d["verdicts"], 2) if d["verdicts"] else None,
+            "composite_avg": round(d["composite_sum"] / d["n"], 3) if d["n"] else 0.0,
+        })
+    return out
+
+
+def source_review(rows: list[dict], source_rows: list[dict]) -> list[dict]:
+    """Per source: impact-weighted contribution (Σ composite of selected clusters
+    it appeared in) and cluster count. Selected clusters only."""
+    composite_by_cluster: dict[int, float] = {}
+    for r in rows:
+        if r.get("selected") and r.get("cluster_id") is not None:
+            composite_by_cluster[r["cluster_id"]] = float(r.get("composite", 0.0))
+    agg: dict[str, dict] = defaultdict(lambda: {"contribution": 0.0, "clusters": 0})
+    seen: set[tuple[str, int]] = set()
+    for s in source_rows:
+        name = s.get("source_name") or "?"
+        cid = s.get("cluster_id")
+        if cid not in composite_by_cluster or (name, cid) in seen:
+            continue
+        seen.add((name, cid))
+        agg[name]["contribution"] += composite_by_cluster[cid]
+        agg[name]["clusters"] += 1
+    return sorted(
+        ({"source": k, **v} for k, v in agg.items()),
+        key=lambda x: -x["contribution"],
+    )
+
+
+def heat_class(value: float, scale: float) -> str:
+    """Bucket a value in [0, scale] into one of 5 heat CSS classes c0..c4."""
+    if scale <= 0:
+        return "c0"
+    frac = max(0.0, min(1.0, value / scale))
+    return f"c{min(4, int(frac * 5))}" if frac < 1.0 else "c4"
+
+
+def sparkline_svg(values: list[float], width: int = 160, height: int = 32) -> str:
+    """Tiny inline SVG line for a trend series (no JS, no deps)."""
+    pts = [v for v in values if v is not None]
+    if len(pts) < 2:
+        return ""
+    lo, hi = min(pts), max(pts)
+    span = (hi - lo) or 1.0
+    step = width / (len(pts) - 1)
+    coords = " ".join(
+        f"{i * step:.1f},{height - (v - lo) / span * (height - 4) - 2:.1f}"
+        for i, v in enumerate(pts)
+    )
+    return (
+        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        f'<polyline fill="none" stroke="#057dbc" stroke-width="1.5" points="{coords}"/></svg>'
+    )

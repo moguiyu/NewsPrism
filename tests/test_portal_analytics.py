@@ -50,3 +50,32 @@ def test_matrix_source_subject_counts():
     assert m["us"]["il"] == 1
     assert m["us"]["cn"] == 1
     assert m["cn"]["cn"] == 1
+
+
+def test_trends_per_date():
+    rows = [_row(report_date="2026-06-13", selected=1, verdict=1, composite=0.6),
+            _row(report_date="2026-06-13", selected=0, verdict=None, composite=0.2),
+            _row(report_date="2026-06-14", selected=1, verdict=-1, composite=0.8)]
+    t = A.trends(rows)
+    d13 = next(x for x in t if x["date"] == "2026-06-13")
+    assert d13["selected"] == 1 and d13["candidates"] == 1
+    assert d13["accept_rate"] == 1.0     # 1 accept / 1 verdict
+    d14 = next(x for x in t if x["date"] == "2026-06-14")
+    assert d14["accept_rate"] == 0.0
+
+
+def test_source_review_contribution():
+    rows = [_row(cluster_id=1, selected=1, composite=0.8),
+            _row(cluster_id=2, selected=1, composite=0.4)]
+    source_rows = [{"cluster_id": 1, "origin_region": "us", "source_name": "AP"},
+                   {"cluster_id": 2, "origin_region": "us", "source_name": "AP"},
+                   {"cluster_id": 1, "origin_region": "gb", "source_name": "BBC"}]
+    sr = A.source_review(rows, source_rows)
+    ap = next(x for x in sr if x["source"] == "AP")
+    assert round(ap["contribution"], 2) == 1.2   # 0.8 + 0.4
+    assert ap["clusters"] == 2
+
+
+def test_heat_class_buckets():
+    assert A.heat_class(0.0, 10.0) == "c0"
+    assert A.heat_class(10.0, 10.0) == "c4"
