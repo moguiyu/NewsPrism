@@ -90,14 +90,25 @@ def test_audit_reports_db_and_rendered_quality_metrics(tmp_path):
     assert "NewsPrism quality audit" in report
 
 
+def _table_counts(db_path):
+    """Row count per table — a WAL-safe read-only invariant (raw DB bytes change
+    under WAL checkpointing even when no rows are written)."""
+    with sqlite3.connect(db_path) as conn:
+        tables = [
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        ]
+        return {t: conn.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in tables}
+
+
 def test_audit_is_read_only(tmp_path):
     db_path = tmp_path / "newsprism.db"
     init_db(db_path)
-    before = db_path.read_bytes()
+    before = _table_counts(db_path)
 
     audit(days=1, anchor_date="2026-03-27", db_path=db_path, output_dir=tmp_path / "missing-output")
 
-    after = db_path.read_bytes()
+    after = _table_counts(db_path)
     with sqlite3.connect(db_path) as conn:
         assert conn.execute("SELECT count(*) FROM articles").fetchone()[0] == 0
     assert before == after
