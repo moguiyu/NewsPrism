@@ -292,3 +292,33 @@ def raw_to_article(raw: RawArticle) -> Article:
 
 def raw_to_articles(raws: list[RawArticle]) -> list[Article]:
     return [raw_to_article(r) for r in raws]
+
+
+# ─── SOURCE CERTIFICATION ─────────────────────────────────────────────────────
+
+# 国际认证代号白名单。sources-certification.yaml 里的 code 必须在此范围内。
+# code: (label_zh, label_en)
+CERTIFICATION_CODES: dict[str, tuple[str, str]] = {
+    "TNI":  ("反虚假新闻联盟", "Trusted News Initiative"),
+    "NG":   ("NewsGuard 高可信", "NewsGuard Green"),
+    "AF":   ("Ad Fontes 高可靠", "Ad Fontes High Reliability"),
+    "MBFC": ("MBFC 事实报道 High", "MBFC High Factual"),
+    "JTI":  ("RSF 新闻信任认证", "RSF Journalism Trust Initiative"),
+}
+
+
+@dataclass(frozen=True)
+class Certification:
+    """单个国际认证/评级体系的归属标记。"""
+    code: str          # TNI / NG / AF / MBFC / JTI
+    label_zh: str      # hover 详情里显示的中文名
+    label_en: str      # hover 详情里显示的英文名
+
+
+@dataclass(frozen=True)
+class SourceCertification:
+    """一个源持有的全部国际认证。未在 YAML 中列出 = 无徽标。"""
+    source_name: str
+    certifications: tuple[Certification, ...]
+    detail_zh: str
+    detail_en: str
