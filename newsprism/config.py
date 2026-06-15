@@ -10,6 +10,12 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from newsprism.types import (
+    CERTIFICATION_CODES,
+    Certification,
+    SourceCertification,
+)
+
 load_dotenv()
 
 
@@ -114,6 +120,43 @@ def _load_yaml_file(config_root: Path, configured: str, default: Any) -> Any:
     if not path.exists():
         return default
     return yaml.safe_load(path.read_text(encoding="utf-8")) or default
+
+
+def load_certifications(path: Path) -> dict[str, SourceCertification]:
+    """加载 sources-certification.yaml。
+
+    返回 source_name → SourceCertification 映射。
+    - 文件不存在：返回 {}（功能可选，不阻断启动）
+    - 认证代号不在 CERTIFICATION_CODES：raise ValueError（配置错误必须暴露）
+    - 源名不在 config.yaml：log warning，保留条目（不阻断）
+    """
+    if not path.exists():
+        return {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    result: dict[str, SourceCertification] = {}
+    for source_name, entry in raw.items():
+        codes = tuple(entry.get("certifications", []))
+        invalid = [c for c in codes if c not in CERTIFICATION_CODES]
+        if invalid:
+            raise ValueError(
+                f"Unknown certification code(s) {invalid} for source '{source_name}'. "
+                f"Allowed: {list(CERTIFICATION_CODES)}"
+            )
+        certs = tuple(
+            Certification(
+                code=c,
+                label_zh=CERTIFICATION_CODES[c][0],
+                label_en=CERTIFICATION_CODES[c][1],
+            )
+            for c in codes
+        )
+        result[source_name] = SourceCertification(
+            source_name=source_name,
+            certifications=certs,
+            detail_zh=entry.get("detail", ""),
+            detail_en=entry.get("detail_en", ""),
+        )
+    return result
 
 
 def load_config(config_path: str = "config/config.yaml") -> Config:
