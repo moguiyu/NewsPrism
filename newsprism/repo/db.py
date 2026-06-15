@@ -20,6 +20,7 @@ DB_PATH = Path("data/newsprism.db")
 def init_db(db_path: Path = DB_PATH) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS articles (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,6 +175,17 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS feedback_corrections (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                evaluation_id   INTEGER NOT NULL,
+                kind            TEXT NOT NULL,        -- dimension | category | promote | demote
+                dimension       TEXT,
+                suggested_value REAL,
+                payload         TEXT NOT NULL DEFAULT '',
+                channel         TEXT NOT NULL DEFAULT 'portal',
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS storylines (
                 storyline_key TEXT PRIMARY KEY,
                 storyline_name TEXT,
@@ -217,6 +229,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 ON cluster_evaluations(report_date);
             CREATE INDEX IF NOT EXISTS idx_editorial_feedback_cluster
                 ON editorial_feedback(cluster_id);
+            CREATE INDEX IF NOT EXISTS idx_feedback_corrections_eval
+                ON feedback_corrections(evaluation_id);
         """)
 
         # Migration: Add new columns if they don't exist (for existing databases)
@@ -267,6 +281,13 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_reason TEXT")
         if "rejection_count" not in search_event_columns:
             conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_count INTEGER")
+
+        cursor = conn.execute("PRAGMA table_info(cluster_evaluations)")
+        eval_columns = {row[1] for row in cursor.fetchall()}
+        if "subject_regions" not in eval_columns:
+            conn.execute(
+                "ALTER TABLE cluster_evaluations ADD COLUMN subject_regions TEXT NOT NULL DEFAULT '[]'"
+            )
 
 
 @contextmanager
