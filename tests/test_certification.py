@@ -98,3 +98,38 @@ class TestConfigCertificationsField:
         # 默认路径 config/sources-certification.yaml 此时还不存在（Task 4 才创建）
         # 但字段必须存在且是 dict（空 dict 也 OK）
         assert isinstance(cfg.certifications, dict)
+
+
+class TestRealCertificationConfig:
+    def test_real_config_loads_without_error(self):
+        path = Path("config/sources-certification.yaml")
+        result = load_certifications(path)
+        assert isinstance(result, dict)
+        assert len(result) >= 20, f"Expected ≥20 certified sources, got {len(result)}"
+
+    def test_real_config_all_codes_in_allowlist(self):
+        path = Path("config/sources-certification.yaml")
+        result = load_certifications(path)
+        for source_name, cert in result.items():
+            for c in cert.certifications:
+                assert c.code in CERTIFICATION_CODES, (
+                    f"Source '{source_name}' has illegal code '{c.code}'"
+                )
+
+    def test_real_config_keys_match_config_yaml_names(self):
+        # YAML key 必须在 config.yaml 的 name 字段里
+        import yaml as _yaml
+        cfg_names = {
+            s["name"]
+            for s in _yaml.safe_load(Path("config/config.yaml").read_text(encoding="utf-8"))["sources"]
+        }
+        cert_keys = set(load_certifications(Path("config/sources-certification.yaml")).keys())
+        orphans = cert_keys - cfg_names
+        assert not orphans, f"Certification YAML has sources not in config.yaml: {orphans}"
+
+    def test_bbc_has_strong_certification(self):
+        path = Path("config/sources-certification.yaml")
+        result = load_certifications(path)
+        bbc = result["BBC News"]
+        assert "TNI" in [c.code for c in bbc.certifications]
+        assert "NG" in [c.code for c in bbc.certifications]
