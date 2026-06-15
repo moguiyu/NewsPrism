@@ -13,7 +13,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from newsprism.repo.db import (
-    DB_PATH, insert_editorial_feedback, insert_feedback_correction,
+    DB_PATH, get_calibration_state, get_latest_editorial_policy,
+    insert_editorial_feedback, insert_feedback_correction, list_corrections,
     query_evaluations, selected_source_regions,
 )
 from newsprism.runtime.portal import analytics as A
@@ -95,6 +96,36 @@ def create_app(db_path: Path = DB_PATH) -> FastAPI:
              "cat_dim": A.matrix_category_dimension(rows),
              "subj_cat": A.matrix_subject_category(rows),
              "src_subj": A.matrix_source_subject(rows, src)},
+        )
+
+    @app.get("/trends", response_class=HTMLResponse)
+    def trends_page(request: Request):
+        df, dt = _window(request)
+        rows = query_evaluations(df, dt, db_path=db_path)
+        series = A.trends(rows)
+        spark = A.sparkline_svg([t["composite_avg"] for t in series])
+        return _TEMPLATES.TemplateResponse(
+            request, "trends.html",
+            {"date_from": df, "date_to": dt, "series": series, "spark": spark},
+        )
+
+    @app.get("/calibration", response_class=HTMLResponse)
+    def calibration_page(request: Request):
+        return _TEMPLATES.TemplateResponse(
+            request, "calibration.html",
+            {"weights": get_calibration_state(db_path=db_path),
+             "policy": get_latest_editorial_policy(db_path=db_path),
+             "corrections": list_corrections(days=30, db_path=db_path)},
+        )
+
+    @app.get("/sources", response_class=HTMLResponse)
+    def sources_page(request: Request):
+        df, dt = _window(request)
+        rows = query_evaluations(df, dt, db_path=db_path)
+        src = selected_source_regions(df, dt, db_path=db_path)
+        return _TEMPLATES.TemplateResponse(
+            request, "sources.html",
+            {"date_from": df, "date_to": dt, "review": A.source_review(rows, src)},
         )
 
     @app.post("/api/verdict")

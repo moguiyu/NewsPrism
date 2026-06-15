@@ -78,3 +78,15 @@ def test_post_correction_writes_row(tmp_path):
     with get_conn(db) as conn:
         row = conn.execute("SELECT kind FROM feedback_corrections WHERE evaluation_id=?", (eid,)).fetchone()
     assert row["kind"] == "promote"
+
+
+def test_trends_page_ok(client):
+    assert client.get("/trends?date_from=2026-06-01&date_to=2026-06-14").status_code == 200
+
+
+def test_calibration_page_ok(client):
+    assert client.get("/calibration").status_code == 200
+
+
+def test_sources_page_ok(client):
+    assert client.get("/sources?date_from=2026-06-01&date_to=2026-06-14").status_code == 200
