@@ -59,6 +59,9 @@ class Config:
     # Topic equivalence: canonical topic → list of equivalent topics
     topic_equivalence: dict[str, list[str]] = field(default_factory=dict)
 
+    # 源认证徽标（来自 sources-certification.yaml）
+    certifications: dict[str, SourceCertification] = field(default_factory=dict)
+
     # Feature flags
     use_llm_clustering: bool = True
 
@@ -207,6 +210,10 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
     if tz_override := os.environ.get("SCHEDULE_TIMEZONE"):
         schedule = {**schedule, "timezone": tz_override}
 
+    certifications = load_certifications(
+        config_root / "config" / "sources-certification.yaml"
+    )
+
     return Config(
         raw=raw,
         sources=sources,
@@ -224,4 +231,5 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         evolution=raw.get("evolution", {}),
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
         use_llm_clustering=bool(raw.get("clustering", {}).get("use_llm_clustering", True)),
+        certifications=certifications,
     )

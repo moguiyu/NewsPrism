@@ -84,3 +84,17 @@ class TestLoadCertifications:
         cert = result["X"].certifications[0]
         assert cert.label_zh == CERTIFICATION_CODES["TNI"][0]
         assert cert.label_en == CERTIFICATION_CODES["TNI"][1]
+
+
+class TestConfigCertificationsField:
+    def test_config_has_certifications_field(self):
+        from newsprism.config import Config
+        # Config dataclass 必须有 certifications 字段
+        assert "certifications" in Config.__dataclass_fields__
+
+    def test_load_config_returns_certifications_dict(self):
+        from newsprism.config import load_config
+        cfg = load_config()
+        # 默认路径 config/sources-certification.yaml 此时还不存在（Task 4 才创建）
+        # 但字段必须存在且是 dict（空 dict 也 OK）
+        assert isinstance(cfg.certifications, dict)
