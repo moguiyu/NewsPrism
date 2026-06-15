@@ -10,13 +10,29 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from newsprism.repo.db import (
-    DB_PATH, query_evaluations, selected_source_regions,
+    DB_PATH, insert_editorial_feedback, insert_feedback_correction,
+    query_evaluations, selected_source_regions,
 )
 from newsprism.runtime.portal import analytics as A
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+class VerdictIn(BaseModel):
+    cluster_id: int
+    verdict: int
+    note: str = ""
+
+
+class CorrectionIn(BaseModel):
+    evaluation_id: int
+    kind: str                       # dimension | category | promote | demote
+    dimension: str | None = None
+    suggested_value: float | None = None
+    payload: str = ""
 
 
 def _parse_list(value: str | None) -> list[str]:
@@ -80,5 +96,18 @@ def create_app(db_path: Path = DB_PATH) -> FastAPI:
              "subj_cat": A.matrix_subject_category(rows),
              "src_subj": A.matrix_source_subject(rows, src)},
         )
+
+    @app.post("/api/verdict")
+    def api_verdict(body: VerdictIn):
+        insert_editorial_feedback(body.cluster_id, body.verdict, channel="portal",
+                                  note=body.note, db_path=db_path)
+        return {"ok": True}
+
+    @app.post("/api/correction")
+    def api_correction(body: CorrectionIn):
+        insert_feedback_correction(body.evaluation_id, body.kind, dimension=body.dimension,
+                                   suggested_value=body.suggested_value, payload=body.payload,
+                                   channel="portal", db_path=db_path)
+        return {"ok": True}
 
     return app
