@@ -58,7 +58,6 @@ def main() -> None:
     fb_add.add_argument("--note", default="", help="Optional note")
     fb_list = feedback_sub.add_parser("list", help="Show recent feedback")
     fb_list.add_argument("--limit", type=int, default=30)
-    feedback_sub.add_parser("poll", help="Poll Telegram for queued feedback taps now")
 
     calibrate_parser = sub.add_parser("calibrate", help="Tune impact weights and refresh editorial policy memory")
     calibrate_sub = calibrate_parser.add_subparsers(dest="calibrate_cmd")
@@ -113,7 +112,6 @@ def main() -> None:
                 print(format_audit_report(payload))
         elif args.cmd == "feedback":
             from newsprism.runtime.feedback import (
-                FeedbackPoller,
                 format_feedback_list,
                 record_feedback_cli,
             )
@@ -123,9 +121,6 @@ def main() -> None:
                 print(f"Recorded feedback #{row_id}: cluster={args.fb_cluster} verdict={args.verdict}")
             elif args.feedback_cmd == "list":
                 print(format_feedback_list(limit=args.limit))
-            elif args.feedback_cmd == "poll":
-                count = FeedbackPoller(cfg).poll_once()
-                print(f"Recorded {count} feedback signal(s) from Telegram")
             else:
                 feedback_parser.print_help()
                 sys.exit(1)

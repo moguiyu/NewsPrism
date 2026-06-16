@@ -24,7 +24,6 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 from newsprism.config import Config
-from newsprism.runtime.feedback import feedback_keyboard
 from newsprism.runtime.renderer import _CATEGORY_META, _DEFAULT_BROAD, _broad_category, _body_only, _extract_headline
 from newsprism.service.language import looks_like_chinese_text
 from newsprism.types import ClusterSummary
@@ -153,26 +152,6 @@ class TelegramPublisher:
             )
         items = _group_by_category(items)
         await self._publish_items(items, report_date)
-
-        # Best-effort: send inline feedback keyboard, numbered to match the
-        # grouped digest order above (global 1..N over the same item list).
-        if self.token and self.chat_id:
-            try:
-                stories = [
-                    {"index": index, "cluster_id": item["cluster_id"]}
-                    for index, item in enumerate(items, 1)
-                    if item.get("cluster_id")
-                ]
-                kb = feedback_keyboard(stories)
-                if kb["inline_keyboard"]:
-                    async with Bot(token=self.token) as bot:
-                        await bot.send_message(
-                            chat_id=self.chat_id,
-                            text="📊 为今日报道评分（点击 👍/👎）",
-                            reply_markup=kb,
-                        )
-            except Exception as exc:
-                logger.warning("Feedback keyboard send failed: %s", exc)
 
     async def _publish_items(self, items: list[dict[str, str]], report_date: date) -> None:
         if not self.token or not self.chat_id:

@@ -8,7 +8,6 @@ schedule:
   prepublish_collect_cron: "20 7 * * *"
   publish_cron: "30 7 * * *"    # build staged report before the 08:00 push
   push_cron: "0 8 * * *"        # deliver final page + Telegram at 08:00 sharp
-  feedback_poll_cron: "5 * * * *"   # hourly: pull editor accept/reject taps from Telegram
   calibrate_cron: "30 3 * * 1"      # weekly Mon 03:30: nudge weights + refresh policy memory
   retention_cron: "0 4 * * 1"       # weekly Mon 04:00: drop unclustered articles >30d
   push_retry:
@@ -19,7 +18,6 @@ schedule:
 
 # ─── EVOLUTION (P2) ─────────────────────────────────────────────────────────────
 evolution:
-  feedback_enabled: true
   calibration:
     enabled: true
     training_window_days: 30

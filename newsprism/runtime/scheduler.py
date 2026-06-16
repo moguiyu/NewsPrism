@@ -740,17 +740,6 @@ class Scheduler:
                 time.perf_counter() - started,
             )
 
-    async def _poll_feedback(self) -> None:
-        """Hourly: pull editor accept/reject taps from Telegram into editorial_feedback."""
-        from newsprism.runtime.feedback import FeedbackPoller
-
-        try:
-            count = await asyncio.to_thread(FeedbackPoller(self.cfg).poll_once)
-            if count:
-                logger.info("Feedback poll: recorded %d editor signal(s)", count)
-        except Exception:
-            logger.exception("Feedback poll failed")
-
     async def _run_calibration(self) -> None:
         """Weekly: nudge impact weights and refresh the editorial-policy memory."""
         from newsprism.service.calibrate import run_calibration
@@ -873,13 +862,6 @@ class Scheduler:
 
         # ─── Evolution loop (feedback → calibration → memory; retention) ──────
         evolution = self.cfg.evolution if isinstance(self.cfg.evolution, dict) else {}
-        if evolution.get("feedback_enabled", True):
-            feedback_cron = self.cfg.schedule.get("feedback_poll_cron", "5 * * * *")
-            sched.add_job(
-                self._poll_feedback,
-                CronTrigger.from_crontab(feedback_cron, timezone=tz),
-                id="feedback_poll",
-            )
         if evolution.get("calibration", {}).get("enabled", True):
             calibrate_cron = self.cfg.schedule.get("calibrate_cron", "30 3 * * 1")
             sched.add_job(
