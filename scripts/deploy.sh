@@ -65,6 +65,11 @@ echo ""
 echo "→ Rebuilding and restarting containers..."
 $SSH "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml up -d --build"
 
+# newsprism-portal has profiles: [portal], so it's excluded from the default
+# `up` above. Rebuild it explicitly so a running portal picks up the new image;
+# --profile portal won't start it if it's intentionally stopped (restart: "no").
+$SSH "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml --profile portal up -d --no-deps --build newsprism-portal"
+
 # ── 4. Remove old dangling images ─────────────────────────────────────────────
 echo ""
 echo "→ Removing old dangling Docker images..."
