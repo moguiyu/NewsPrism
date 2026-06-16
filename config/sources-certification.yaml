@@ -1,0 +1,121 @@
+# config/sources-certification.yaml
+# 国际认证/评级体系映射。手工维护。
+# 只列出持有至少一项国际背书的源；未列出的源不显示徽标。
+# 徽标代号 allowlist（types.py 强校验）：
+#   TNI   — Trusted News Initiative（BBC创办反虚假联盟，成员资格）
+#   NG    — NewsGuard 评分 Green/高可信
+#   AF    — Ad Fontes Media Bias Chart 高可靠性
+#   MBFC  — Media Bias/Fact Check 事实报道 High
+#   JTI   — Journalism Trust Initiative（RSF流程认证）
+# key 必须与 config/config.yaml 的 name 字段值完全一致。
+
+# ─── 强资质：≥3 项国际背书 ──────────────────────────
+"BBC News":
+  certifications: [TNI, NG, AF, MBFC]
+  detail: "BBC 反虚假新闻联盟(TNI)创始成员；NewsGuard 高可信；Ad Fontes 高可靠；MBFC 事实报道 High"
+  detail_en: "BBC is a founding TNI member; NewsGuard Green; Ad Fontes high reliability; MBFC High factual"
+
+"AP News":
+  certifications: [TNI, NG, AF, MBFC]
+  detail: "美联社 TNI 成员；NewsGuard 高可信；Ad Fontes ~44.8/48；MBFC Least Biased/High"
+  detail_en: "Associated Press TNI member; NewsGuard Green; Ad Fontes ~44.8/48; MBFC Least Biased/High"
+
+"Reuters":
+  certifications: [TNI, NG, AF, MBFC]
+  detail: "路透社 TNI 成员；NewsGuard 高可信；Ad Fontes ~45/48；MBFC Least Biased/High"
+  detail_en: "Reuters TNI member; NewsGuard Green; Ad Fontes ~45/48; MBFC Least Biased/High"
+
+"Financial Times":
+  certifications: [TNI, NG, AF, MBFC]
+  detail: "金融时报 TNI 成员；NewsGuard 高可信；Ad Fontes 高；MBFC Least Biased/High"
+  detail_en: "FT TNI member; NewsGuard Green; Ad Fontes high; MBFC Least Biased/High"
+
+"The Hindu":
+  certifications: [TNI, NG, AF, MBFC]
+  detail: "印度 The Hindu TNI 成员；NewsGuard 高可信；Ad Fontes 高；MBFC High"
+  detail_en: "The Hindu TNI member; NewsGuard Green; Ad Fontes high; MBFC High"
+
+# ─── 中等资质：2-3 项国际背书 ──────────────────────
+"The Guardian":
+  certifications: [NG, AF, MBFC]
+  detail: "卫报 NewsGuard 高可信；Ad Fontes 高；MBFC Left-Center/High"
+  detail_en: "The Guardian NewsGuard Green; Ad Fontes high; MBFC Left-Center/High"
+
+"NPR":
+  certifications: [NG, AF, MBFC]
+  detail: "NPR NewsGuard 高可信；Ad Fontes ~43/48；MBFC Left-Center/High"
+  detail_en: "NPR NewsGuard Green; Ad Fontes ~43/48; MBFC Left-Center/High"
+
+"Deutsche Welle Tech":
+  certifications: [NG, AF, MBFC]
+  detail: "德国之声 NewsGuard 高可信；Ad Fontes 高；MBFC Least Biased/High"
+  detail_en: "Deutsche Welle NewsGuard Green; Ad Fontes high; MBFC Least Biased/High"
+
+"tagesschau":
+  certifications: [NG, MBFC]
+  detail: "德国 ARD tagesschau NewsGuard 高可信；MBFC Least Biased/High"
+  detail_en: "ARD tagesschau NewsGuard Green; MBFC Least Biased/High"
+
+"NOS Nieuws":
+  certifications: [NG, MBFC]
+  detail: "荷兰公共广播 NOS NewsGuard 高可信；MBFC Least Biased/High"
+  detail_en: "Dutch public broadcaster NOS NewsGuard Green; MBFC Least Biased/High"
+
+"Ars Technica":
+  certifications: [AF, MBFC]
+  detail: "Ars Technica Ad Fontes 高可靠；MBFC Least Biased/High"
+  detail_en: "Ars Technica Ad Fontes high reliability; MBFC Least Biased/High"
+
+"NHKニュース":
+  certifications: [TNI, MBFC]
+  detail: "NHK TNI 成员；MBFC 事实报道 High"
+  detail_en: "NHK TNI member; MBFC High factual"
+
+# ─── 单一背书：仅 MBFC ──────────────────────────
+"朝日新聞":
+  certifications: [MBFC]
+  detail: "朝日新闻 MBFC 事实报道 High"
+  detail_en: "Asahi Shimbun MBFC High factual"
+
+"연합뉴스":
+  certifications: [MBFC]
+  detail: "韩联社 MBFC 事实报道 High（通讯社）"
+  detail_en: "Yonhap MBFC High factual (wire service)"
+
+"Yonhap News EN":
+  certifications: [MBFC]
+  detail: "韩联社英文版 MBFC 事实报道 High"
+  detail_en: "Yonhap English MBFC High factual"
+
+"Kyiv Independent":
+  certifications: [MBFC]
+  detail: "乌克兰独立英文媒体 MBFC 事实报道 High"
+  detail_en: "Kyiv Independent MBFC High factual"
+
+"Ukrinform":
+  certifications: [MBFC]
+  detail: "乌克兰国家通讯社 MBFC 事实报道 High"
+  detail_en: "Ukrinform MBFC High factual (wire service)"
+
+"联合早报":
+  certifications: [MBFC]
+  detail: "新加坡联合早报 MBFC 事实报道 High"
+  detail_en: "Zaobao MBFC High factual"
+
+"Медуза":
+  certifications: [MBFC]
+  detail: "Meduza（拉脱维亚，独立调查）MBFC Left/High"
+  detail_en: "Meduza (Latvia, independent) MBFC Left/High"
+
+"The Moscow Times":
+  certifications: [MBFC]
+  detail: "莫斯科时报（流亡阿姆斯特丹）MBFC Left-Center/High"
+  detail_en: "The Moscow Times (exile) MBFC Left-Center/High"
+
+# ⚠️ 国际广播源（国家资助对外传播）——有评级但标注性质
+"VOA中文":
+  certifications: [MBFC]
+  detail: "美国之音中文版（国家资助对外广播）MBFC Left-Center/Mostly Factual"
+  detail_en: "VOA Chinese (state-funded intl broadcast) MBFC Left-Center/Mostly Factual"
+
+# ⚠️ 未列出的源（含全部中国组、Sputnik、科技垂直多数）= 无国际背书或未被收录，不显示徽标

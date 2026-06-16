@@ -938,6 +938,21 @@
       min-width: 0;
     }
 
+    /* ── 认证徽标：细边框小方框，flat newsprint 风格 ── */
+    .cert-badge {
+      display: inline-block;
+      font-size: 0.62em;
+      font-weight: 600;
+      line-height: 1;
+      padding: 1px 3px;
+      margin-left: 4px;
+      vertical-align: 1px;
+      border: 1px solid var(--theme-source-label);
+      color: var(--theme-source-label);
+      cursor: help;
+      user-select: none;
+    }
+
     .src-chip {
       display: inline-flex;
       align-items: center;
@@ -2664,6 +2679,11 @@
   </style>
 </head>
 
+{# ── 认证徽标宏 ── 给持国际背书的源名后跟一个细边框小方框，hover 展示详情 #}
+{% macro cert_badge(src) -%}
+{% if src.has_certification %}<span class="cert-badge" title="{{ src.cert_detail_zh }} / {{ src.cert_detail_en or src.cert_detail_zh }}" aria-label="已认证 / Certified">✓</span>{% endif %}
+{%- endmacro %}
+
 {% macro bilingual_text(zh, en=None) -%}
 <span data-lang-zh>{{ zh }}</span><span data-lang-en>{{ en if en is not none else zh }}</span>
 {%- endmacro %}
@@ -2782,11 +2802,11 @@
                 {% for src in c.footer_sources %}
                 {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
                 {% else %}
                 <span class="src-chip">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </span>
                 {% endif %}
                 {% endfor %}
@@ -2810,10 +2830,10 @@
                   {% for src in group.sources %}
                   {% if src.url %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
                   {% else %}
-                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
                   {% endif %}
                   {% endfor %}
                 </span>
@@ -2858,11 +2878,11 @@
                 {% for src in c.footer_sources %}
                 {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
                 {% else %}
                 <span class="src-chip">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </span>
                 {% endif %}
                 {% endfor %}
@@ -2886,10 +2906,10 @@
                   {% for src in group.sources %}
                   {% if src.url %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
                   {% else %}
-                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
                   {% endif %}
                   {% endfor %}
                 </span>
@@ -2930,11 +2950,11 @@
                 {% for src in c.footer_sources %}
                 {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </a>
                 {% else %}
                 <span class="src-chip">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                 </span>
                 {% endif %}
                 {% endfor %}
@@ -2982,7 +3002,7 @@
                 <div class="source-chips">
                   {% for src in c.footer_sources %}
                   <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                    <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                    <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
                   {% endfor %}
                 </div>
@@ -3005,10 +3025,10 @@
                   {% for src in group.sources %}
                   {% if src.url %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
                   </a>
                   {% else %}
-                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
                   {% endif %}
                   {% endfor %}
                   </span>

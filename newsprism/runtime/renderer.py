@@ -19,7 +19,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
 from newsprism.service.language import looks_like_chinese_text
-from newsprism.types import ClusterSummary
+from newsprism.types import ClusterSummary, SourceCertification
 
 logger = logging.getLogger(__name__)
 
@@ -412,10 +412,12 @@ class HtmlRenderer:
         output_dir: str = "output",
         template_dir: str = "templates",
         source_regions: dict[str, str] | None = None,
+        source_certifications: dict[str, SourceCertification] | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.template_file = "report-template.html"
         self.source_regions: dict[str, str] = source_regions or {}
+        self.source_certifications: dict[str, SourceCertification] = source_certifications or {}
         self.env = Environment(
             loader=FileSystemLoader(template_dir),
             autoescape=select_autoescape(["html"]),
@@ -545,6 +547,7 @@ class HtmlRenderer:
         source_cursors: dict[str, int] | None = None,
     ) -> dict:
         meta = self._select_source_meta(source_name, article_meta, source_cursors)
+        cert = self.source_certifications.get(source_name)
         is_searched = meta.get("is_searched", False)
         search_region = meta.get("search_region")
         source_kind = meta.get("source_kind", "news")
@@ -581,6 +584,10 @@ class HtmlRenderer:
             "ambiguous_url_count": meta.get("ambiguous_url_count", 0),
             "compact_label": compact_label,
             "compact_label_en": compact_label_en,
+            "has_certification": cert is not None,
+            "cert_detail_zh": cert.detail_zh if cert else "",
+            "cert_detail_en": cert.detail_en if cert else "",
+            "cert_codes": [c.code for c in cert.certifications] if cert else [],
         }
 
     def _perspective_groups_data(self, summary: ClusterSummary, english: bool = False) -> list[tuple[list[str], str]]:

@@ -10,6 +10,12 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from newsprism.types import (
+    CERTIFICATION_CODES,
+    Certification,
+    SourceCertification,
+)
+
 load_dotenv()
 
 
@@ -52,6 +58,9 @@ class Config:
 
     # Topic equivalence: canonical topic → list of equivalent topics
     topic_equivalence: dict[str, list[str]] = field(default_factory=dict)
+
+    # 源认证徽标（来自 sources-certification.yaml）
+    certifications: dict[str, SourceCertification] = field(default_factory=dict)
 
     # Feature flags
     use_llm_clustering: bool = True
@@ -116,6 +125,45 @@ def _load_yaml_file(config_root: Path, configured: str, default: Any) -> Any:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or default
 
 
+def load_certifications(path: Path) -> dict[str, SourceCertification]:
+    """加载 sources-certification.yaml。
+
+    返回 source_name → SourceCertification 映射。
+    - 文件不存在：返回 {}（功能可选，不阻断启动）
+    - 认证代号不在 CERTIFICATION_CODES：raise ValueError（配置错误必须暴露）
+
+    孤儿 key 检测（源名不在 config.yaml）由 tests/test_certification.py 的
+    TestRealCertificationConfig 负责，不在加载器内执行。
+    """
+    if not path.exists():
+        return {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    result: dict[str, SourceCertification] = {}
+    for source_name, entry in raw.items():
+        codes = tuple(entry.get("certifications", []))
+        invalid = [c for c in codes if c not in CERTIFICATION_CODES]
+        if invalid:
+            raise ValueError(
+                f"Unknown certification code(s) {invalid} for source '{source_name}'. "
+                f"Allowed: {list(CERTIFICATION_CODES)}"
+            )
+        certs = tuple(
+            Certification(
+                code=c,
+                label_zh=CERTIFICATION_CODES[c][0],
+                label_en=CERTIFICATION_CODES[c][1],
+            )
+            for c in codes
+        )
+        result[source_name] = SourceCertification(
+            source_name=source_name,
+            certifications=certs,
+            detail_zh=entry.get("detail", ""),
+            detail_en=entry.get("detail_en", ""),
+        )
+    return result
+
+
 def load_config(config_path: str = "config/config.yaml") -> Config:
     path = Path(config_path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -162,6 +210,10 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
     if tz_override := os.environ.get("SCHEDULE_TIMEZONE"):
         schedule = {**schedule, "timezone": tz_override}
 
+    certifications = load_certifications(
+        config_root / "config" / "sources-certification.yaml"
+    )
+
     return Config(
         raw=raw,
         sources=sources,
@@ -179,4 +231,5 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         evolution=raw.get("evolution", {}),
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
         use_llm_clustering=bool(raw.get("clustering", {}).get("use_llm_clustering", True)),
+        certifications=certifications,
     )
