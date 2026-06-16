@@ -51,14 +51,15 @@ services:
         max-file: "5"
     command: sh -c "umask 022 && python -m newsprism run"
 
-  # ── admin quality portal — loopback only, on demand ────────────────────────
-  # Start with: docker compose -f docker-compose.dev.yml --profile portal up -d newsprism-portal
-  # Reach via SSH tunnel: ssh -L 8081:127.0.0.1:8081 fnos  → http://localhost:8081
+  # ── admin quality portal — long-running management backend ─────────────────
+  # Lets administrators inspect every article, the source pipeline, and cluster
+  # selection from behind the stack, to judge news quality. Loopback only —
+  # reach via SSH tunnel: ssh -L 8081:127.0.0.1:8081 fnos  → http://localhost:8081
   newsprism-portal:
     build: .
     image: newsprism-newsprism        # reuse the newsprism build
     container_name: newsprism-portal
-    restart: "no"
+    restart: unless-stopped
     env_file: .env
     volumes:
       - ./data:/app/data
@@ -67,7 +68,6 @@ services:
     ports:
       - "127.0.0.1:8081:8081"
     command: sh -c "python -m newsprism portal --host 0.0.0.0 --port 8081"
-    profiles: ["portal"]
 
   # ── nginx — static HTML report server ──────────────────────────────────────
   # Contributor stack keeps nginx config editable from the repo.
