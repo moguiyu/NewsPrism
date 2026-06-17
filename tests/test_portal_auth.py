@@ -37,3 +37,60 @@ class TestFlagOn:
 
     def test_empty_string_header_blocked(self):
         assert _is_cf_access_allowed(_hdr(""), require=True) is False
+
+
+import pytest
+from fastapi.testclient import TestClient
+
+from newsprism.repo.db import init_db
+from newsprism.runtime.portal.app import create_app
+
+
+_VALID_CF_HEADER = {"Cf-Access-Jwt-Assertion": "eyJhbG.eyJzdWI.sFlKxw"}
+
+
+def _app_client(monkeypatch, db_path, require_cf: bool):
+    """Build a portal app + TestClient under a controlled CF-Access flag."""
+    if require_cf:
+        monkeypatch.setenv("PORTAL_REQUIRE_CF_ACCESS", "true")
+    else:
+        monkeypatch.setenv("PORTAL_REQUIRE_CF_ACCESS", "false")
+    init_db(db_path)
+    return TestClient(create_app(db_path=db_path))
+
+
+class TestMiddlewareFlagOn:
+    def test_root_blocked_without_header(self, tmp_path, monkeypatch):
+        client = _app_client(monkeypatch, tmp_path / "n.db", require_cf=True)
+        assert client.get("/").status_code == 401
+
+    def test_root_admitted_with_valid_header(self, tmp_path, monkeypatch):
+        client = _app_client(monkeypatch, tmp_path / "n.db", require_cf=True)
+        r = client.get("/", headers=_VALID_CF_HEADER)
+        assert r.status_code == 200
+
+    def test_write_api_also_blocked(self, tmp_path, monkeypatch):
+        client = _app_client(monkeypatch, tmp_path / "n.db", require_cf=True)
+        r = client.post("/api/verdict", json={"cluster_id": 1, "verdict": 1})
+        assert r.status_code == 401
+
+
+class TestMiddlewareFlagOff:
+    def test_root_admitted_without_header(self, tmp_path, monkeypatch):
+        client = _app_client(monkeypatch, tmp_path / "n.db", require_cf=False)
+        assert client.get("/").status_code == 200
+
+
+class TestHealthzExempt:
+    def test_healthz_passes_without_header_when_required(self, tmp_path, monkeypatch):
+        client = _app_client(monkeypatch, tmp_path / "n.db", require_cf=True)
+        assert client.get("/healthz").status_code == 200
+
+
+class TestSecureByDefault:
+    def test_unset_env_defaults_to_required(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PORTAL_REQUIRE_CF_ACCESS", raising=False)
+        init_db(tmp_path / "n.db")
+        client = TestClient(create_app(db_path=tmp_path / "n.db"))
+        # No env var set -> must still block a headerless request.
+        assert client.get("/").status_code == 401

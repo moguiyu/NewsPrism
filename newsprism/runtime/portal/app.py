@@ -5,10 +5,11 @@ Layer: runtime (imports repo + service + portal.analytics).
 from __future__ import annotations
 
 from datetime import date, timedelta
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -75,11 +76,37 @@ def _is_cf_access_allowed(headers, require: bool) -> bool:
     return token.count(".") == 2
 
 
+def _cf_access_required() -> bool:
+    """Read PORTAL_REQUIRE_CF_ACCESS. Secure-by-default: True unless the env
+    var is exactly 'false' (case-insensitive). Anything else (unset, 'true',
+    garbage) means required. This makes a fresh production container safe even
+    if .env omits the var."""
+    return os.environ.get("PORTAL_REQUIRE_CF_ACCESS", "true").strip().lower() != "false"
+
+
 def create_app(db_path: Path = DB_PATH) -> FastAPI:
     app = FastAPI(title="NewsPrism Quality Portal")
     app.state.db_path = db_path
     _TEMPLATES.env.globals["heat_class"] = A.heat_class
     _TEMPLATES.env.globals["DIMENSIONS"] = A.DIMENSIONS
+
+    require_cf = _cf_access_required()
+
+    @app.middleware("http")
+    async def cf_access_gate(request: Request, call_next):
+        # /healthz is always reachable (cloudflared liveness probe).
+        if request.url.path == "/healthz":
+            return await call_next(request)
+        if not _is_cf_access_allowed(request.headers, require_cf):
+            return PlainTextResponse(
+                "Cloudflare Access authentication required.",
+                status_code=401,
+            )
+        return await call_next(request)
+
+    @app.get("/healthz")
+    def healthz():
+        return PlainTextResponse("ok")
 
     def _window(req: Request) -> tuple[str, str]:
         q = req.query_params
