@@ -11,6 +11,10 @@
   feeds weekly calibration. Adds a `subject_regions` field to the impact
   evaluation and a `feedback_corrections` table. Runs loopback-only via the
   `newsprism-portal` compose profile, reached over an SSH tunnel.
+- Portal now reachable at `https://admin.grayzhang.com` via Cloudflare Tunnel
+  + Cloudflare Access (Email OTP). New `PORTAL_REQUIRE_CF_ACCESS` env var
+  (default `true`) adds a defensive header check in the portal. SQLite and the
+  collection pipeline are unchanged.
 
 ## v0.5.0 - 2026-06-14
 

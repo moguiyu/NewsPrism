@@ -11,6 +11,13 @@ from newsprism.types import Cluster
 from newsprism.runtime.portal.app import create_app
 
 
+@pytest.fixture(autouse=True)
+def _disable_cf_access_gate(monkeypatch):
+    """Existing smoke tests assert route/DB behavior, not auth. Run them in
+    local-dev mode (no CF header required)."""
+    monkeypatch.setenv("PORTAL_REQUIRE_CF_ACCESS", "false")
+
+
 @pytest.fixture
 def client(tmp_path):
     db = tmp_path / "n.db"
