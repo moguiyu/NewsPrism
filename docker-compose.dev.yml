@@ -88,7 +88,11 @@ services:
       - MB_SITE_URL=https://metabase.grayzhang.com
       - MB_JETTY_PORT=3100
     volumes:
-      - ./data:/app/data:ro              # SQLite source — READ-ONLY mount
+      - ./data:/app/data                 # SQLite source — RW: SQLite needs to
+                                         # create lock/journal sidecar files even
+                                         # for read-only queries. Metabase is an
+                                         # analytics tool and only issues SELECTs,
+                                         # so it never writes the production data.
       - ./metabase-data:/metabase-data   # H2 app DB + config persistence
     ports:
       - "3100:3100"
