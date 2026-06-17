@@ -15,6 +15,10 @@
   + Cloudflare Access (Email OTP). New `PORTAL_REQUIRE_CF_ACCESS` env var
   (default `true`) adds a defensive header check in the portal. SQLite and the
   collection pipeline are unchanged.
+- Metabase analytics platform (`newsprism-metabase`): self-hosted Metabase
+  reading `data/newsprism.db` read-only, at `metabase.grayzhang.com` via
+  Cloudflare Tunnel + Access. Dashboards bootstrapped via REST API. No data
+  layer changes.
 
 ## v0.5.0 - 2026-06-14
 
