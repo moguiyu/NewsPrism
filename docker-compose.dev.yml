@@ -86,6 +86,7 @@ services:
       - MB_DB_TYPE=h2
       - MB_DB_FILE=/metabase-data/metabase.db
       - MB_SITE_URL=https://metabase.grayzhang.com
+      - MB_JETTY_PORT=3100
     volumes:
       - ./data:/app/data:ro              # SQLite source — READ-ONLY mount
       - ./metabase-data:/metabase-data   # H2 app DB + config persistence
