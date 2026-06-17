@@ -46,5 +46,8 @@ data/*.db
 data/*.db.bak*
 data/newsprism_fnos_*.db
 
+# Metabase application data (H2 app DB, accounts, dashboards)
+metabase-data/
+
 # brainstorming visual companion
 .superpowers/
