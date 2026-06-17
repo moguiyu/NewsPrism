@@ -47,6 +47,34 @@ def _parse_float(value: str | None) -> float | None:
         return None
 
 
+# --- Cloudflare Access defensive gate --------------------------------------
+# Threat model: prevent portal exposure on MISCONFIGURATION (Access policy
+# disabled, or LAN/loopback access that bypasses Cloudflare), NOT to resist
+# header forgery. v1 validates the header is present and JWT-shaped only;
+# signature verification is deferred. See design spec
+# docs/superpowers/specs/2026-06-17-portal-cloudflare-access-design.md.
+
+# Header name Cloudflare Access injects on tunneled requests.
+_CF_ACCESS_HEADER = "cf-access-jwt-assertion"
+
+
+def _is_cf_access_allowed(headers, require: bool) -> bool:
+    """Decide whether a request should pass the Cloudflare Access gate.
+
+    ``headers`` is a mapping (Starlette headers are case-insensitive; this
+    function is written to match the lowercase header name Starlette exposes).
+    When ``require`` is False, always True (local dev / SSH tunnel mode).
+    Otherwise True only if a JWT-shaped (three dot-separated segments) header
+    is present.
+    """
+    if not require:
+        return True
+    token = headers.get(_CF_ACCESS_HEADER, "")
+    if not token:
+        return False
+    return token.count(".") == 2
+
+
 def create_app(db_path: Path = DB_PATH) -> FastAPI:
     app = FastAPI(title="NewsPrism Quality Portal")
     app.state.db_path = db_path
