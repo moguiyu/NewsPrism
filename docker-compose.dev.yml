@@ -53,8 +53,12 @@ services:
 
   # ── admin quality portal — long-running management backend ─────────────────
   # Lets administrators inspect every article, the source pipeline, and cluster
-  # selection from behind the stack, to judge news quality. Loopback only —
-  # reach via SSH tunnel: ssh -L 8081:127.0.0.1:8081 fnos  → http://localhost:8081
+  # selection from behind the stack, to judge news quality. Publicly reachable
+  # at https://admin.grayzhang.com via Cloudflare Tunnel + Access (Email OTP).
+  # Bound to 0.0.0.0:8081 so cloudflared (in a separate Docker network) can
+  # reach it via the host LAN IP; the public path is still gated by Cloudflare
+  # Access, and PORTAL_REQUIRE_CF_ACCESS (default true) blocks headerless
+  # requests inside the LAN. SSH tunnel also still works.
   newsprism-portal:
     build: .
     image: newsprism-newsprism        # reuse the newsprism build
@@ -66,7 +70,7 @@ services:
       - ./config:/app/config
       - ./templates:/app/templates
     ports:
-      - "127.0.0.1:8081:8081"
+      - "8081:8081"
     command: sh -c "python -m newsprism portal --host 0.0.0.0 --port 8081"
 
   # ── nginx — static HTML report server ──────────────────────────────────────
