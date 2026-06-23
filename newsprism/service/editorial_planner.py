@@ -17,6 +17,7 @@ from collections import defaultdict
 import numpy as np
 
 from newsprism.config import Config
+from newsprism.service.categories import normalize_display_category
 from newsprism.types import ArticleCluster, ClusterSummary, EditorialReportPlan
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ def _display_category(item: ArticleCluster | ClusterSummary) -> str:
     category = getattr(item, "display_category", None)
     if not category and isinstance(item, ClusterSummary):
         category = getattr(item.cluster, "display_category", None)
-    return category or ""
+    return normalize_display_category(category)
 
 
 def _summary_centroid(summary: ClusterSummary) -> np.ndarray | None:
@@ -126,10 +127,10 @@ class EditorialPlanner:
         self.cfg = cfg
 
     def base_plan(self, kept_summaries: list[ClusterSummary]) -> EditorialReportPlan:
-        hot_topics, focus_storylines, regular_summaries = select_hot_topic_families(kept_summaries, self.cfg)
+        hot_topics, _unused_focus_families, regular_summaries = select_hot_topic_families(kept_summaries, self.cfg)
         return EditorialReportPlan(
             hot_topics=hot_topics,
-            focus_storylines=focus_storylines,
+            focus_storylines=[],
             regular_summaries=regular_summaries,
             positive_summaries=[],
         )
@@ -347,44 +348,19 @@ def select_hot_topic_families(
             }
         )
 
-    focus_storylines: list[dict[str, object]] = []
     main_candidates = list(standalone)
     assigned_keys = set(hot_keys)
     for key, members in grouped.items():
         if key in assigned_keys:
             continue
         members = sorted(members, key=_composite, reverse=True)
-        if 2 <= len(members) < min_items_per_topic and any(
-            (member.storyline_role or getattr(member.cluster, "storyline_role", "none")) == "core"
-            for member in members
-        ):
-            for summary in members:
-                summary.is_hot_topic = False
-                summary.cluster.is_hot_topic = False
-            focus_storylines.append(
-                {
-                    "storyline_key": key,
-                    "storyline_name": _normalize_storyline_name(
-                        members[0].storyline_name or members[0].macro_topic_name,
-                        members[0],
-                        max_name_chars,
-                    ),
-                    "topic_icon_key": group_icons.get(key, _DEFAULT_HOT_TOPIC_ICON_KEY),
-                    "member_count": len(members),
-                    "summaries": members,
-                }
-            )
-            continue
         for summary in members:
             summary.is_hot_topic = False
             summary.cluster.is_hot_topic = False
             main_candidates.append(summary)
 
-    focus_storylines.sort(
-        key=lambda family: (-int(family["member_count"]), group_order.get(str(family["storyline_key"]), 0)),
-    )
     main_summaries = _rank_main_summaries(main_candidates, cfg, main_limit)
-    return hot_topics, focus_storylines, main_summaries
+    return hot_topics, [], main_summaries
 
 
 # ─── 今日正能量 ────────────────────────────────────────────────────────────────

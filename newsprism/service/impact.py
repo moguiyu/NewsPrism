@@ -24,6 +24,11 @@ from pydantic import BaseModel, Field
 
 from newsprism.config import Config
 from newsprism.repo import get_calibration_weights, get_latest_editorial_policy
+from newsprism.service.categories import (
+    DEFAULT_DISPLAY_CATEGORY,
+    DISPLAY_CATEGORIES,
+    normalize_display_category,
+)
 from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.types import Article, ArticleCluster, ImpactAssessment
 
@@ -37,17 +42,6 @@ DIMENSIONS = (
     "decision_relevance",
     "feelgood",
 )
-
-DISPLAY_CATEGORIES = (
-    "国际时政",
-    "科技创新",
-    "商业财经",
-    "社会民生",
-    "文化艺术",
-    "体育运动",
-    "科学健康",
-)
-_DEFAULT_DISPLAY_CATEGORY = "国际时政"
 
 # Seeds; live values come from the calibration_weights table.
 DEFAULT_WEIGHTS: dict[str, float] = {
@@ -76,7 +70,7 @@ class ImpactItem(BaseModel):
     decision_relevance: float = 0.0
     feelgood: float = 0.0
     rationale: str = ""
-    display_category: str = _DEFAULT_DISPLAY_CATEGORY
+    display_category: str = DEFAULT_DISPLAY_CATEGORY
     short_topic_name: str | None = None
     topic_icon_key: str | None = None
     subject_regions: list[str] = Field(default_factory=list)
@@ -326,7 +320,7 @@ class ImpactAssessor:
             "- decision_relevance 决策相关：是否改变一个关注全球大势的读者应有的判断或决策\n"
             "- feelgood 治愈轻松：让人开心、可爱、好笑、暖心或振奋的程度。严肃、负面、冲突类新闻一律 0\n"
             "其他字段：\n"
-            f"- display_category：只能从这 7 个中选一个：{categories}\n"
+            f"- display_category：只能从这 6 个中选一个：{categories}\n"
             "- short_topic_name：4-10 个中文字符的短专题名\n"
             f"- topic_icon_key：只能从这些键中选一个：{icons}\n"
             "- rationale：不超过 30 个中文字符，说明影响判断的核心依据\n"
@@ -337,7 +331,7 @@ class ImpactAssessor:
             "3. cluster_index 必须与输入一致（从 1 开始），每个簇恰好输出一项。\n"
             "只输出 JSON：{\"items\":[{\"cluster_index\":1,\"scope\":7,\"severity\":6,\"novelty\":5,"
             "\"actor_influence\":8,\"decision_relevance\":7,\"feelgood\":0,"
-            "\"rationale\":\"...\",\"display_category\":\"国际时政\",\"short_topic_name\":\"...\","
+            "\"rationale\":\"...\",\"display_category\":\"World\",\"short_topic_name\":\"...\","
             "\"topic_icon_key\":\"globe\",\"subject_regions\":[\"il\"]}]}\n\n"
             f"事件簇：\n{json.dumps(rows, ensure_ascii=False)}"
         )
@@ -393,7 +387,7 @@ class ImpactAssessor:
                     cluster_index=idx,
                     **{dim: dims.get(dim, 0.0) for dim in DIMENSIONS},
                     rationale=rationale.group(1) if rationale else "",
-                    display_category=category.group(1) if category else _DEFAULT_DISPLAY_CATEGORY,
+                    display_category=category.group(1) if category else DEFAULT_DISPLAY_CATEGORY,
                     short_topic_name=short_name.group(1) if short_name else None,
                     topic_icon_key=icon.group(1) if icon else None,
                     subject_regions=subject_regions,
@@ -490,7 +484,7 @@ class ImpactAssessor:
             composite = signal  # deterministic, keyword-free degradation
             evaluated = False
             rationale = ""
-            display_category = _DEFAULT_DISPLAY_CATEGORY
+            display_category = DEFAULT_DISPLAY_CATEGORY
             short_topic_name = None
             topic_icon_key = self.icon_allowlist[0] if self.icon_allowlist else None
             subject_regions = []
@@ -499,11 +493,7 @@ class ImpactAssessor:
             composite = self._composite(dims, signal, weights)
             evaluated = True
             rationale = re.sub(r"\s+", " ", item.rationale or "").strip()[:60]
-            display_category = (
-                item.display_category
-                if item.display_category in DISPLAY_CATEGORIES
-                else _DEFAULT_DISPLAY_CATEGORY
-            )
+            display_category = normalize_display_category(item.display_category)
             short_topic_name = (item.short_topic_name or "").strip() or None
             topic_icon_key = (
                 item.topic_icon_key
@@ -537,7 +527,7 @@ class ImpactAssessor:
             cluster_index=1,
             **{dim: assessment.dim(dim) for dim in DIMENSIONS},
             rationale=assessment.rationale,
-            display_category=assessment.display_category or _DEFAULT_DISPLAY_CATEGORY,
+            display_category=assessment.display_category or DEFAULT_DISPLAY_CATEGORY,
             short_topic_name=assessment.short_topic_name,
             topic_icon_key=assessment.topic_icon_key,
             subject_regions=assessment.subject_regions,

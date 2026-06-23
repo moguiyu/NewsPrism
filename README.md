@@ -10,7 +10,7 @@ Collect articles  ->  Tag + dedup  ->  Cluster events  ->  Assess quality  ->  S
 
 This public repository supports both self-hosting with Docker and local development from source.
 
-Current major release: `v0.5.0`.
+Current major release: `v0.5.1`.
 
 ## Highlights
 
@@ -22,7 +22,7 @@ Current major release: `v0.5.0`.
 - Keyword-free storyline grouping with a coherence gate, plus compact cross-day timelines for developing topics
 - Batch summarisation processes all stories in one LLM call (~36 s → ~10 s per publish cycle)
 - Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
-- Dedicated `今日正能量` lane derived from the same impact evaluation's feelgood dimension
+- Dedicated `今日好消息` / Good News lane derived from the same impact evaluation's feelgood dimension
 - WIRED-inspired static HTML reports with system/light/dark modes and self-hosted fonts
 - CLI entrypoints for collection, publish, replay, and scheduler runs
 

@@ -612,77 +612,6 @@
       transform: translateY(-1px);
     }
 
-    .focus-storyline-block .cat-label {
-      color: var(--accent);
-    }
-
-    .focus-storyline-block {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      padding: 16px 18px 0;
-      border: 1px solid rgba(110, 156, 255, 0.16);
-      border-radius: calc(var(--radius) + 2px);
-      background: linear-gradient(180deg, rgba(110, 156, 255, 0.08) 0%, rgba(255, 255, 255, 0.01) 68%);
-      box-shadow: 0 8px 24px rgba(110, 156, 255, 0.08);
-    }
-
-    .focus-storyline-header {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 2px;
-    }
-
-    .focus-storyline-counter {
-      color: var(--accent);
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.4px;
-      opacity: 0.9;
-    }
-
-    .focus-storyline-block .cards {
-      gap: 12px;
-    }
-
-    .focus-storyline-block .card {
-      background: rgba(255, 255, 255, 0.03);
-      border-color: rgba(110, 156, 255, 0.12);
-      box-shadow: none;
-    }
-
-    .focus-storyline-block .card:hover {
-      transform: none;
-      box-shadow: none;
-      border-color: rgba(110, 156, 255, 0.2);
-    }
-
-    .focus-storyline-block .card-body {
-      padding: 16px 20px 12px;
-    }
-
-    .focus-storyline-block .card-title {
-      font-size: 17px;
-    }
-
-    .focus-storyline-block .card-summary {
-      display: -webkit-box;
-      -webkit-line-clamp: 4;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-
-    .focus-storyline-block .card-preview {
-      font-size: 12.5px;
-      opacity: 0.82;
-    }
-
-    .focus-storyline-block .source-chips .src-chip:nth-child(n+4) {
-      display: none;
-    }
-
     .hot-topic-block .card {
       border-color: var(--hot-tab-border);
       box-shadow: 0 10px 30px var(--hot-tab-glow);
@@ -1017,28 +946,6 @@
       color: var(--text);
     }
 
-    .role-badge {
-      display: inline-flex;
-      align-items: center;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.4px;
-    }
-
-    .role-core {
-      background: rgba(255, 123, 76, 0.16);
-      border: 1px solid rgba(255, 123, 76, 0.34);
-      color: var(--hot-tab-text);
-    }
-
-    .role-spillover {
-      background: rgba(110, 156, 255, 0.14);
-      border: 1px solid rgba(110, 156, 255, 0.24);
-      color: var(--accent);
-    }
-
     .persp-panel {
       display: none;
       background: var(--persp-bg);
@@ -1305,11 +1212,6 @@
         display: none;
       }
 
-      .focus-storyline-block {
-        padding: 14px 14px 0;
-        gap: 12px;
-      }
-
       .positive-energy {
         padding: 14px;
         gap: 12px;
@@ -1366,7 +1268,6 @@
         font-size: 12px;
       }
 
-      .focus-storyline-header,
       .hot-topic-header {
         flex-direction: column;
         align-items: flex-start;
@@ -1419,16 +1320,7 @@
         gap: 6px;
       }
 
-      .focus-storyline-block .card-summary {
-        display: block;
-        overflow: visible;
-      }
-
       .card-footer.is-expandable .source-chips .src-chip:nth-child(n+3) {
-        display: none;
-      }
-
-      .focus-storyline-block .source-chips .src-chip:nth-child(n+3) {
         display: none;
       }
     }
@@ -1536,12 +1428,10 @@
     .overview-kicker,
     .overview-meta,
     .cat-label,
-    .focus-storyline-counter,
     .hot-topic-counter,
     .positive-counter,
     .expand-link,
     .src-chip,
-    .role-badge,
     .freshness-badge,
     .quality-badge,
     .positive-reason {
@@ -1721,7 +1611,6 @@
     }
 
     .all-overview,
-    .focus-storyline-block,
     .positive-energy,
     .hot-topic-block {
       background: #ffffff;
@@ -1733,13 +1622,11 @@
     }
 
     .all-overview,
-    .focus-storyline-block,
     .positive-energy {
       border-top: 3px solid #000000;
     }
 
     .all-overview-header,
-    .focus-storyline-header,
     .positive-header,
     .hot-topic-header {
       align-items: center;
@@ -1798,7 +1685,6 @@
     }
 
     .overview-meta,
-    .focus-storyline-counter,
     .hot-topic-counter,
     .positive-counter {
       color: var(--muted);
@@ -1843,7 +1729,6 @@
     }
 
     .card:hover,
-    .focus-storyline-block .card:hover,
     .positive-card:hover,
     .hot-topic-block .card:hover {
       background: #ffffff;
@@ -1852,7 +1737,6 @@
       transform: none;
     }
 
-    .focus-storyline-block .card,
     .positive-card,
     .hot-topic-block .card {
       background: #ffffff;
@@ -1861,13 +1745,11 @@
     }
 
     .card-body,
-    .focus-storyline-block .card-body,
     .positive-card .card-body {
       padding: 22px 0 16px;
     }
 
     .card-title,
-    .focus-storyline-block .card-title,
     .positive-card .card-title {
       align-items: baseline;
       color: #000000;
@@ -1879,7 +1761,6 @@
       margin-bottom: 12px;
     }
 
-    .focus-storyline-block .card-title,
     .positive-card .card-title {
       font-size: clamp(20px, 2.4vw, 26px);
     }
@@ -1899,7 +1780,6 @@
     }
 
     .card-summary,
-    .focus-storyline-block .card-summary,
     .positive-card .card-summary {
       color: var(--text);
       font-family: var(--font-serif);
@@ -1967,7 +1847,6 @@
       gap: 6px;
     }
 
-    .role-badge,
     .freshness-badge,
     .quality-badge,
     .quality-badge-needs-review,
@@ -1981,13 +1860,11 @@
       padding: 3px 6px;
     }
 
-    .role-core,
     .quality-badge {
       background: #000000;
       color: #ffffff;
     }
 
-    .role-spillover,
     .freshness-badge,
     .quality-badge-needs-review,
     .quality-badge-seek-more-evidence {
@@ -2210,7 +2087,6 @@
       }
 
       .all-overview-header,
-      .focus-storyline-header,
       .positive-header,
       .hot-topic-header {
         align-items: flex-start;
@@ -2243,20 +2119,17 @@
       }
 
       .card-body,
-      .focus-storyline-block .card-body,
       .positive-card .card-body {
         padding: 19px 0 14px;
       }
 
       .card-title,
-      .focus-storyline-block .card-title,
       .positive-card .card-title {
         font-size: 21px;
         line-height: 1.18;
       }
 
       .card-summary,
-      .focus-storyline-block .card-summary,
       .positive-card .card-summary {
         font-size: 16px;
         line-height: 1.7;
@@ -2419,23 +2292,19 @@
     .hot-tab,
     .positive-tab,
     .all-overview,
-    .focus-storyline-block,
     .positive-energy,
     .hot-topic-block,
     .overview-item,
     .overview-anchor,
     .card,
     .card:hover,
-    .focus-storyline-block .card,
     .positive-card,
     .hot-topic-block .card,
-    .focus-storyline-block .card:hover,
     .positive-card:hover,
     .hot-topic-block .card:hover,
     .card-footer,
     .positive-card .card-footer,
     .src-chip,
-    .role-badge,
     .freshness-badge,
     .quality-badge-needs-review,
     .quality-badge-seek-more-evidence {
@@ -2453,7 +2322,6 @@
     .overview-kicker,
     .overview-title,
     .card-title,
-    .focus-storyline-block .card-title,
     .positive-card .card-title,
     .card-index,
     .card-summary strong,
@@ -2471,7 +2339,6 @@
 
     .header-date,
     .overview-meta,
-    .focus-storyline-counter,
     .hot-topic-counter,
     .positive-counter,
     .overview-copy {
@@ -2525,7 +2392,6 @@
     .day-link.active,
     .hot-tab.active,
     .positive-tab.active,
-    .role-core,
     .quality-badge {
       background: var(--theme-active-bg);
       color: var(--theme-active-ink);
@@ -2565,28 +2431,23 @@
     }
 
     .all-overview,
-    .focus-storyline-block,
     .positive-energy {
       border-top-color: var(--theme-strong-rule);
     }
 
     .all-overview-header,
-    .focus-storyline-header,
     .positive-header,
     .hot-topic-header,
     .overview-list,
     .card,
-    .focus-storyline-block .card,
     .positive-card,
     .hot-topic-block .card,
     .positive-grid .card {
       border-bottom-color: var(--theme-strong-rule);
     }
 
-    .focus-storyline-block .card,
     .positive-card,
     .hot-topic-block .card,
-    .focus-storyline-block .card:hover,
     .positive-card:hover,
     .hot-topic-block .card:hover {
       border-color: var(--theme-strong-rule);
@@ -2617,7 +2478,6 @@
       background: currentColor;
     }
 
-    .role-badge,
     .freshness-badge,
     .quality-badge,
     .quality-badge-needs-review,
@@ -2625,7 +2485,6 @@
       border-color: var(--theme-strong-rule);
     }
 
-    .role-spillover,
     .freshness-badge,
     .quality-badge-needs-review,
     .quality-badge-seek-more-evidence {
@@ -2725,13 +2584,13 @@
       <nav class="cat-tabs">
         <button class="cat-tab active" onclick="filterView(this,'all','all')">{{ bilingual_text('全部速览', 'All overview') }}</button>
         {% if positive_stories %}
-        <button class="cat-tab positive-tab" onclick="filterView(this,'positive','positive')"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日正能量', 'Positive highlights') }}</button>
+        <button class="cat-tab positive-tab" onclick="filterView(this,'positive','positive')"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日好消息', 'Good News') }}</button>
         {% endif %}
         {% for hot in hot_topics %}
         <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</button>
         {% endfor %}
         {% for sec in main_sections %}
-        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')"><span class="emoji" aria-hidden="true">{{ sec.emoji }}</span> {{ bilingual_text(sec.label, sec.label_en) }}</button>
+        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')"><span class="emoji" aria-hidden="true">{{ sec.emoji }}</span> {{ bilingual_text(sec.label_zh, sec.label_en) }}</button>
         {% endfor %}
       </nav>
     </div>
@@ -2767,107 +2626,22 @@
     {% endif %}
 
     <div class="all-feed" data-all-feed="true">
-    {% for line in focus_storylines %}
-    <section class="focus-storyline-block" data-focus-storyline="true">
-      <div class="focus-storyline-header">
-        <div class="cat-label"><span class="emoji" aria-hidden="true">{{ line.topic_icon }}</span> {{ bilingual_text('主线追踪 · ' ~ line.storyline_name, 'Storyline · ' ~ (line.storyline_name_en or line.storyline_name)) }}</div>
-        <div class="focus-storyline-counter">{{ bilingual_text(line.member_count ~ ' 条关联追踪', line.member_count ~ ' related stories') }}</div>
-      </div>
-      <div class="cards">
-        {% for c in line.clusters %}
-        <div class="feed-card card" data-cat="{{ c.broad_category }}" id="{{ line.dom_id }}-{{ c.focus_seq_index }}">
-          <div class="card-body">
-            <div class="card-title">
-              <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
-              {% if c.storyline_role == "core" or c.storyline_role == "spillover" or c.is_developing or c.quality_status != "unknown" %}
-              <span class="card-badges">
-                {% if c.storyline_role == "core" %}<span class="role-badge role-core">{{ bilingual_text('核心主线', 'Core storyline') }}</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">{{ bilingual_text('相关外溢', 'Direct spillover') }}</span>{% endif %}
-                {% if c.is_developing %}<span class="freshness-badge">{{ bilingual_text('续报', 'Developing') }}</span>{% endif %}
-                {% if c.quality_status == "publishable" %}<span class="quality-badge">{{ bilingual_text('多源确认', 'Evidence checked') }}</span>{% elif c.quality_status == "needs_review" %}<span class="quality-badge quality-badge-needs-review">{{ bilingual_text('存在争议', 'Needs review') }}</span>{% elif c.quality_status == "seek_more_evidence" %}<span class="quality-badge quality-badge-seek-more-evidence">{{ bilingual_text('待补证据', 'Needs evidence') }}</span>{% endif %}
-              </span>
-              {% endif %}
-            </div>
-            <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
-            {% if c.perspective_preview %}
-            <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
-            {% elif c.source_confirmation_preview %}
-            <div class="card-preview">{{ bilingual_text('多源确认：' ~ c.source_confirmation_preview, 'Multi-source confirmation: ' ~ (c.source_confirmation_preview_en or c.source_confirmation_preview)) }}</div>
-            {% endif %}
-          </div>
-
-          {% if c.footer_sources %}
-          <div class="card-footer{% if c.has_expandable_perspectives %} is-expandable{% endif %}">
-            <div class="source-row">
-              <div class="source-chips">
-                {% for src in c.footer_sources %}
-                {% if src.url %}
-                <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
-                </a>
-                {% else %}
-                <span class="src-chip">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
-                </span>
-                {% endif %}
-                {% endfor %}
-              </div>
-              {% if c.has_expandable_perspectives %}
-              <div class="footer-actions">
-                <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-focus-{{ line.dom_id }}-{{ c.focus_seq_index }}')">
-                  {{ bilingual_text('查看 ' ~ c.distinct_perspective_count ~ ' 个视角', 'View ' ~ c.distinct_perspective_count ~ ' angles') }}
-                </button>
-              </div>
-              {% endif %}
-            </div>
-          </div>
-
-          {% if c.grouped_perspectives %}
-          <div class="persp-panel" id="panel-container-focus-{{ line.dom_id }}-{{ c.focus_seq_index }}">
-            {% for group in c.grouped_perspectives %}
-            <div class="persp-item">
-              <div class="persp-line">
-                <span class="persp-src">
-                  {% for src in group.sources %}
-                  {% if src.url %}
-                  <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
-                  </a>
-                  {% else %}
-                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
-                  {% endif %}
-                  {% endfor %}
-                </span>
-                <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-          {% endif %}
-          {% endif %}
-        </div>
-        {% endfor %}
-      </div>
-    </section>
-    {% endfor %}
-
     <div class="cards">
       {% for c in clusters %}
       <div class="feed-card card" data-main-feed-card="true" data-cat="{{ c.broad_category }}" id="topic-{{ c.index }}">
           <div class="card-body">
             <div class="card-title">
               <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
-              {% if c.is_developing or c.quality_status != "unknown" %}
+              {% if c.is_developing or c.quality_status == "needs_review" or c.quality_status == "seek_more_evidence" %}
               <span class="card-badges">
                 {% if c.is_developing %}<span class="freshness-badge">{{ bilingual_text('续报', 'Developing') }}</span>{% endif %}
-                {% if c.quality_status == "publishable" %}<span class="quality-badge">{{ bilingual_text('多源确认', 'Evidence checked') }}</span>{% elif c.quality_status == "needs_review" %}<span class="quality-badge quality-badge-needs-review">{{ bilingual_text('存在争议', 'Needs review') }}</span>{% elif c.quality_status == "seek_more_evidence" %}<span class="quality-badge quality-badge-seek-more-evidence">{{ bilingual_text('待补证据', 'Needs evidence') }}</span>{% endif %}
+                {% if c.quality_status == "needs_review" %}<span class="quality-badge quality-badge-needs-review">{{ bilingual_text('存在争议', 'Disputed') }}</span>{% elif c.quality_status == "seek_more_evidence" %}<span class="quality-badge quality-badge-seek-more-evidence">{{ bilingual_text('待补证据', 'Needs evidence') }}</span>{% endif %}
               </span>
               {% endif %}
             </div>
             <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
             {% if c.perspective_preview %}
             <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
-            {% elif c.source_confirmation_preview %}
-            <div class="card-preview">{{ bilingual_text('多源确认：' ~ c.source_confirmation_preview, 'Multi-source confirmation: ' ~ (c.source_confirmation_preview_en or c.source_confirmation_preview)) }}</div>
             {% endif %}
           </div>
 
@@ -2928,7 +2702,7 @@
     {% if positive_stories %}
     <section class="positive-energy" data-positive-energy="true">
       <div class="positive-header">
-        <div class="cat-label"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日正能量', 'Positive highlights') }}</div>
+        <div class="cat-label"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日好消息', 'Good News') }}</div>
         <div class="positive-counter">{{ bilingual_text(positive_story_count ~ ' 条轻量好消息', positive_story_count ~ ' uplifting stories') }}</div>
       </div>
       <div class="positive-grid">
@@ -2982,11 +2756,10 @@
             <div class="card-body">
               <div class="card-title">
                 <span class="card-title-text"><span class="card-index">{{ c.hot_seq_index }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
-                {% if c.storyline_role == "core" or c.storyline_role == "spillover" or c.is_developing or c.quality_status != "unknown" %}
+                {% if c.is_developing or c.quality_status == "needs_review" or c.quality_status == "seek_more_evidence" %}
                 <span class="card-badges">
-                  {% if c.storyline_role == "core" %}<span class="role-badge role-core">{{ bilingual_text('核心主线', 'Core storyline') }}</span>{% elif c.storyline_role == "spillover" %}<span class="role-badge role-spillover">{{ bilingual_text('相关外溢', 'Direct spillover') }}</span>{% endif %}
                   {% if c.is_developing %}<span class="freshness-badge">{{ bilingual_text('续报', 'Developing') }}</span>{% endif %}
-                  {% if c.quality_status == "publishable" %}<span class="quality-badge">{{ bilingual_text('多源确认', 'Evidence checked') }}</span>{% elif c.quality_status == "needs_review" %}<span class="quality-badge quality-badge-needs-review">{{ bilingual_text('存在争议', 'Needs review') }}</span>{% elif c.quality_status == "seek_more_evidence" %}<span class="quality-badge quality-badge-seek-more-evidence">{{ bilingual_text('待补证据', 'Needs evidence') }}</span>{% endif %}
+                  {% if c.quality_status == "needs_review" %}<span class="quality-badge quality-badge-needs-review">{{ bilingual_text('存在争议', 'Disputed') }}</span>{% elif c.quality_status == "seek_more_evidence" %}<span class="quality-badge quality-badge-seek-more-evidence">{{ bilingual_text('待补证据', 'Needs evidence') }}</span>{% endif %}
                 </span>
                 {% endif %}
               </div>
@@ -3085,10 +2858,7 @@
     <div class="footer-stats" aria-label="report stats">
       <span class="header-stat">{{ bilingual_markup('<strong>' ~ cluster_count ~ '</strong> 条常规追踪', '<strong>' ~ cluster_count ~ '</strong> regular stories') }}</span>
       {% if positive_story_count %}
-      <span class="header-stat">{{ bilingual_markup('<strong>' ~ positive_story_count ~ '</strong> 条正能量', '<strong>' ~ positive_story_count ~ '</strong> positive stories') }}</span>
-      {% endif %}
-      {% if focus_storyline_count %}
-      <span class="header-stat header-stat-accent">{{ bilingual_markup('<strong>' ~ focus_storyline_count ~ '</strong> 组主线 / ' ~ focus_storyline_story_count ~ ' 条故事', '<strong>' ~ focus_storyline_count ~ '</strong> storylines / ' ~ focus_storyline_story_count ~ ' stories') }}</span>
+      <span class="header-stat">{{ bilingual_markup('<strong>' ~ positive_story_count ~ '</strong> 条好消息', '<strong>' ~ positive_story_count ~ '</strong> good-news stories') }}</span>
       {% endif %}
       {% if hot_topic_count %}
       <span class="header-stat header-stat-hot">{{ bilingual_markup('<strong>' ~ hot_topic_count ~ '</strong> 个热点 / ' ~ hot_topic_story_count ~ ' 条专题', '<strong>' ~ hot_topic_count ~ '</strong> hot topics / ' ~ hot_topic_story_count ~ ' stories') }}</span>
@@ -3186,17 +2956,6 @@
       if (hotStage) {
         setBlockVisibility(hotStage, mode === 'hot');
       }
-
-      document.querySelectorAll('[data-focus-storyline]').forEach(block => {
-        const cards = Array.from(block.querySelectorAll('.feed-card'));
-        let anyVisible = false;
-        cards.forEach(card => {
-          const visible = mode === 'all' || (mode === 'category' && card.dataset.cat === target);
-          card.style.display = visible ? '' : 'none';
-          anyVisible ||= visible;
-        });
-        setBlockVisibility(block, (mode === 'all') || (mode === 'category' && anyVisible));
-      });
 
       document.querySelectorAll('[data-main-feed-card]').forEach(card => {
         const visible = mode === 'all' || (mode === 'category' && card.dataset.cat === target);

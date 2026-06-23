@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.5.1 - 2026-06-21
+
 ### Added
 
 - Admin quality portal (`newsprism portal`): local-only FastAPI app to inspect
@@ -19,6 +21,29 @@
   reading `data/newsprism.db` read-only, at `metabase.grayzhang.com` via
   Cloudflare Tunnel + Access. Dashboards bootstrapped via REST API. No data
   layer changes.
+
+### Changed
+
+- Public report lanes are now limited to main, hot topics, and `今日好消息` /
+  Good News. Compatibility `focus_storylines` inputs no longer render public
+  sections, count toward public totals, or publish to Telegram.
+- Public categories are normalized to six reader-facing buckets: World,
+  Business, Technology, Science & Health, Society, and Culture & Sports, while
+  legacy Chinese category values continue to normalize correctly.
+- Chinese report and Telegram category labels now render locale-specific names
+  while preserving the stable English category keys in JSON/filtering.
+- Hot-topic display names now reject source-language or stale historical labels;
+  the Russia-Ukraine refinery drift case is repaired to the broader
+  `俄乌军事升级` / `Russia-Ukraine military escalation` label.
+- Small non-hot storyline groups now return to the main lane and obey the same
+  impact ranking and normalized category diversity caps as other main stories.
+
+### Removed
+
+- Public `focus_storyline` report surface: HTML sections, JSON payload, CSS/JS,
+  runtime counters, and Telegram publish wiring.
+- Confusing reader-facing labels including `Core storyline`, `Direct spillover`,
+  routine `Evidence checked`, and routine multi-source confirmation previews.
 
 ## v0.5.0 - 2026-06-14
 

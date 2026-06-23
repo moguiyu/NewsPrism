@@ -132,7 +132,9 @@ def test_publish_rendered_skips_untranslated_positive_items(tmp_path, monkeypatc
 
 
 def test_group_by_category_blocks_with_positive_last():
-    from newsprism.runtime.publisher import _POSITIVE_CATEGORY, _group_by_category
+    from newsprism.runtime.publisher import _POSITIVE_CATEGORY, _broad, _category_label, _group_by_category
+
+    assert _POSITIVE_CATEGORY == "今日好消息"
 
     items = [
         {"broad_category": "国际时政", "summary": "a"},
@@ -142,16 +144,19 @@ def test_group_by_category_blocks_with_positive_last():
         {"broad_category": "科技创新", "summary": "d"},
     ]
     grouped = _group_by_category(items)
-    # Canonical order: 商业财经, 科技创新, 国际时政, …; 今日正能量 always last.
-    assert [it["broad_category"] for it in grouped] == [
-        "商业财经",
-        "科技创新",
-        "国际时政",
-        "国际时政",
+    # Legacy rendered category names normalize into the public category order;
+    # positive stories always stay last.
+    assert [_broad(it) for it in grouped] == [
+        "World",
+        "World",
+        "Business",
+        "Technology",
         _POSITIVE_CATEGORY,
     ]
-    # Stable within a category: impact order (a before c) is preserved.
-    assert [it["summary"] for it in grouped if it["broad_category"] == "国际时政"] == ["a", "c"]
+    # Stable within a normalized category: impact order (a before c) is preserved.
+    assert [it["summary"] for it in grouped if _broad(it) == "World"] == ["a", "c"]
+    assert _category_label("World") == "国际"
+    assert _category_label("Science & Health") == "科学健康"
 
 
 def test_publish_rendered_groups_main_clusters_by_category(tmp_path, monkeypatch):
@@ -180,6 +185,5 @@ def test_publish_rendered_groups_main_clusters_by_category(tmp_path, monkeypatch
 
     asyncio.run(publisher.publish_rendered(data_path, date(2026, 5, 9)))
 
-    # 商业财经 (rank 0) leads, then the two 国际时政 (rank 2) in impact order.
-    assert [item["broad_category"] for item in captured[0]] == ["商业财经", "国际时政", "国际时政"]
-    assert [item["cluster_id"] for item in captured[0]] == [2, 1, 3]
+    # Legacy rendered categories normalize to World, World, Business in public order.
+    assert [item["cluster_id"] for item in captured[0]] == [1, 3, 2]

@@ -8,7 +8,7 @@ from lxml import html as lxml_html
 import pytest
 
 from newsprism.config import load_config
-from newsprism.runtime.renderer import HtmlRenderer, _REGION_FLAG
+from newsprism.runtime.renderer import HtmlRenderer, _REGION_FLAG, _broad_category
 from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
 
 
@@ -348,7 +348,8 @@ class TestPerspectivesContext:
         assert cluster["quality_score"] == 0.76
         assert cluster["confirmed_claims"] == ["Checked story"]
         assert cluster["storyline_state"] == "emerging"
-        assert "多源确认" in html
+        assert "多源确认" not in html
+        assert "Evidence checked" not in html
 
     def test_render_with_english_content_enables_language_toggle(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -417,7 +418,7 @@ class TestPerspectivesContext:
         assert payload["clusters"][0]["duplicate_reason"] == "shared_context:trump-china-visit"
         assert payload["clusters"][0]["duplicate_confidence"] == 0.88
 
-    def test_render_labels_one_angle_multi_source_as_confirmation(self, renderer, tmp_path):
+    def test_render_does_not_show_routine_multi_source_confirmation_preview(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         summary = ClusterSummary(
             cluster=ArticleCluster(
@@ -454,10 +455,12 @@ class TestPerspectivesContext:
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
-        assert "多源确认：" in html
+        assert "多源确认：" not in html
+        assert "Multi-source confirmation" not in html
         assert "视角差异：" not in html
         assert payload["clusters"][0]["distinct_perspective_count"] == 1
-        assert payload["clusters"][0]["source_confirmation_preview"]
+        assert payload["clusters"][0]["source_confirmation_preview"] == ""
+        assert payload["clusters"][0]["source_confirmation_preview_en"] == ""
 
     def test_render_does_not_confirm_sources_when_quality_needs_review(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -502,12 +505,41 @@ class TestPerspectivesContext:
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
         assert "存在争议" in html
+        assert "Disputed" in html
+        assert "Needs review" not in html
         assert "多源确认：" not in html
         assert payload["clusters"][0]["source_confirmation_preview"] == ""
 
-    def test_focus_storyline_prefers_readable_name_over_truncated_prefix(self, renderer, tmp_path):
+    def test_render_keeps_needs_evidence_status_public(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
-        first = ClusterSummary(
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.example/evidence",
+                        title="Needs evidence",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Needs evidence body.",
+                    )
+                ],
+            ),
+            summary="**Needs evidence story**\n\nBody text here.",
+            perspectives={},
+            quality_status="seek_more_evidence",
+            quality_score=0.36,
+        )
+
+        html_path = renderer.render([summary], datetime.now(tz=timezone.utc).date())
+        html = html_path.read_text(encoding="utf-8")
+
+        assert "待补证据" in html
+        assert "Needs evidence" in html
+
+    def test_focus_storyline_input_is_ignored_in_public_report(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        focus_summary = ClusterSummary(
             cluster=ArticleCluster(
                 topic_category="Business & Finance",
                 articles=[
@@ -524,26 +556,25 @@ class TestPerspectivesContext:
             short_topic_name="SpaceX上市控制权",
             storyline_name="SpaceX招股书披",
         )
-        second = ClusterSummary(
+        main_summary = ClusterSummary(
             cluster=ArticleCluster(
-                topic_category="Business & Finance",
+                topic_category="Tech-General",
                 articles=[
                     Article(
-                        url="https://example.com/spacex-analyst-day",
-                        title="SpaceX IPO倒计时：分析师会议本周举行，估值1.75万亿待检验",
-                        source_name="华尔街见闻",
+                        url="https://example.com/ai-market",
+                        title="AI market update",
+                        source_name="Reuters",
                         published_at=datetime.now(tz=timezone.utc),
-                        content="SpaceX analyst day story.",
+                        content="AI market update body.",
                     )
                 ],
             ),
-            summary="**SpaceX 本周举行分析师会议，为6月底IPO冲刺**\n\n摘要内容。",
-            short_topic_name="SpaceX上市冲刺",
-            storyline_name="SpaceX招股书披",
+            summary="**AI市场更新**\n\n常规科技新闻。",
+            perspectives={},
         )
 
         html_path = renderer.render(
-            [],
+            [main_summary],
             datetime.now(tz=timezone.utc).date(),
             focus_storylines=[
                 {
@@ -551,16 +582,22 @@ class TestPerspectivesContext:
                     "storyline_name": "SpaceX招股书披",
                     "topic_icon_key": "globe",
                     "member_count": 2,
-                    "summaries": [first, second],
+                    "summaries": [focus_summary],
                 }
             ],
         )
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
-        assert payload["focus_storylines"][0]["storyline_name"] == "SpaceX上市控制权"
-        assert "主线追踪 · SpaceX上市控制权" in html
+        assert "focus_storylines" not in payload
+        assert payload["focus_storyline_count"] == 0
+        assert payload["focus_storyline_story_count"] == 0
+        assert payload["total_cluster_count"] == 1
+        assert 'data-focus-storyline="true"' not in html
+        assert "SpaceX IPO招股书披露马斯克将保留绝对控制权" not in html
+        assert "主线追踪 · SpaceX上市控制权" not in html
         assert "主线追踪 · SpaceX招股书披" not in html
+        assert "AI市场更新" in html
 
     def test_single_source_renders_source_row_with_link(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -898,7 +935,9 @@ class TestHotTopics:
         assert payload["hot_topics"][0]["storyline_key"] == "us-iran"
         assert payload["hot_topics"][0]["storyline_name"] == "美伊冲突"
         assert payload["hot_topics"][0]["anchor_labels"] == []
-        assert payload["hot_topics"][0]["scope_summary"] == "聚焦 1 条核心事件，延伸 1 条直接外溢。"
+        assert payload["hot_topics"][0]["scope_summary"] == "收纳 2 条相关报道，其中 1 条为核心事件。"
+        assert "直接外溢" not in html
+        assert "direct spillover" not in html
         assert payload["hot_topics"][0]["preview_clusters"][0]["headline"] == "美军打击伊朗目标"
         assert len(payload["hot_topics"][0]["clusters"]) == 2
         assert payload["hot_topics"][0]["clusters"][0]["storyline_role"] == "core"
@@ -956,6 +995,94 @@ class TestHotTopics:
         assert "全球贸易紧张升级" in html
         assert "热点专题-全球贸易紧张升级" not in html
         assert '<span class="hot-icon"><span class="emoji" aria-hidden="true">🌍</span></span>' in html
+
+    def test_template_repairs_invalid_hot_topic_name_from_current_family(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+
+        hot_summary_1 = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://example.com/zelensky",
+                        title="Zelenskyy warns of impending massive Russian attack on Ukraine",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Russia Ukraine military escalation body.",
+                    )
+                ],
+            ),
+            summary="**泽连斯基警告俄罗斯即将发动大规模攻击**\n\n俄军袭击扩大，乌方打击俄境内油库。",
+            perspectives={},
+            short_topic_name="俄军大规模攻击预警",
+            macro_topic_name="ロシア最大級の製油所",
+            macro_topic_name_en="Russia's largest refinery",
+            storyline_name="ロシア最大級の製油所",
+        )
+        hot_summary_2 = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://example.com/belarus",
+                        title="Zelensky demands Belarus remove border drone repeaters",
+                        source_name="BBC",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Ukraine Belarus drone escalation body.",
+                    )
+                ],
+            ),
+            summary="**泽连斯基要求卢卡申科一周内拆除边境设备**\n\n乌克兰警告白俄罗斯移除俄军无人机中继设备。",
+            perspectives={},
+            short_topic_name="乌要求白俄拆设备",
+            macro_topic_name="ロシア最大級の製油所",
+            macro_topic_name_en="Russia's largest refinery",
+            storyline_name="ロシア最大級の製油所",
+        )
+        hot_summary_3 = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://example.com/zaporizhzhia",
+                        title="Russian attack on Zaporizhzhia kills civilians as Ukraine strikes Crimea",
+                        source_name="The Hindu",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Russia Ukraine strikes body.",
+                    )
+                ],
+            ),
+            summary="**俄军袭击扎波罗热致5死，乌方打击克里米亚**\n\n俄乌互袭升级。",
+            perspectives={},
+            short_topic_name="俄乌互袭升级",
+            macro_topic_name="ロシア最大級の製油所",
+            macro_topic_name_en="Russia's largest refinery",
+            storyline_name="ロシア最大級の製油所",
+        )
+
+        html_path = renderer.render(
+            [],
+            datetime.now(tz=timezone.utc).date(),
+            hot_topics=[
+                {
+                    "dom_id": "hot-topic-1",
+                    "macro_topic_key": "single-36",
+                    "macro_topic_name": "ロシア最大級の製油所",
+                    "macro_topic_name_en": "Russia's largest refinery",
+                    "storyline_name": "ロシア最大級の製油所",
+                    "topic_icon_key": "war",
+                    "summaries": [hot_summary_1, hot_summary_2, hot_summary_3],
+                }
+            ],
+        )
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert payload["hot_topics"][0]["macro_topic_name"] == "俄乌军事升级"
+        assert payload["hot_topics"][0]["macro_topic_name_en"] == "Russia-Ukraine military escalation"
+        assert "ロシア最大級の製油所" not in html
+        assert "Russia&#39;s largest refinery" not in html
+        assert '<span data-lang-zh>俄乌军事升级</span><span data-lang-en>Russia-Ukraine military escalation</span>' in html
 
     def test_template_wraps_emoji_with_fallback_spans(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -1050,7 +1177,7 @@ class TestHotTopics:
         assert tree.xpath('//*[contains(@class, "persp-src")]//span[@class="emoji" and text()="🔍"]')
         assert not tree.xpath('//span[@class="emoji" and contains(text(), "搜索补充")]')
 
-    def test_template_renders_focus_storyline_without_hotspot_tab(self, renderer, tmp_path):
+    def test_template_does_not_render_focus_storyline_section(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
 
         focus_summary_1 = ClusterSummary(
@@ -1113,7 +1240,7 @@ class TestHotTopics:
             datetime.now(tz=timezone.utc).date(),
             focus_storylines=[
                 {
-                    "dom_id": "focus-storyline-1",
+                    "dom_id": "compat-line-1",
                     "storyline_key": "trump-china-visit",
                     "storyline_name": "特朗普访华",
                     "topic_icon_key": "globe",
@@ -1124,27 +1251,126 @@ class TestHotTopics:
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
-        assert "主线追踪 · 特朗普访华" in html
+        assert "主线追踪 · 特朗普访华" not in html
         assert "今日焦点结构" not in html
         assert "进入专题" not in html
         assert "class=\"cat-tab hot-tab\"" not in html
         assert 'data-all-feed="true"' in html
-        assert 'data-focus-storyline="true"' in html
+        assert 'data-focus-storyline="true"' not in html
         assert "cat-block" not in html
-        assert ".focus-storyline-block {" in html
-        assert ".focus-storyline-block .source-chips .src-chip:nth-child(n+4)" in html
-        assert ".focus-storyline-block .card-summary {" in html
-        assert "特朗普访华行程因伊朗战争推迟至5月14-15日" in html
-        assert "特朗普将于5月中旬访华，中美领导人将举行会晤" in html
+        assert ".focus-storyline-block {" not in html
+        assert ".focus-storyline-block .source-chips .src-chip:nth-child(n+4)" not in html
+        assert ".focus-storyline-block .card-summary {" not in html
+        assert "特朗普访华行程因伊朗战争推迟至5月14-15日" not in html
+        assert "特朗普将于5月中旬访华，中美领导人将举行会晤" not in html
         assert "AI市场更新" in html
-        assert payload["focus_storyline_count"] == 1
-        assert payload["focus_storyline_story_count"] == 2
-        assert payload["focus_storylines"][0]["storyline_name"] == "特朗普访华"
-        assert payload["focus_storylines"][0]["clusters"][0]["storyline_display_mode"] == "focus_storyline"
-        assert payload["focus_storylines"][0]["clusters"][0]["display_rank"] == 1
-        assert payload["focus_storylines"][0]["clusters"][1]["display_rank"] == 2
+        assert "focus_storylines" not in payload
+        assert payload["focus_storyline_count"] == 0
+        assert payload["focus_storyline_story_count"] == 0
         assert payload["clusters"][0]["storyline_display_mode"] == "main"
-        assert payload["clusters"][0]["display_rank"] == 3
+        assert payload["clusters"][0]["display_rank"] == 1
+
+    def test_renderer_uses_public_category_vocabulary_and_locale_labels(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        legacy_sports = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/sports",
+                        title="Global sports event draws public attention",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Sports body.",
+                    )
+                ],
+            ),
+            summary="**全球赛事引发关注**\n\n赛事带来广泛讨论。",
+            perspectives={},
+        )
+        legacy_sports.display_category = "体育运动"
+        canonical_world = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World",
+                articles=[
+                    Article(
+                        url="https://reuters.com/world",
+                        title="World policy update",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="World body.",
+                    )
+                ],
+            ),
+            summary="**国际政策更新**\n\n国际政策继续调整。",
+            perspectives={},
+        )
+        canonical_business = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Business",
+                articles=[
+                    Article(
+                        url="https://reuters.com/business",
+                        title="Business market update",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Business body.",
+                    )
+                ],
+            ),
+            summary="**商业市场更新**\n\n市场继续调整。",
+            perspectives={},
+        )
+        canonical_tech = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Technology",
+                articles=[
+                    Article(
+                        url="https://reuters.com/tech",
+                        title="Technology update",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Tech body.",
+                    )
+                ],
+            ),
+            summary="**科技进展更新**\n\n科技公司发布进展。",
+            perspectives={},
+        )
+        canonical_science = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Science & Health",
+                articles=[
+                    Article(
+                        url="https://reuters.com/science",
+                        title="Science and health update",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Science body.",
+                    )
+                ],
+            ),
+            summary="**科学健康更新**\n\n研究继续推进。",
+            perspectives={},
+        )
+
+        html_path = renderer.render(
+            [legacy_sports, canonical_world, canonical_business, canonical_tech, canonical_science],
+            datetime.now(tz=timezone.utc).date(),
+        )
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert _broad_category("World News", "体育运动") == "Culture & Sports"
+        assert payload["clusters"][0]["broad_category"] == "Culture & Sports"
+        assert payload["clusters"][0]["broad_category_en"] == "Culture & Sports"
+        assert '<span data-lang-zh>国际</span><span data-lang-en>World</span>' in html
+        assert '<span data-lang-zh>商业</span><span data-lang-en>Business</span>' in html
+        assert '<span data-lang-zh>科技</span><span data-lang-en>Technology</span>' in html
+        assert '<span data-lang-zh>科学健康</span><span data-lang-en>Science &amp; Health</span>' in html
+        assert '<span data-lang-zh>文化体育</span><span data-lang-en>Culture &amp; Sports</span>' in html
+        assert "filterView(this,'category','Culture &amp; Sports')" in html
+        assert "体育运动" not in html
 
     def test_mobile_header_only_pins_logo_and_date(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -1284,6 +1510,10 @@ class TestHotTopics:
         focus_overview = tree.xpath('//*[@data-all-overview="true"]')[0]
 
         assert focus_overview.sourceline < all_feed.sourceline < positive_section.sourceline
+        assert "今日好消息" in html
+        assert "Good News" in html
+        assert "今日正能量" not in html
+        assert "Positive highlights" not in html
         assert payload["positive_story_count"] == 1
         assert payload["cluster_count"] == 1
         assert payload["total_cluster_count"] == 3

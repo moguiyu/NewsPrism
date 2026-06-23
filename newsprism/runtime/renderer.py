@@ -18,6 +18,13 @@ from urllib.parse import urlparse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
+from newsprism.service.categories import (
+    DEFAULT_DISPLAY_CATEGORY,
+    DISPLAY_CATEGORIES,
+    LEGACY_DISPLAY_CATEGORY_MAP,
+    display_category_label_zh,
+    normalize_display_category,
+)
 from newsprism.service.language import looks_like_chinese_text
 from newsprism.types import ClusterSummary, SourceCertification
 
@@ -26,67 +33,58 @@ logger = logging.getLogger(__name__)
 # ── BROAD CATEGORY MAPPING ────────────────────────────────────────────────────
 
 _BROAD_CATEGORY_MAP: dict[str, str] = {
-    # 商业财经
-    "Finance": "商业财经",
-    # 科技创新
-    "AI & LLM": "科技创新",
-    "Smartphones & Electronics": "科技创新",
-    "Smart Home": "科技创新",
-    "Robotics": "科技创新",
-    "Chips & Hardware": "科技创新",
-    "Tech Companies - China": "科技创新",
-    "Tech Companies - International": "科技创新",
-    "Space": "科技创新",
-    "Tech General": "科技创新",
-    "Tech-General": "科技创新",
-    "Chips": "科技创新",
-    # 国际时政
-    "Geopolitics": "国际时政",
-    "Geopolitics - Extended": "国际时政",
-    "Regions": "国际时政",
-    "AI Policy & Regulation": "国际时政",
-    "World News": "国际时政",
-    # 社会民生
-    "Society": "社会民生",
-    # 文化艺术
-    "Film - Chinese": "文化艺术",
-    "Film - International": "文化艺术",
-    "Film - General": "文化艺术",
-    "Music": "文化艺术",
-    "Games - Chinese": "文化艺术",
-    "Games - Platform": "文化艺术",
-    "Games - General": "文化艺术",
-    "Culture": "文化艺术",
-    "Positive Energy": "文化艺术",
-    # 体育运动
-    "Sports": "体育运动",
-    # 科学健康
-    "Energy": "科学健康",
-    "Energy & Climate": "科学健康",
-    "Science & Health": "科学健康",
+    "Finance": "Business",
+    "AI & LLM": "Technology",
+    "Smartphones & Electronics": "Technology",
+    "Smart Home": "Technology",
+    "Robotics": "Technology",
+    "Chips & Hardware": "Technology",
+    "Tech Companies - China": "Technology",
+    "Tech Companies - International": "Technology",
+    "Space": "Technology",
+    "Tech General": "Technology",
+    "Tech-General": "Technology",
+    "Chips": "Technology",
+    "Geopolitics": "World",
+    "Geopolitics - Extended": "World",
+    "Regions": "World",
+    "AI Policy & Regulation": "World",
+    "World News": "World",
+    "Society": "Society",
+    "Film - Chinese": "Culture & Sports",
+    "Film - International": "Culture & Sports",
+    "Film - General": "Culture & Sports",
+    "Music": "Culture & Sports",
+    "Games - Chinese": "Culture & Sports",
+    "Games - Platform": "Culture & Sports",
+    "Games - General": "Culture & Sports",
+    "Culture": "Culture & Sports",
+    "Positive Energy": "Culture & Sports",
+    "Sports": "Culture & Sports",
+    "Energy": "Science & Health",
+    "Energy & Climate": "Science & Health",
+    "Science & Health": "Science & Health",
 }
 
-_DEFAULT_BROAD = "国际时政"
+_DEFAULT_BROAD = DEFAULT_DISPLAY_CATEGORY
 
 _BROAD_CATEGORY_EN_MAP: dict[str, str] = {
-    "商业财经": "Business & Finance",
-    "科技创新": "Technology & Innovation",
-    "国际时政": "World Affairs",
-    "社会民生": "Society",
-    "文化艺术": "Culture",
-    "体育运动": "Sports",
-    "科学健康": "Science & Health",
+    "World": "World",
+    "Business": "Business",
+    "Technology": "Technology",
+    "Science & Health": "Science & Health",
+    "Society": "Society",
+    "Culture & Sports": "Culture & Sports",
 }
 
 _CATEGORY_META: list[tuple[str, str, str]] = [
     # (broad_category, emoji, css_key)
-    ("商业财经", "💰", "finance"),
-    ("科技创新", "🔬", "tech"),
-    ("国际时政", "🌍", "world"),
-    ("社会民生", "🏛️", "society"),
-    ("文化艺术", "🎭", "culture"),
-    ("体育运动", "🏅", "sport"),
-    ("科学健康", "🔭", "science"),
+    ("World", "🌍", "world"),
+    ("Business", "💰", "finance"),
+    ("Technology", "🔬", "tech"),
+    ("Science & Health", "🔭", "science"),
+    ("Society", "🏛️", "society"),
+    ("Culture & Sports", "🎭", "culture"),
 ]
 
 # ── REGION → FLAG EMOJI ───────────────────────────────────────────────────────
@@ -189,13 +187,19 @@ def _md_to_html(text: str) -> Markup:
     return Markup("<br>\n".join(lines))
 
 
-_BROAD_CATEGORIES = {meta[0] for meta in _CATEGORY_META}
+_BROAD_CATEGORIES = set(DISPLAY_CATEGORIES)
 
 
 def _broad_category(topic_category: str, display_category: str | None = None) -> str:
-    # Impact evaluation emits one of the 7 canonical Chinese categories directly.
-    if display_category and display_category in _BROAD_CATEGORIES:
-        return display_category
+    display = (display_category or "").strip()
+    if display in _BROAD_CATEGORIES:
+        return display
+    if display in LEGACY_DISPLAY_CATEGORY_MAP:
+        return normalize_display_category(display)
+    if topic_category in _BROAD_CATEGORIES:
+        return topic_category
+    if topic_category in LEGACY_DISPLAY_CATEGORY_MAP:
+        return normalize_display_category(topic_category)
     if topic_category in _BROAD_CATEGORY_MAP:
         return _BROAD_CATEGORY_MAP[topic_category]
     for key, broad in _BROAD_CATEGORY_MAP.items():
@@ -224,60 +228,80 @@ def _normalize_hot_topic_name(name: str | None, summary: ClusterSummary | None =
     return "全球焦点"
 
 
-def _normalize_display_name(name: str | None, max_chars: int = 18) -> str:
+_JAPANESE_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_REFINERY_RE = re.compile(r"(製油|炼油|炼厂|油库|refiner|oil depot)", re.IGNORECASE)
+_RUSSIA_RE = re.compile(r"(俄罗斯|俄军|俄方|俄国防部|莫斯科|克里米亚|Russia|Russian|Moscow|Crimea)", re.IGNORECASE)
+_UKRAINE_RE = re.compile(r"(乌克兰|乌军|乌方|泽连斯基|Ukraine|Ukrainian|Zelensky)", re.IGNORECASE)
+_MILITARY_ESCALATION_RE = re.compile(
+    r"(军事|军|袭击|攻击|互袭|无人机|导弹|防空|边境|打击|"
+    r"strike|attack|drone|missile|military|border|Belarus|Zaporizhzhia)",
+    re.IGNORECASE,
+)
+
+
+def _is_public_chinese_hot_topic_name(name: str) -> bool:
     compact = (name or "").strip()
-    compact = re.sub(r"^(热点专题[-:：]?|专题[-:：]?)", "", compact).strip()
-    compact = re.sub(r"\s+", "", compact)
-    compact = compact[:max_chars].strip(" -:：，,、。.；;")
-    return compact
-
-
-def _looks_like_truncated_prefix(candidate: str, raw_candidates: list[str]) -> bool:
-    if not candidate:
+    if not compact:
         return False
-    for raw in raw_candidates:
-        normalized = _normalize_display_name(raw, max_chars=64)
-        if normalized and len(normalized) > len(candidate) and normalized.startswith(candidate):
-            return True
-    return False
+    if _JAPANESE_KANA_RE.search(compact) or _CYRILLIC_RE.search(compact):
+        return False
+    return bool(_CJK_RE.search(compact))
 
 
-def _focus_storyline_display_name(
-    name: str | None,
-    summaries: list[ClusterSummary],
-    max_chars: int = 18,
-) -> str:
-    raw_candidates: list[str] = []
-    if isinstance(name, str) and name.strip():
-        raw_candidates.append(name)
+def _hot_topic_family_text(summaries: list[ClusterSummary]) -> str:
+    chunks: list[str] = []
     for summary in summaries:
-        for candidate in (
-            summary.short_topic_name,
-            summary.storyline_name,
-            summary.macro_topic_name,
-            _extract_headline(summary.summary),
-        ):
-            if isinstance(candidate, str) and candidate.strip():
-                raw_candidates.append(candidate)
-        for article in summary.cluster.articles:
-            if article.title.strip():
-                raw_candidates.append(article.title)
+        chunks.extend(
+            str(value)
+            for value in (
+                summary.short_topic_name,
+                summary.macro_topic_name,
+                summary.storyline_name,
+                _extract_headline(summary.summary),
+                summary.summary,
+                summary.cluster.topic_category,
+            )
+            if value
+        )
+        chunks.extend(article.title for article in summary.cluster.articles[:3] if article.title)
+    return "\n".join(chunks)
 
-    normalized_candidates: list[str] = []
-    seen: set[str] = set()
-    for raw in raw_candidates:
-        normalized = _normalize_display_name(raw, max_chars=max_chars)
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        normalized_candidates.append(normalized)
 
-    for candidate in normalized_candidates:
-        if not _looks_like_truncated_prefix(candidate, raw_candidates):
-            return candidate
-    if normalized_candidates:
-        return normalized_candidates[0]
-    return "全球焦点"
+def _is_russia_ukraine_military_escalation(text: str) -> bool:
+    return bool(
+        _RUSSIA_RE.search(text)
+        and _UKRAINE_RE.search(text)
+        and _MILITARY_ESCALATION_RE.search(text)
+    )
+
+
+def _repair_hot_topic_label(
+    name: str | None,
+    name_en: str | None,
+    summaries: list[ClusterSummary],
+    max_chars: int = 10,
+) -> tuple[str, str | None]:
+    topic_name = _normalize_hot_topic_name(name, summaries[0] if summaries else None, max_chars)
+    topic_name_en = (name_en or "").strip() or None
+    family_text = _hot_topic_family_text(summaries)
+    is_ru_ua_escalation = _is_russia_ukraine_military_escalation(family_text)
+    is_stale_refinery_label = bool(_REFINERY_RE.search(f"{topic_name}\n{topic_name_en or ''}"))
+
+    if is_ru_ua_escalation and (is_stale_refinery_label or not _is_public_chinese_hot_topic_name(topic_name)):
+        return "俄乌军事升级", "Russia-Ukraine military escalation"
+
+    if _is_public_chinese_hot_topic_name(topic_name):
+        return topic_name, topic_name_en
+
+    for summary in summaries:
+        candidate = summary.short_topic_name or _fallback_short_topic_name(summary, max_chars)
+        candidate = _normalize_hot_topic_name(candidate, summary, max_chars)
+        if _is_public_chinese_hot_topic_name(candidate):
+            return candidate, topic_name_en
+
+    return topic_name, topic_name_en
 
 
 def _normalize_text_whitespace(text: str) -> str:
@@ -296,14 +320,6 @@ def _truncate_preview(text: str, max_chars: int = 54) -> str:
     if len(compact) <= max_chars:
         return compact
     return compact[: max_chars - 1].rstrip("，,、；;：: ") + "…"
-
-
-def _can_show_source_confirmation(summary: ClusterSummary, distinct_perspective_count: int) -> bool:
-    return (
-        summary.cluster.is_multi_source
-        and distinct_perspective_count == 1
-        and getattr(summary, "quality_status", "unknown") == "publishable"
-    )
 
 
 _MANIFEST_JSON = json.dumps(
@@ -728,7 +744,7 @@ class HtmlRenderer:
     ) -> bool:
         positive_summaries = positive_summaries or []
         visible_summaries = list(summaries) + list(positive_summaries)
-        for family in hot_topics + focus_storylines:
+        for family in hot_topics:
             family_summaries = family.get("summaries", [])
             if isinstance(family_summaries, list):
                 visible_summaries.extend(
@@ -742,9 +758,6 @@ class HtmlRenderer:
             return False
         for family in hot_topics:
             if not family.get("macro_topic_name_en") or not family.get("storyline_name_en"):
-                return False
-        for family in focus_storylines:
-            if not family.get("storyline_name_en"):
                 return False
         return True
 
@@ -807,11 +820,6 @@ class HtmlRenderer:
             summary.cluster.topic_category,
             getattr(summary, "display_category", None) or getattr(summary.cluster, "display_category", None),
         )
-        can_show_source_confirmation = _can_show_source_confirmation(
-            summary,
-            perspective_payload["distinct_perspective_count"],
-        )
-
         base = {
             "index": index,
             "topic": summary.cluster.topic_category,
@@ -832,16 +840,8 @@ class HtmlRenderer:
             "suppressed_group_count": perspective_payload["suppressed_group_count"],
             "perspective_preview": perspective_payload["perspective_preview"],
             "perspective_preview_en": perspective_payload_en["perspective_preview"],
-            "source_confirmation_preview": (
-                "多家来源呈现相近事实框架。"
-                if can_show_source_confirmation
-                else ""
-            ),
-            "source_confirmation_preview_en": (
-                "Multiple sources confirm the same core framing."
-                if can_show_source_confirmation
-                else ""
-            ),
+            "source_confirmation_preview": "",
+            "source_confirmation_preview_en": "",
             "has_expandable_perspectives": perspective_payload["has_expandable_perspectives"],
             "articles": articles_data,
             "article_count": len(articles_data),
@@ -993,9 +993,8 @@ class HtmlRenderer:
         self._write_fonts()
 
         hot_topics = hot_topics or []
-        focus_storylines = focus_storylines or []
         positive_summaries = positive_summaries or []
-        english_available = self._english_available(summaries, hot_topics, focus_storylines, positive_summaries)
+        english_available = self._english_available(summaries, hot_topics, [], positive_summaries)
         clusters_ctx = []
         clusters_json: list[dict] = []
 
@@ -1016,6 +1015,7 @@ class HtmlRenderer:
                 sections.append(
                     {
                         "label": label,
+                        "label_zh": display_category_label_zh(label),
                         "label_en": _BROAD_CATEGORY_EN_MAP.get(label, label),
                         "emoji": emoji,
                         "css_key": css_key,
@@ -1028,13 +1028,15 @@ class HtmlRenderer:
             family_summaries = family.get("summaries", [])
             if not isinstance(family_summaries, list):
                 continue
-            topic_name = _normalize_hot_topic_name(
-                family.get("macro_topic_name") if isinstance(family.get("macro_topic_name"), str) else None,
-                family_summaries[0] if family_summaries else None,
-            )
-            topic_name_en = None
+            family_name = family.get("macro_topic_name") if isinstance(family.get("macro_topic_name"), str) else None
+            family_name_en = None
             if english_available:
-                topic_name_en = str(family.get("macro_topic_name_en") or "").strip() or None
+                family_name_en = str(family.get("macro_topic_name_en") or "").strip() or None
+            topic_name, topic_name_en = _repair_hot_topic_label(
+                family_name,
+                family_name_en,
+                [summary for summary in family_summaries if isinstance(summary, ClusterSummary)],
+            )
             icon_key = family.get("topic_icon_key") if isinstance(family.get("topic_icon_key"), str) else "globe"
             if icon_key not in _HOT_TOPIC_ICON_MAP:
                 icon_key = "globe"
@@ -1052,6 +1054,14 @@ class HtmlRenderer:
                 )
                 ctx_payload["hot_seq_index"] = member_index
                 json_payload["hot_seq_index"] = member_index
+                ctx_payload["macro_topic_name"] = topic_name
+                json_payload["macro_topic_name"] = topic_name
+                ctx_payload["macro_topic_name_en"] = topic_name_en
+                json_payload["macro_topic_name_en"] = topic_name_en
+                ctx_payload["storyline_name"] = topic_name
+                json_payload["storyline_name"] = topic_name
+                ctx_payload["storyline_name_en"] = topic_name_en
+                json_payload["storyline_name_en"] = topic_name_en
                 if ctx_payload["storyline_role"] == "core":
                     core_count += 1
                 elif ctx_payload["storyline_role"] == "spillover":
@@ -1059,8 +1069,8 @@ class HtmlRenderer:
                 member_ctx.append(ctx_payload)
                 member_json.append(json_payload)
 
-            scope_summary = f"聚焦 {core_count} 条核心事件，延伸 {spillover_count} 条直接外溢。"
-            scope_summary_en = f"Focuses on {core_count} core events and {spillover_count} direct spillovers."
+            scope_summary = f"收纳 {len(member_ctx)} 条相关报道，其中 {core_count} 条为核心事件。"
+            scope_summary_en = f"Collects {len(member_ctx)} related stories, including {core_count} core events."
             preview_clusters = [
                 {
                     "headline": member["headline"],
@@ -1077,8 +1087,8 @@ class HtmlRenderer:
                     "macro_topic_name": topic_name,
                     "macro_topic_name_en": topic_name_en,
                     "storyline_key": family.get("storyline_key", family.get("macro_topic_key", f"hot-topic-{i}")),
-                    "storyline_name": family.get("storyline_name", topic_name),
-                    "storyline_name_en": str(family.get("storyline_name_en") or topic_name_en or "").strip() or None,
+                    "storyline_name": topic_name,
+                    "storyline_name_en": topic_name_en,
                     "topic_icon_key": icon_key,
                     "topic_icon": _HOT_TOPIC_ICON_MAP.get(icon_key, _HOT_TOPIC_ICON_MAP["globe"]),
                     "anchor_labels": list(family.get("anchor_labels", [])),
@@ -1108,61 +1118,6 @@ class HtmlRenderer:
                     "scope_summary": scope_summary,
                     "scope_summary_en": scope_summary_en,
                     "preview_clusters": preview_clusters,
-                    "clusters": member_json,
-                }
-            )
-
-        focus_storylines_ctx: list[dict] = []
-        focus_storylines_json: list[dict] = []
-        for i, family in enumerate(focus_storylines, 1):
-            family_summaries = family.get("summaries", [])
-            if not isinstance(family_summaries, list):
-                continue
-            storyline_name = _focus_storyline_display_name(
-                family.get("storyline_name") if isinstance(family.get("storyline_name"), str) else None,
-                family_summaries,
-            )
-            storyline_name_en = None
-            if english_available:
-                storyline_name_en = str(family.get("storyline_name_en") or "").strip() or None
-            icon_key = family.get("topic_icon_key") if isinstance(family.get("topic_icon_key"), str) else "globe"
-            if icon_key not in _HOT_TOPIC_ICON_MAP:
-                icon_key = "globe"
-
-            member_ctx: list[dict] = []
-            member_json: list[dict] = []
-            for member_index, summary in enumerate(family_summaries, 1):
-                ctx_payload, json_payload = self._build_cluster_payload(
-                    summary,
-                    member_index,
-                    storyline_display_mode="focus_storyline",
-                    include_english=english_available,
-                )
-                ctx_payload["focus_seq_index"] = member_index
-                json_payload["focus_seq_index"] = member_index
-                member_ctx.append(ctx_payload)
-                member_json.append(json_payload)
-
-            focus_storylines_ctx.append(
-                {
-                    "dom_id": family.get("dom_id", f"focus-storyline-{i}"),
-                    "storyline_key": family.get("storyline_key", f"focus-storyline-{i}"),
-                    "storyline_name": storyline_name,
-                    "storyline_name_en": storyline_name_en,
-                    "topic_icon_key": icon_key,
-                    "topic_icon": _HOT_TOPIC_ICON_MAP.get(icon_key, _HOT_TOPIC_ICON_MAP["globe"]),
-                    "member_count": len(member_ctx),
-                    "clusters": member_ctx,
-                }
-            )
-            focus_storylines_json.append(
-                {
-                    "dom_id": family.get("dom_id", f"focus-storyline-{i}"),
-                    "storyline_key": family.get("storyline_key", f"focus-storyline-{i}"),
-                    "storyline_name": storyline_name,
-                    "storyline_name_en": storyline_name_en,
-                    "topic_icon_key": icon_key,
-                    "member_count": len(member_json),
                     "clusters": member_json,
                 }
             )
@@ -1197,13 +1152,6 @@ class HtmlRenderer:
             positive_json.append(json_payload)
 
         display_rank = 1
-        for family_ctx, family_json in zip(focus_storylines_ctx, focus_storylines_json):
-            for member_ctx, member_json in zip(family_ctx["clusters"], family_json["clusters"]):
-                member_ctx["display_rank"] = display_rank
-                member_ctx["seq_index"] = display_rank
-                member_json["display_rank"] = display_rank
-                member_json["seq_index"] = display_rank
-                display_rank += 1
         for ctx_payload, json_payload in zip(clusters_ctx, clusters_json):
             ctx_payload["display_rank"] = display_rank
             ctx_payload["seq_index"] = display_rank
@@ -1211,7 +1159,6 @@ class HtmlRenderer:
             json_payload["seq_index"] = display_rank
             display_rank += 1
 
-        focus_storyline_story_count = sum(len(family["clusters"]) for family in focus_storylines_ctx)
         hot_topic_story_count = sum(len(family["clusters"]) for family in hot_topics_ctx)
         day_nav_cfg = {}
         try:
@@ -1229,12 +1176,12 @@ class HtmlRenderer:
             ],
             "day_name_en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][report_date.weekday()],
             "cluster_count": len(summaries),
-            "focus_storyline_count": len(focus_storylines_ctx),
-            "focus_storyline_story_count": focus_storyline_story_count,
+            "focus_storyline_count": 0,
+            "focus_storyline_story_count": 0,
             "hot_topic_count": len(hot_topics_ctx),
             "hot_topic_story_count": hot_topic_story_count,
             "positive_story_count": len(positive_ctx),
-            "total_cluster_count": len(summaries) + len(positive_ctx) + focus_storyline_story_count + hot_topic_story_count,
+            "total_cluster_count": len(summaries) + len(positive_ctx) + hot_topic_story_count,
             "english_available": english_available,
             "available_languages": ["zh", "en"] if english_available else ["zh"],
             "default_language": "zh",
@@ -1247,7 +1194,6 @@ class HtmlRenderer:
             clusters=clusters_ctx,
             sections=sections,
             main_sections=sections,
-            focus_storylines=focus_storylines_ctx,
             positive_stories=positive_ctx,
             hot_topics=hot_topics_ctx,
         )
@@ -1261,7 +1207,6 @@ class HtmlRenderer:
                 {
                     **common,
                     "clusters": clusters_json,
-                    "focus_storylines": focus_storylines_json,
                     "positive_stories": positive_json,
                     "hot_topics": hot_topics_json,
                 },

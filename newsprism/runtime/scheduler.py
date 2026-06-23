@@ -597,7 +597,6 @@ class Scheduler:
             positive_summaries = select_positive_summaries(kept_summaries, self.cfg)
             plan = self.editorial_planner.finalize(base_plan, positive_summaries=positive_summaries)
             hot_topics = plan.hot_topics
-            focus_storylines = plan.focus_storylines
             regular_summaries = plan.regular_summaries
             positive_summaries = plan.positive_summaries
 
@@ -607,13 +606,8 @@ class Scheduler:
                 self.summarizer.translate_report_content(
                     kept_summaries,
                     hot_topics=hot_topics,
-                    focus_storylines=focus_storylines,
+                    focus_storylines=[],
                 )
-            focus_storyline_story_count = sum(
-                len(family.get("summaries", []))
-                for family in focus_storylines
-                if isinstance(family.get("summaries"), list)
-            )
             hot_topic_story_count = sum(
                 len(family.get("summaries", []))
                 for family in hot_topics
@@ -622,7 +616,6 @@ class Scheduler:
             total_story_count = (
                 len(regular_summaries)
                 + len(positive_summaries)
-                + focus_storyline_story_count
                 + hot_topic_story_count
             )
             hot_storyline_keys = {
@@ -637,19 +630,17 @@ class Scheduler:
             )
 
             logger.info(
-                "Story display groups: %d hot topics, %d focus storylines, %d positive stories, %d regular main stories (cap=%d)",
+                "Story display groups: %d hot topics, %d positive stories, %d regular main stories (cap=%d)",
                 len(hot_topics),
-                len(focus_storylines),
                 len(positive_summaries),
                 len(regular_summaries),
                 self.cfg.clustering.get("max_clusters_per_report", 20),
             )
             logger.info(
-                "Render input: %d kept stories after freshness (%d regular main, %d positive, %d focus storyline stories, %d hot topic stories)",
+                "Render input: %d kept stories after freshness (%d regular main, %d positive, %d hot topic stories)",
                 total_story_count,
                 len(regular_summaries),
                 len(positive_summaries),
-                focus_storyline_story_count,
                 hot_topic_story_count,
             )
 
@@ -657,7 +648,7 @@ class Scheduler:
                 regular_summaries,
                 today,
                 hot_topics=hot_topics,
-                focus_storylines=focus_storylines,
+                focus_storylines=[],
                 positive_summaries=positive_summaries,
                 report_subdir=self._staging_subdir if not push_after_render else None,
                 update_latest=push_after_render,
@@ -665,7 +656,7 @@ class Scheduler:
             if push_after_render:
                 publish_summaries = [
                     summary
-                    for family in hot_topics + focus_storylines
+                    for family in hot_topics
                     for summary in family.get("summaries", [])
                     if isinstance(summary, ClusterSummary)
                 ]

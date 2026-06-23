@@ -25,6 +25,7 @@ from telegram.constants import ParseMode
 
 from newsprism.config import Config
 from newsprism.runtime.renderer import _CATEGORY_META, _DEFAULT_BROAD, _broad_category, _body_only, _extract_headline
+from newsprism.service.categories import display_category_label_zh, normalize_display_category
 from newsprism.service.language import looks_like_chinese_text
 from newsprism.types import ClusterSummary
 
@@ -32,22 +33,24 @@ logger = logging.getLogger(__name__)
 
 MAX_MSG_LEN = 4000  # leave headroom below Telegram's 4096-char limit
 
-# The 正能量 lane is its own trailing group in the digest, after all news categories.
-_POSITIVE_CATEGORY = "今日正能量"
+# The Good News lane is its own trailing group in the digest, after all news categories.
+_POSITIVE_CATEGORY = "今日好消息"
 
 # Build emoji lookup from renderer metadata
 _CAT_EMOJI: dict[str, str] = {cat: emoji for cat, emoji, _ in _CATEGORY_META}
 _CAT_EMOJI[_POSITIVE_CATEGORY] = "🌟"
 
 # Canonical category order for the digest — mirrors the report's _CATEGORY_META,
-# with 今日正能量 last. Unknown categories sort between the known ones and positive.
+# with Good News last. Unknown categories sort between the known ones and positive.
 _CATEGORY_ORDER: list[str] = [cat for cat, _, _ in _CATEGORY_META]
 
 
 def _broad(item: dict[str, str]) -> str:
     precomputed = item.get("broad_category")
     if precomputed:
-        return precomputed
+        if precomputed == _POSITIVE_CATEGORY:
+            return precomputed
+        return normalize_display_category(precomputed)
     return _broad_category(item.get("topic_category", "")) or _DEFAULT_BROAD
 
 
@@ -58,6 +61,12 @@ def _category_rank(broad: str) -> int:
         return _CATEGORY_ORDER.index(broad)
     except ValueError:
         return len(_CATEGORY_ORDER)
+
+
+def _category_label(broad: str) -> str:
+    if broad == _POSITIVE_CATEGORY:
+        return broad
+    return display_category_label_zh(broad)
 
 
 def _group_by_category(items: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -182,7 +191,7 @@ class TelegramPublisher:
             broad = _broad(item)
             if broad != current_broad:
                 emoji = _CAT_EMOJI.get(broad, "")
-                messages.append(f"\n<b>{emoji} {broad}</b>")
+                messages.append(f"\n<b>{emoji} {_category_label(broad)}</b>")
                 current_broad = broad
 
             headline = _extract_headline(item["summary"]) or item["topic_category"]

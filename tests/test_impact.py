@@ -7,6 +7,7 @@ import litellm
 from newsprism.config import Config, SourceConfig
 from newsprism.service.impact import (
     DIMENSIONS,
+    DISPLAY_CATEGORIES,
     ImpactAssessor,
     ImpactItem,
     cluster_key,
@@ -156,7 +157,7 @@ def test_build_assessment_fallback_uses_signal_only():
     assessment = assessor._build_assessment(cluster, None, assessor.weights())
     assert assessment.evaluated_by_llm is False
     assert assessment.composite == assessment.signal
-    assert assessment.display_category == "国际时政"
+    assert assessment.display_category == "World"
     assert assessment.status != "suppress"
 
 
@@ -177,9 +178,43 @@ def test_build_assessment_validates_category_and_icon():
     )
     assessment = assessor._build_assessment(cluster, item, assessor.weights())
     assert assessment.dim("scope") == 10.0
-    assert assessment.display_category == "国际时政"
+    assert assessment.display_category == "World"
     assert assessment.topic_icon_key == "globe"
     assert "  " not in assessment.rationale
+
+
+def test_build_assessment_normalizes_legacy_display_category():
+    assessor = _assessor()
+    cluster = _cluster("Alpha", "Beta")
+    item = ImpactItem(
+        cluster_index=1,
+        scope=4.0,
+        severity=4.0,
+        novelty=4.0,
+        actor_influence=4.0,
+        decision_relevance=4.0,
+        feelgood=0.0,
+        display_category="体育运动",
+    )
+    assessment = assessor._build_assessment(cluster, item, assessor.weights())
+    assert assessment.display_category == "Culture & Sports"
+
+
+def test_impact_prompt_requests_only_public_categories():
+    assessor = _assessor()
+    prompt = assessor._build_prompt([_cluster("Alpha", "Beta")])
+    assert DISPLAY_CATEGORIES == (
+        "World",
+        "Business",
+        "Technology",
+        "Science & Health",
+        "Society",
+        "Culture & Sports",
+    )
+    for category in DISPLAY_CATEGORIES:
+        assert category in prompt
+    for legacy in ("国际时政", "商业财经", "科技创新", "科学健康", "社会民生", "文化艺术", "体育运动"):
+        assert legacy not in prompt
 
 
 def test_salvage_items_from_malformed_output():
@@ -187,14 +222,14 @@ def test_salvage_items_from_malformed_output():
     content = (
         'garbage before {"items": [ {"cluster_index": 1, "scope": 7, "severity": 6, '
         '"novelty": 5, "actor_influence": 8, "decision_relevance": 7, "feelgood": 0, '
-        '"rationale": "重大地缘事件", "display_category": "国际时政", '
+        '"rationale": "重大地缘事件", "display_category": "World", '
         '"short_topic_name": "美伊谈判", "topic_icon_key": "war"}, {"cluster_index": 2, '
         '"scope": 2, "severity": 1, BROKEN'
     )
     salvaged = assessor._salvage_items(content, 2)
     assert len(salvaged) == 2
     assert salvaged[0].scope == 7
-    assert salvaged[0].display_category == "国际时政"
+    assert salvaged[0].display_category == "World"
     assert salvaged[1].cluster_index == 2
 
 
@@ -206,10 +241,10 @@ def test_assess_clusters_with_mocked_llm(monkeypatch):
         '{"items": ['
         '{"cluster_index": 1, "scope": 8, "severity": 7, "novelty": 6, "actor_influence": 9, '
         '"decision_relevance": 8, "feelgood": 0, "rationale": "大国冲突升级", '
-        '"display_category": "国际时政", "short_topic_name": "冲突升级", "topic_icon_key": "war"},'
+        '"display_category": "World", "short_topic_name": "冲突升级", "topic_icon_key": "war"},'
         '{"cluster_index": 2, "scope": 1, "severity": 0, "novelty": 3, "actor_influence": 1, '
         '"decision_relevance": 1, "feelgood": 9, "rationale": "治愈动物故事", '
-        '"display_category": "文化艺术", "short_topic_name": "动物趣闻", "topic_icon_key": "globe"}'
+        '"display_category": "Culture & Sports", "short_topic_name": "动物趣闻", "topic_icon_key": "globe"}'
         "]}"
     )
 
@@ -223,7 +258,7 @@ def test_assess_clusters_with_mocked_llm(monkeypatch):
 
     assert len(assessments) == 2
     assert clusters[0].impact is assessments[0]
-    assert clusters[0].display_category == "国际时政"
+    assert clusters[0].display_category == "World"
     assert assessments[0].composite > assessments[1].composite
     assert assessments[1].dim("feelgood") == 9.0
     assert assessments[0].evaluated_by_llm and assessments[1].evaluated_by_llm

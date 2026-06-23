@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from newsprism.config import Config
 from newsprism.service.editorial_planner import (
+    EditorialPlanner,
     resolve_display_duplicates,
     select_positive_summaries,
     select_report_clusters,
@@ -69,6 +70,18 @@ def _summary(title, composite, category="国际时政", feelgood=0.0, severity=5
     return summary
 
 
+def _storyline_summary(title, composite, key, role="spillover", category="国际时政"):
+    summary = _summary(title, composite, category=category)
+    summary.cluster.storyline_key = key
+    summary.cluster.storyline_name = "小型专题"
+    summary.cluster.storyline_role = role
+    summary.cluster.storyline_membership_status = role
+    summary.cluster.macro_topic_key = key
+    summary.cluster.macro_topic_name = "小型专题"
+    summary.cluster.macro_topic_icon_key = "globe"
+    return summary
+
+
 def test_select_ranks_by_composite():
     clusters = [_cluster("low", 0.20), _cluster("high", 0.80), _cluster("mid", 0.50)]
     _hot, main = select_report_clusters(clusters, _config())
@@ -86,6 +99,52 @@ def test_select_enforces_category_diversity_cap():
     clusters += [_cluster("tech", 0.40, category="科技创新")]
     _hot, main = select_report_clusters(clusters, _config(max_per_category=3, max_clusters=5))
     assert "科技创新" in [c.display_category for c in main]
+
+
+def test_select_normalizes_legacy_categories_for_diversity_cap():
+    clusters = [
+        _cluster("sport legacy 1", 0.99, category="体育运动"),
+        _cluster("sport public 2", 0.98, category="Culture & Sports"),
+        _cluster("sport legacy 3", 0.97, category="体育运动"),
+        _cluster("sport public 4", 0.96, category="Culture & Sports"),
+        _cluster("world", 0.50, category="World"),
+    ]
+
+    _hot, main = select_report_clusters(clusters, _config(max_per_category=2, max_clusters=5))
+
+    assert [cluster.topic_category for cluster in main] == [
+        "sport legacy 1",
+        "sport public 2",
+        "world",
+        "sport legacy 3",
+        "sport public 4",
+    ]
+
+
+def test_base_plan_returns_small_non_hot_group_to_regular_pool_without_focus_lane():
+    cfg = _config(max_clusters=3)
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 3,
+        "min_items_per_topic": 5,
+        "tab_name_max_chars": 10,
+    }
+    summaries = [
+        _storyline_summary("small group core", 0.95, "small-topic", role="core"),
+        _storyline_summary("small group follow", 0.90, "small-topic"),
+        _summary("standalone high", 0.80, category="商业财经"),
+        _summary("standalone low", 0.10, category="科技创新"),
+    ]
+
+    plan = EditorialPlanner(cfg).base_plan(summaries)
+
+    assert plan.hot_topics == []
+    assert plan.focus_storylines == []
+    assert [summary.cluster.topic_category for summary in plan.regular_summaries] == [
+        "small group core",
+        "small group follow",
+        "standalone high",
+    ]
 
 
 def test_positive_selects_high_feelgood_low_severity():
