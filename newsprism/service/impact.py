@@ -74,6 +74,8 @@ class ImpactItem(BaseModel):
     short_topic_name: str | None = None
     topic_icon_key: str | None = None
     subject_regions: list[str] = Field(default_factory=list)
+    target_region: str | None = None     # ISO alpha-2 of whose 内政 this is about
+    is_home_affairs: bool = False        # True when the story falls within the 内政 boundary
 
 
 class ImpactBatch(BaseModel):
@@ -325,6 +327,8 @@ class ImpactAssessor:
             f"- topic_icon_key：只能从这些键中选一个：{icons}\n"
             "- rationale：不超过 30 个中文字符，说明影响判断的核心依据\n"
             "- subject_regions：该事件主要涉及的国家/地区，用小写 ISO 代码数组（最多 3 个），如 [\"il\",\"ir\"]；与新闻来源国不同，指事件本身发生/影响的国家\n"
+            "- target_region：如果事件主要涉及一个国家的内政（国内治理），填写该国的小写 ISO 代码；如果是外交、贸易、战争、国际组织或科技/文化事件，填 null\n"
+            "- is_home_affairs：布尔值。true 表示这是某国的内政（选举、国内政策、法律、人权国内实施、社会保障、国内治安、抗议）；false 表示外交、战争、贸易、国际组织、科技、文化或无法确定\n"
             "要求：\n"
             "1. 按事件实际后果打分，不要因为来源多就抬高分数（来源信号由系统单独计算）。\n"
             "2. 例行市场波动、产品促销、明星八卦等低影响内容应得到明显低分。\n"
@@ -332,7 +336,8 @@ class ImpactAssessor:
             "只输出 JSON：{\"items\":[{\"cluster_index\":1,\"scope\":7,\"severity\":6,\"novelty\":5,"
             "\"actor_influence\":8,\"decision_relevance\":7,\"feelgood\":0,"
             "\"rationale\":\"...\",\"display_category\":\"World\",\"short_topic_name\":\"...\","
-            "\"topic_icon_key\":\"globe\",\"subject_regions\":[\"il\"]}]}\n\n"
+            "\"topic_icon_key\":\"globe\",\"subject_regions\":[\"il\"],"
+            "\"target_region\":\"il\",\"is_home_affairs\":true}]}\n\n"
             f"事件簇：\n{json.dumps(rows, ensure_ascii=False)}"
         )
 
@@ -382,6 +387,16 @@ class ImpactAssessor:
                 [r.strip().strip('"').strip() for r in regions_match.group(1).split(",")]
                 if regions_match else []
             )
+            target_region_match = re.search(r'"target_region"\s*:\s*"([^"]*)"', body)
+            is_ha_match = re.search(r'"is_home_affairs"\s*:\s*(true|false)', body)
+            target_region = (
+                target_region_match.group(1).strip()
+                if target_region_match and target_region_match.group(1).strip() != "null"
+                else None
+            )
+            is_home_affairs = (
+                is_ha_match.group(1) == "true" if is_ha_match else False
+            )
             salvaged.append(
                 ImpactItem(
                     cluster_index=idx,
@@ -391,6 +406,8 @@ class ImpactAssessor:
                     short_topic_name=short_name.group(1) if short_name else None,
                     topic_icon_key=icon.group(1) if icon else None,
                     subject_regions=subject_regions,
+                    target_region=target_region,
+                    is_home_affairs=is_home_affairs,
                 )
             )
         return salvaged
@@ -488,6 +505,8 @@ class ImpactAssessor:
             short_topic_name = None
             topic_icon_key = self.icon_allowlist[0] if self.icon_allowlist else None
             subject_regions = []
+            target_region = None
+            is_home_affairs = False
         else:
             dims = {dim: _clamp_dim(getattr(item, dim)) for dim in DIMENSIONS}
             composite = self._composite(dims, signal, weights)
@@ -501,6 +520,8 @@ class ImpactAssessor:
                 else (self.icon_allowlist[0] if self.icon_allowlist else None)
             )
             subject_regions = _norm_regions(item.subject_regions)
+            target_region = item.target_region
+            is_home_affairs = bool(item.is_home_affairs)
 
         status, constraints = self._status(dims, composite, flags, evaluated)
         return ImpactAssessment(
@@ -511,6 +532,8 @@ class ImpactAssessor:
             short_topic_name=short_topic_name,
             topic_icon_key=topic_icon_key,
             subject_regions=subject_regions,
+            target_region=target_region,
+            is_home_affairs=is_home_affairs,
             signal=signal,
             composite=composite,
             status=status,
