@@ -169,6 +169,8 @@ sources:
     weight: 1.0
     language: zh
     region: cn
+    ownership: private_constrained
+    ownership_detail: "Private (Qingdao Ruandroid); mainland China jurisdiction"
     perspective: "主流中文科技媒体，硬件/手机/AI资讯丰富"
 
   - name: Solidot
@@ -180,6 +182,8 @@ sources:
     weight: 0.95
     language: zh
     region: cn
+    ownership: private_constrained
+    ownership_detail: "Private (北京第二十六维); mainland China jurisdiction"
     perspective: "技术社区视角，开源/安全/科学，较理性客观"
 
   - name: 澎湃新闻
@@ -191,6 +195,8 @@ sources:
     weight: 0.95
     language: zh
     region: cn
+    ownership: state_controlled_block
+    ownership_detail: "Shanghai United Media Group, state-owned; MBFC pro-government"
     tier: editorial
     perspective: "上海官方媒体，深度报道，政策/科技/社会"
     skip_body_fetch: true   # SPA: trafilatura extracts footer boilerplate; use newsnow hover field instead
@@ -204,6 +210,8 @@ sources:
     weight: 0.85
     language: zh
     region: cn
+    ownership: state_controlled_block
+    ownership_detail: "Bauhinia ~21% + China Mobile ~20% state stake (2021); Freedom House pro-Beijing"
     tier: portal
     perspective: "香港背景媒体，科技商业，相对多元视角"
 
@@ -216,6 +224,8 @@ sources:
     weight: 0.9
     language: zh
     region: cn
+    ownership: state_controlled_block
+    ownership_detail: "CMC + state-owned Ping An/Haitong capital; 2019 regulatory shutdown"
     perspective: "中文金融媒体，科技公司财经/投资视角"
 
   - name: 靠谱新闻
@@ -227,6 +237,8 @@ sources:
     weight: 0.8
     language: zh
     region: cn
+    ownership: state_influenced_review
+    ownership_detail: "Data void — no registry/owner/funding found"
     perspective: "独立科技新闻聚合，多来源摘要"
 
   - name: 36氪
@@ -238,6 +250,8 @@ sources:
     weight: 0.9
     language: zh
     region: cn
+    ownership: private_constrained
+    ownership_detail: "NASDAQ-listed (KRKR); VC-backed; mainland China jurisdiction"
     perspective: "创投/科技创业，独角兽公司报道"
 
   - name: 参考消息
@@ -249,6 +263,8 @@ sources:
     weight: 0.9
     language: zh
     region: cn
+    ownership: state_controlled_block
+    ownership_detail: "Xinhua affiliate; official reference news"
     tier: editorial
     perspective: "官方参考消息，国际新闻中文转载，官方视角"
 
@@ -261,6 +277,8 @@ sources:
     weight: 1.0
     language: zh
     region: cn
+    ownership: private_constrained
+    ownership_detail: "CMC ~40% (state-linked capital); Hu Shuli editorial firewall + CAC friction"
     tier: editorial
     perspective: "最独立财经媒体，调查报道，金融/政策分析"
 
@@ -273,6 +291,8 @@ sources:
     weight: 0.95
     language: zh
     region: cn
+    ownership: state_controlled_block
+    ownership_detail: "CPC Central Committee organ"
     tier: editorial
     perspective: "中共中央机关报，官方立场，政策风向标"
 
@@ -284,6 +304,8 @@ sources:
     weight: 0.85
     language: zh
     region: cn
+    ownership: state_controlled_block
+    ownership_detail: "China News Service, State Council"
     tier: editorial
     perspective: "中国新闻社，半官方通讯社，政治/社会/经济综合报道，为海外华人媒体主要供稿方"
 
@@ -300,6 +322,8 @@ sources:
     weight: 1.0
     language: de
     region: de
+    ownership: independent_private
+    ownership_detail: "German tech publisher, private"
     perspective: "德国最权威科技媒体，硬件/开源/欧盟监管深度"
 
   - name: Golem.de
@@ -310,6 +334,8 @@ sources:
     weight: 0.9
     language: de
     region: de
+    ownership: independent_private
+    ownership_detail: "German IT publisher, private"
     perspective: "德国IT专业媒体，企业科技/芯片/云计算"
 
   - name: Deutsche Welle Tech
@@ -320,6 +346,8 @@ sources:
     weight: 0.85
     language: en
     region: de
+    ownership: independent_public
+    ownership_detail: "Federal-funded but DW-Gesetz statutory independence; Meta-unlabeled; NG/AF/MBFC"
     tier: editorial
     perspective: "德国之声英文版，欧洲视角科技政策/地缘"
 
@@ -331,6 +359,8 @@ sources:
     weight: 0.95
     language: de
     region: de
+    ownership: independent_public
+    ownership_detail: "ARD licence-fee public broadcaster; NG/MBFC"
     tier: editorial
     perspective: "德国公共广播ARD新闻品牌，本地德语主流编辑部，科技政策/产业数字化/欧洲监管"
 
@@ -347,6 +377,8 @@ sources:
     weight: 1.0
     language: en
     region: gb
+    ownership: independent_public
+    ownership_detail: "Royal Charter + editorial firewall; FCDO/ODA funding ring-fenced; TNI/NG/AF/MBFC; Meta-unlabeled"
     tier: editorial
     perspective: "全球最大公共广播机构，中立国际视角，广泛覆盖地缘政治"
 
@@ -358,6 +390,8 @@ sources:
     weight: 0.95
     language: en
     region: gb
+    ownership: independent_private
+    ownership_detail: "Scott Trust; NG/AF/MBFC"
     tier: editorial
     perspective: "英国自由派媒体，AI伦理/科技监管/数字权利深度报道"
 
@@ -369,6 +403,8 @@ sources:
     weight: 0.9
     language: en
     region: gb
+    ownership: independent_private
+    ownership_detail: "Nikkei-owned; TNI/NG/AF/MBFC"
     tier: editorial
     perspective: "精英商业/科技媒体，全球贸易/AI/企业战略深度"
 
@@ -385,6 +421,8 @@ sources:
     weight: 1.0
     language: en
     region: in
+    ownership: independent_private
+    ownership_detail: "TNI/NG/AF/MBFC"
     tier: editorial
     perspective: "印度最高质量报纸，中立编辑方针，国际/科技/政策深度报道"
 
@@ -396,6 +434,8 @@ sources:
     weight: 0.9
     language: en
     region: in
+    ownership: state_controlled_block
+    ownership_detail: "Adani/AMG ~65-76% (Dec 2022); mass editor exits; MBFC Questionable"
     tier: editorial
     perspective: "印度主流电视媒体，国内/国际新闻，数字平台强大"
 
@@ -412,6 +452,8 @@ sources:
     weight: 0.95
     language: ja
     region: jp
+    ownership: independent_public
+    ownership_detail: "Broadcasting Act independence; TNI/MBFC"
     tier: editorial
     perspective: "日本公共广播综合新闻，宪法独立编辑方针，政治/外交/社会"
 
@@ -423,6 +465,8 @@ sources:
     weight: 0.9
     language: ja
     region: jp
+    ownership: independent_private
+    ownership_detail: "Private; MBFC"
     tier: editorial
     perspective: "日本最大报纸之一，中间偏左，政治/外交/社会深度，独立媒体"
 
@@ -434,6 +478,8 @@ sources:
     weight: 0.85
     language: ja
     region: jp
+    ownership: independent_private_low_evidence
+    ownership_detail: "Former Engadget JP team; thin public governance disclosure"
     perspective: "前Engadget日本版编辑团队，消费科技/AI产品/智能设备/EV，非企业IT"
 
   - name: ITmedia NEWS
@@ -444,6 +490,8 @@ sources:
     weight: 0.9
     language: ja
     region: jp
+    ownership: independent_private
+    ownership_detail: "SoftBank subsidiary, private"
     perspective: "日本本土主流科技新闻品牌，编辑部采编，AI/安全/企业动向/社会与IT交叉话题"
 
   # ════════════════════════════════════════════════════
@@ -459,6 +507,8 @@ sources:
     weight: 0.9
     language: ko
     region: kr
+    ownership: independent_public
+    ownership_detail: "Yonhap Act Art. 18-3 editorial firewall; State Media Monitor Independent Public"
     tier: editorial
     perspective: "韩联社韩文版，韩国主要通讯社，三星/SK/现代等财阀及地缘政治第一手"
 
@@ -470,6 +520,8 @@ sources:
     weight: 0.85
     language: en
     region: kr
+    ownership: independent_public
+    ownership_detail: "Same org as Yonhap KR; statutory firewall"
     tier: editorial
     perspective: "韩联社英文版，韩国对外视角，供与中英文媒体跨语言对比"
 
@@ -481,6 +533,8 @@ sources:
     weight: 0.8
     language: ko
     region: kr
+    ownership: independent_private_low_evidence
+    ownership_detail: "Korean startup/tech media; thin governance disclosure"
     perspective: "韩国独立创业/科技媒体，AI产品/机器人/消费科技/韩国初创生态，非企业IT"
 
   # ════════════════════════════════════════════════════
@@ -496,6 +550,8 @@ sources:
     weight: 0.9
     language: nl
     region: nl
+    ownership: independent_private
+    ownership_detail: "DPG Media, private (concentration caveat)"
     perspective: "荷兰最大科技社区，ASML/芯片/半导体重要视角"
 
   - name: Techzine
@@ -506,6 +562,8 @@ sources:
     weight: 0.8
     language: nl
     region: nl
+    ownership: independent_private_low_evidence
+    ownership_detail: "Dutch IT media; thin governance disclosure"
     perspective: "荷兰IT专业媒体，企业/云/安全"
 
   - name: Nu.nl Tech
@@ -516,6 +574,8 @@ sources:
     weight: 0.75
     language: nl
     region: nl
+    ownership: independent_private
+    ownership_detail: "DPG Media, private (concentration caveat)"
     tier: portal
     perspective: "荷兰最大新闻站点科技版，大众科技报道"
 
@@ -527,6 +587,8 @@ sources:
     weight: 0.95
     language: nl
     region: nl
+    ownership: independent_public
+    ownership_detail: "Dutch public broadcaster; NG/MBFC"
     tier: editorial
     perspective: "荷兰国家公共新闻机构，本地荷兰语主流报道，科技政策/社会/国际新闻覆盖广"
 
@@ -543,6 +605,8 @@ sources:
     weight: 0.85
     language: pl
     region: pl
+    ownership: independent_private_low_evidence
+    ownership_detail: "Polish security media; thin governance disclosure"
     perspective: "波兰最大网络安全媒体，安全/隐私/数据保护"
 
   - name: Spider's Web
@@ -553,6 +617,8 @@ sources:
     weight: 0.8
     language: pl
     region: pl
+    ownership: independent_private_low_evidence
+    ownership_detail: "Polish tech media; thin governance disclosure"
     perspective: "波兰科技生活方式媒体，消费科技/AI/手机"
 
   - name: Antyweb
@@ -563,6 +629,8 @@ sources:
     weight: 0.75
     language: pl
     region: pl
+    ownership: independent_private_low_evidence
+    ownership_detail: "Polish tech blog; thin governance disclosure"
     perspective: "波兰科技博客，欧盟数字政策/AI监管视角"
 
   # ════════════════════════════════════════════════════
@@ -578,6 +646,8 @@ sources:
     weight: 0.8
     language: zh
     region: ru
+    ownership: state_controlled_block
+    ownership_detail: "Rossiya Segodnya (Russian state agency); Meta state-media label"
     tier: editorial
     perspective: "俄罗斯视角，地缘政治，反西方叙事对比参考"
 
@@ -589,6 +659,8 @@ sources:
     weight: 0.85
     language: en
     region: ru
+    ownership: independent_private
+    ownership_detail: "Exile independent (Amsterdam); Russia-designated foreign agent"
     tier: editorial
     perspective: "独立英文俄罗斯媒体（流亡阿姆斯特丹），批评性视角，与Sputnik官方叙事形成对照"
 
@@ -600,6 +672,8 @@ sources:
     weight: 0.9
     language: ru
     region: ru
+    ownership: independent_nonprofit
+    ownership_detail: "Latvian reader-funded nonprofit; Russia-designated undesirable"
     tier: editorial
     perspective: "俄语独立新闻（拉脱维亚），前Lenta.ru调查团队，被俄当局列为不受欢迎组织"
 
@@ -611,6 +685,8 @@ sources:
     weight: 0.95
     language: ru
     region: ru
+    ownership: state_controlled_block
+    ownership_detail: "2016 editor purge + 2017 Berezkin/ESN acquisition; MBFC Questionable"
     tier: editorial
     perspective: "俄罗斯本土主流商业与综合新闻编辑部，经济/政策/企业科技视角，国内影响力高"
 
@@ -622,6 +698,8 @@ sources:
     weight: 0.8
     language: ru
     region: ru
+    ownership: private_constrained
+    ownership_detail: "Private since 1997; Russian media jurisdiction"
     perspective: "俄罗斯独立消费科技媒体（1997），GPU/手机/AI产品/航天，企业IT已剥离至独立站"
 
   # ════════════════════════════════════════════════════
@@ -637,6 +715,8 @@ sources:
     weight: 0.9
     language: en
     region: ua
+    ownership: independent_nonprofit
+    ownership_detail: "Reader-funded nonprofit"
     tier: editorial
     perspective: "乌克兰独立英文媒体（2021年由原Kyiv Post记者团队创办），战时独立编辑视角，国际引用广泛"
 
@@ -648,6 +728,8 @@ sources:
     weight: 0.85
     language: uk
     region: ua
+    ownership: state_controlled_block
+    ownership_detail: "Ukrainian state news agency"
     tier: editorial
     perspective: "乌克兰国家通讯社（官方），基辅官方立场，与俄方Sputnik叙事形成对照"
 
@@ -666,6 +748,8 @@ sources:
     weight: 1.0
     language: zh
     region: sg
+    ownership: state_controlled_block
+    ownership_detail: "SPH Media Trust Captured Public; PAP-linked chair; Xinhua-collab talks"
     tier: editorial
     perspective: "新加坡中文媒体，独立视角，东南亚/中国关系"
 
@@ -682,6 +766,8 @@ sources:
     weight: 0.85
     language: zh
     region: us
+    ownership: state_controlled_block
+    ownership_detail: "USAGM-funded; Meta state-media label"
     tier: editorial
     perspective: "美国官方之音中文版——同一新闻的美方立场，与大陆媒体形成对比"
 
@@ -695,6 +781,8 @@ sources:
     weight: 1.0
     language: en
     region: us
+    ownership: independent_private
+    ownership_detail: "Thomson Reuters Trust Principles; TNI/NG/AF/MBFC"
     tier: editorial
     enabled: false
     perspective: "国际权威通讯社，事实导向，科技/地缘政治"
@@ -708,6 +796,8 @@ sources:
     weight: 0.95
     language: en
     region: us
+    ownership: independent_nonprofit
+    ownership_detail: "Nonprofit cooperative; TNI/NG/AF/MBFC"
     tier: editorial
     perspective: "美联社，中立事实报道，重大事件权威来源"
 
@@ -719,6 +809,8 @@ sources:
     weight: 0.9
     language: en
     region: us
+    ownership: independent_nonprofit
+    ownership_detail: "Private nonprofit public-media; minimal federal funding; Meta-unlabeled"
     tier: editorial
     perspective: "美国全国公共广播新闻品牌，本地英语主流编辑报道，政治/社会/科技/国际议题覆盖全面"
 
@@ -730,6 +822,8 @@ sources:
     weight: 0.9
     language: en
     region: us
+    ownership: independent_private
+    ownership_detail: "Vox Media, private"
     perspective: "科技消费品/平台，科技文化视角"
 
   - name: Ars Technica
@@ -740,6 +834,8 @@ sources:
     weight: 0.95
     language: en
     region: us
+    ownership: independent_private
+    ownership_detail: "Condé Nast; AF/MBFC"
     perspective: "深度技术分析，芯片/AI/安全，理工背景读者"
 
   - name: TechCrunch
@@ -750,6 +846,8 @@ sources:
     weight: 0.85
     language: en
     region: us
+    ownership: independent_private
+    ownership_detail: "Yahoo/private"
     perspective: "硅谷创投/初创公司，商业化科技"
 
   - name: Wired
@@ -760,6 +858,8 @@ sources:
     weight: 0.85
     language: en
     region: us
+    ownership: independent_private
+    ownership_detail: "Condé Nast"
     perspective: "科技社会影响，AI伦理/监管，未来主义视角"
 
   - name: MIT Technology Review
@@ -770,4 +870,6 @@ sources:
     weight: 0.9
     language: en
     region: us
+    ownership: independent_nonprofit
+    ownership_detail: "MIT-owned nonprofit"
     perspective: "学术/研究视角，AI/生物/能源前沿技术"
