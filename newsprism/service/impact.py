@@ -30,7 +30,7 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.llm_compat import completion_compat_kwargs
-from newsprism.types import Article, ArticleCluster, ImpactAssessment
+from newsprism.types import Article, ArticleCluster, ImpactAssessment, Ownership
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,17 @@ class ImpactAssessor:
         self.tier_scores = reliability.get("tier_scores", {}) if isinstance(reliability, dict) else {}
         self.source_tiers = {source.name: source.tier for source in cfg.sources}
         self.source_regions = {source.name: source.region for source in cfg.sources}
+        self.source_ownerships = {source.name: source.ownership for source in cfg.sources}
+
+        # Ownership gate weight multipliers (configurable, from editorial-values.yaml)
+        own_cfg = editorial.get("ownership", {}) if isinstance(editorial, dict) else {}
+        multipliers = own_cfg.get("weight_multipliers", {}) if isinstance(own_cfg, dict) else {}
+        self._gate_weight_multipliers = {
+            Ownership.PRIVATE_CONSTRAINED.value: float(multipliers.get("private_constrained", 0.85)),
+            Ownership.INDEPENDENT_PRIVATE_LOW_EVIDENCE.value: float(
+                multipliers.get("independent_private_low_evidence", 0.75)
+            ),
+        }
 
         hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
         self.icon_allowlist = list(
@@ -181,6 +192,7 @@ class ImpactAssessor:
             assessment = self._build_assessment(cluster, item, weights)
             cluster.impact = assessment
             cluster.display_category = assessment.display_category
+            self._gate_cluster(cluster, assessment)
             assessments.append(assessment)
 
         status_counts: dict[str, int] = {}
@@ -488,6 +500,81 @@ class ImpactAssessor:
         if evaluated_by_llm and composite < self.review_floor:
             return "needs_review", constraints
         return "publishable", constraints
+
+    def _gate_cluster(self, cluster: ArticleCluster, assessment: ImpactAssessment) -> None:
+        """Apply the ownership gate to each article in the cluster.
+
+        State-controlled outlets reporting another country's 内政 → article suppressed.
+        Constrained / low-evidence / review outlets → cluster flagged for review
+        with a composite weight penalty. All failure paths default to no block
+        (safe degradation).
+        """
+        from newsprism.types import OWNERSHIP_GATE_ALLOW, OWNERSHIP_GATE_REVIEW, OWNERSHIP_GATE_SUPPRESS
+
+        target = assessment.target_region
+        is_ha = assessment.is_home_affairs
+        if target is None or not is_ha:
+            return  # Gate inactive — no clear foreign 内政 target
+
+        suppressed_count = 0
+        needs_review = False
+
+        for article in cluster.articles:
+            ownership = self.source_ownerships.get(article.source_name, "state_influenced_review")
+            source_region = self.source_regions.get(article.source_name)
+
+            if source_region is None or source_region == target:
+                continue  # Can't determine cross-border, or own country → skip
+
+            if ownership in OWNERSHIP_GATE_SUPPRESS:
+                article.ownership_suppressed = True
+                suppressed_count += 1
+                logger.debug(
+                    "Ownership gate: suppressed %s (%s) on %s 内政 (%s)",
+                    article.source_name, ownership, target, article.title[:60],
+                )
+            elif ownership in OWNERSHIP_GATE_REVIEW:
+                needs_review = True
+                multiplier = self._gate_weight_multipliers.get(ownership, 1.0)
+                logger.debug(
+                    "Ownership gate: review %s (%s) on %s 内政, multiplier=%.2f",
+                    article.source_name, ownership, target, multiplier,
+                )
+            elif ownership not in OWNERSHIP_GATE_ALLOW:
+                # Unknown ownership value — default to review (safe)
+                needs_review = True
+                logger.warning(
+                    "Ownership gate: unknown ownership %r for %s → flagging for review",
+                    ownership, article.source_name,
+                )
+
+        if suppressed_count == len(cluster.articles) and cluster.articles:
+            assessment.status = "suppress"
+            assessment.flags.append("ownership_suppressed_all")
+            logger.info(
+                "Ownership gate: suppressed entire cluster (key=%s, %d articles)",
+                assessment.cluster_key, suppressed_count,
+            )
+        elif needs_review and assessment.status == "publishable":
+            assessment.status = "needs_review"
+            assessment.flags.append("ownership_needs_review")
+
+        # Apply composite weight penalty for constrained/low-evidence tiers
+        if needs_review and any(
+            self.source_ownerships.get(a.source_name, "") in OWNERSHIP_GATE_REVIEW
+            for a in cluster.articles
+        ):
+            worst_multiplier = min(
+                (
+                    self._gate_weight_multipliers.get(
+                        self.source_ownerships.get(a.source_name, ""), 1.0
+                    )
+                    for a in cluster.articles
+                    if self.source_ownerships.get(a.source_name, "") in OWNERSHIP_GATE_REVIEW
+                ),
+                default=1.0,
+            )
+            assessment.composite *= worst_multiplier
 
     def _build_assessment(
         self,
