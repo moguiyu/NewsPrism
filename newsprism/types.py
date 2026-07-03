@@ -48,7 +48,6 @@ class Article:
     is_official_source: bool = False    # True for curated official fallback sources
     origin_region: str | None = None    # editorial/source region represented by the article
     searched_provider: str | None = None  # Provider stage that produced this searched article
-    source_ownership: str | None = None   # Ownership stamp from source config (see Ownership enum)
     ownership_suppressed: bool = False    # True when the ownership gate suppresses this article
 
 

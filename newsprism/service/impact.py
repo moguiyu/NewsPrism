@@ -30,7 +30,15 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.llm_compat import completion_compat_kwargs
-from newsprism.types import Article, ArticleCluster, ImpactAssessment, Ownership
+from newsprism.types import (
+    Article,
+    ArticleCluster,
+    ImpactAssessment,
+    Ownership,
+    OWNERSHIP_GATE_ALLOW,
+    OWNERSHIP_GATE_REVIEW,
+    OWNERSHIP_GATE_SUPPRESS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +244,7 @@ class ImpactAssessor:
             weights,
         )
         cluster.display_category = cluster.impact.display_category
+        self._gate_cluster(cluster, cluster.impact)
 
     # ─── LLM CALL ────────────────────────────────────────────────────────────
 
@@ -509,8 +518,6 @@ class ImpactAssessor:
         with a composite weight penalty. All failure paths default to no block
         (safe degradation).
         """
-        from newsprism.types import OWNERSHIP_GATE_ALLOW, OWNERSHIP_GATE_REVIEW, OWNERSHIP_GATE_SUPPRESS
-
         target = assessment.target_region
         is_ha = assessment.is_home_affairs
         if target is None or not is_ha:
@@ -641,4 +648,6 @@ class ImpactAssessor:
             short_topic_name=assessment.short_topic_name,
             topic_icon_key=assessment.topic_icon_key,
             subject_regions=assessment.subject_regions,
+            target_region=assessment.target_region,
+            is_home_affairs=assessment.is_home_affairs,
         )

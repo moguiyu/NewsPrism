@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from newsprism.types import (
     CERTIFICATION_CODES,
     Certification,
+    Ownership,
     SourceCertification,
 )
 
@@ -201,7 +202,7 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
             newsnow_id=s.get("newsnow_id"),
             enabled=bool(s.get("enabled", True)),
             skip_body_fetch=bool(s.get("skip_body_fetch", False)),
-            ownership=str(s.get("ownership", "state_influenced_review")),
+            ownership=Ownership(str(s.get("ownership", "state_influenced_review"))).value,
             ownership_detail=str(s.get("ownership_detail", "")),
         )
         for s in raw.get("sources", [])
