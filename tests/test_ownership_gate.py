@@ -1,6 +1,5 @@
 """Unit tests for the ownership gate (State Media Matrix cross-border 内政 filter)."""
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from newsprism.config import Config, SourceConfig
 from newsprism.service.impact import ImpactAssessor, ImpactItem
