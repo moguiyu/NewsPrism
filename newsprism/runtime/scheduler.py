@@ -220,6 +220,12 @@ class Scheduler:
                     evaluated_by_llm=assessment.evaluated_by_llm,
                     model=assessment.model,
                     subject_regions=assessment.subject_regions,
+                    gate={
+                        "target": assessment.target_region,
+                        "is_home_affairs": assessment.is_home_affairs,
+                        "blocked": assessment.gate_blocked,
+                        "review": assessment.gate_review,
+                    },
                 )
 
     def _resolve_output_path(self, configured: str | None, default: str) -> Path:

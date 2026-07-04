@@ -88,6 +88,7 @@ def create_app(db_path: Path = DB_PATH) -> FastAPI:
     app = FastAPI(title="NewsPrism Quality Portal")
     app.state.db_path = db_path
     _TEMPLATES.env.globals["heat_class"] = A.heat_class
+    _TEMPLATES.env.globals["gate_badge"] = A.gate_badge
     _TEMPLATES.env.globals["DIMENSIONS"] = A.DIMENSIONS
 
     require_cf = _cf_access_required()

@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from newsprism.types import (
     CERTIFICATION_CODES,
     Certification,
+    Ownership,
     SourceCertification,
 )
 
@@ -37,6 +38,8 @@ class SourceConfig:
     newsnow_id: str | None = None    # newsnow source ID — tried first for Chinese sources
     enabled: bool = True
     skip_body_fetch: bool = False    # skip article body fetch; rely on newsnow hover field (for SPAs)
+    ownership: str = "state_influenced_review"   # Ownership enum value (conservative default)
+    ownership_detail: str = ""                    # Corroboration note
 
 
 @dataclass
@@ -199,6 +202,8 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
             newsnow_id=s.get("newsnow_id"),
             enabled=bool(s.get("enabled", True)),
             skip_body_fetch=bool(s.get("skip_body_fetch", False)),
+            ownership=Ownership(str(s.get("ownership", "state_influenced_review"))).value,
+            ownership_detail=str(s.get("ownership_detail", "")),
         )
         for s in raw.get("sources", [])
         if s.get("enabled", True)
