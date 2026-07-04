@@ -30,7 +30,15 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.llm_compat import completion_compat_kwargs
-from newsprism.types import Article, ArticleCluster, ImpactAssessment
+from newsprism.types import (
+    Article,
+    ArticleCluster,
+    ImpactAssessment,
+    Ownership,
+    OWNERSHIP_GATE_ALLOW,
+    OWNERSHIP_GATE_REVIEW,
+    OWNERSHIP_GATE_SUPPRESS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +82,8 @@ class ImpactItem(BaseModel):
     short_topic_name: str | None = None
     topic_icon_key: str | None = None
     subject_regions: list[str] = Field(default_factory=list)
+    target_region: str | None = None     # ISO alpha-2 of whose 内政 this is about
+    is_home_affairs: bool = False        # True when the story falls within the 内政 boundary
 
 
 class ImpactBatch(BaseModel):
@@ -134,6 +144,17 @@ class ImpactAssessor:
         self.tier_scores = reliability.get("tier_scores", {}) if isinstance(reliability, dict) else {}
         self.source_tiers = {source.name: source.tier for source in cfg.sources}
         self.source_regions = {source.name: source.region for source in cfg.sources}
+        self.source_ownerships = {source.name: source.ownership for source in cfg.sources}
+
+        # Ownership gate weight multipliers (configurable, from editorial-values.yaml)
+        own_cfg = editorial.get("ownership", {}) if isinstance(editorial, dict) else {}
+        multipliers = own_cfg.get("weight_multipliers", {}) if isinstance(own_cfg, dict) else {}
+        self._gate_weight_multipliers = {
+            Ownership.PRIVATE_CONSTRAINED.value: float(multipliers.get("private_constrained", 0.85)),
+            Ownership.INDEPENDENT_PRIVATE_LOW_EVIDENCE.value: float(
+                multipliers.get("independent_private_low_evidence", 0.75)
+            ),
+        }
 
         hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
         self.icon_allowlist = list(
@@ -179,6 +200,7 @@ class ImpactAssessor:
             assessment = self._build_assessment(cluster, item, weights)
             cluster.impact = assessment
             cluster.display_category = assessment.display_category
+            self._gate_cluster(cluster, assessment)
             assessments.append(assessment)
 
         status_counts: dict[str, int] = {}
@@ -222,6 +244,7 @@ class ImpactAssessor:
             weights,
         )
         cluster.display_category = cluster.impact.display_category
+        self._gate_cluster(cluster, cluster.impact)
 
     # ─── LLM CALL ────────────────────────────────────────────────────────────
 
@@ -325,6 +348,8 @@ class ImpactAssessor:
             f"- topic_icon_key：只能从这些键中选一个：{icons}\n"
             "- rationale：不超过 30 个中文字符，说明影响判断的核心依据\n"
             "- subject_regions：该事件主要涉及的国家/地区，用小写 ISO 代码数组（最多 3 个），如 [\"il\",\"ir\"]；与新闻来源国不同，指事件本身发生/影响的国家\n"
+            "- target_region：如果事件主要涉及一个国家的内政（国内治理），填写该国的小写 ISO 代码；如果是外交、贸易、战争、国际组织、科技/文化事件，或自然灾害/事故及其纯伤亡报道，填 null\n"
+            "- is_home_affairs：布尔值。true 仅指某国的国内治理（选举、国内政策、法律、人权国内实施、社会保障、国内治安、抗议）；false 表示外交、战争、贸易、国际组织、科技、文化、体育、娱乐，或自然灾害/事故及其伤亡人数，或无法确定。关键：地震、洪水、矿难、爆炸等灾难的死亡/受伤人数本身不是内政，应填 false 与 target_region=null；只有当报道核心是该国政府的应急治理、问责或政策回应时才算内政\n"
             "要求：\n"
             "1. 按事件实际后果打分，不要因为来源多就抬高分数（来源信号由系统单独计算）。\n"
             "2. 例行市场波动、产品促销、明星八卦等低影响内容应得到明显低分。\n"
@@ -332,7 +357,8 @@ class ImpactAssessor:
             "只输出 JSON：{\"items\":[{\"cluster_index\":1,\"scope\":7,\"severity\":6,\"novelty\":5,"
             "\"actor_influence\":8,\"decision_relevance\":7,\"feelgood\":0,"
             "\"rationale\":\"...\",\"display_category\":\"World\",\"short_topic_name\":\"...\","
-            "\"topic_icon_key\":\"globe\",\"subject_regions\":[\"il\"]}]}\n\n"
+            "\"topic_icon_key\":\"globe\",\"subject_regions\":[\"il\"],"
+            "\"target_region\":\"il\",\"is_home_affairs\":true}]}\n\n"
             f"事件簇：\n{json.dumps(rows, ensure_ascii=False)}"
         )
 
@@ -382,6 +408,16 @@ class ImpactAssessor:
                 [r.strip().strip('"').strip() for r in regions_match.group(1).split(",")]
                 if regions_match else []
             )
+            target_region_match = re.search(r'"target_region"\s*:\s*"([^"]*)"', body)
+            is_ha_match = re.search(r'"is_home_affairs"\s*:\s*(true|false)', body)
+            target_region = (
+                target_region_match.group(1).strip()
+                if target_region_match and target_region_match.group(1).strip() != "null"
+                else None
+            )
+            is_home_affairs = (
+                is_ha_match.group(1) == "true" if is_ha_match else False
+            )
             salvaged.append(
                 ImpactItem(
                     cluster_index=idx,
@@ -391,6 +427,8 @@ class ImpactAssessor:
                     short_topic_name=short_name.group(1) if short_name else None,
                     topic_icon_key=icon.group(1) if icon else None,
                     subject_regions=subject_regions,
+                    target_region=target_region,
+                    is_home_affairs=is_home_affairs,
                 )
             )
         return salvaged
@@ -472,6 +510,85 @@ class ImpactAssessor:
             return "needs_review", constraints
         return "publishable", constraints
 
+    def _gate_cluster(self, cluster: ArticleCluster, assessment: ImpactAssessment) -> None:
+        """Apply the ownership gate to each article in the cluster.
+
+        State-controlled outlets reporting another country's 内政 → article suppressed.
+        Constrained / low-evidence / review outlets → cluster flagged for review
+        with a composite weight penalty. All failure paths default to no block
+        (safe degradation).
+        """
+        target = assessment.target_region
+        is_ha = assessment.is_home_affairs
+        if target is None or not is_ha:
+            return  # Gate inactive — no clear foreign 内政 target
+
+        # Reset so re-running (e.g. recompute_local) doesn't double-append.
+        assessment.gate_blocked = []
+        assessment.gate_review = []
+        suppressed_count = 0
+        needs_review = False
+
+        for article in cluster.articles:
+            ownership = self.source_ownerships.get(article.source_name, "state_influenced_review")
+            source_region = self.source_regions.get(article.source_name)
+
+            if source_region is None or source_region == target:
+                continue  # Can't determine cross-border, or own country → skip
+
+            if ownership in OWNERSHIP_GATE_SUPPRESS:
+                article.ownership_suppressed = True
+                suppressed_count += 1
+                assessment.gate_blocked.append(article.source_name)
+                logger.debug(
+                    "Ownership gate: suppressed %s (%s) on %s 内政 (%s)",
+                    article.source_name, ownership, target, article.title[:60],
+                )
+            elif ownership in OWNERSHIP_GATE_REVIEW:
+                needs_review = True
+                assessment.gate_review.append(article.source_name)
+                multiplier = self._gate_weight_multipliers.get(ownership, 1.0)
+                logger.debug(
+                    "Ownership gate: review %s (%s) on %s 内政, multiplier=%.2f",
+                    article.source_name, ownership, target, multiplier,
+                )
+            elif ownership not in OWNERSHIP_GATE_ALLOW:
+                # Unknown ownership value — default to review (safe)
+                needs_review = True
+                assessment.gate_review.append(article.source_name)
+                logger.warning(
+                    "Ownership gate: unknown ownership %r for %s → flagging for review",
+                    ownership, article.source_name,
+                )
+
+        if suppressed_count == len(cluster.articles) and cluster.articles:
+            assessment.status = "suppress"
+            assessment.flags.append("ownership_suppressed_all")
+            logger.info(
+                "Ownership gate: suppressed entire cluster (key=%s, %d articles)",
+                assessment.cluster_key, suppressed_count,
+            )
+        elif needs_review and assessment.status == "publishable":
+            assessment.status = "needs_review"
+            assessment.flags.append("ownership_needs_review")
+
+        # Apply composite weight penalty for constrained/low-evidence tiers
+        if needs_review and any(
+            self.source_ownerships.get(a.source_name, "") in OWNERSHIP_GATE_REVIEW
+            for a in cluster.articles
+        ):
+            worst_multiplier = min(
+                (
+                    self._gate_weight_multipliers.get(
+                        self.source_ownerships.get(a.source_name, ""), 1.0
+                    )
+                    for a in cluster.articles
+                    if self.source_ownerships.get(a.source_name, "") in OWNERSHIP_GATE_REVIEW
+                ),
+                default=1.0,
+            )
+            assessment.composite *= worst_multiplier
+
     def _build_assessment(
         self,
         cluster: ArticleCluster,
@@ -488,6 +605,8 @@ class ImpactAssessor:
             short_topic_name = None
             topic_icon_key = self.icon_allowlist[0] if self.icon_allowlist else None
             subject_regions = []
+            target_region = None
+            is_home_affairs = False
         else:
             dims = {dim: _clamp_dim(getattr(item, dim)) for dim in DIMENSIONS}
             composite = self._composite(dims, signal, weights)
@@ -501,6 +620,8 @@ class ImpactAssessor:
                 else (self.icon_allowlist[0] if self.icon_allowlist else None)
             )
             subject_regions = _norm_regions(item.subject_regions)
+            target_region = item.target_region
+            is_home_affairs = bool(item.is_home_affairs)
 
         status, constraints = self._status(dims, composite, flags, evaluated)
         return ImpactAssessment(
@@ -511,6 +632,8 @@ class ImpactAssessor:
             short_topic_name=short_topic_name,
             topic_icon_key=topic_icon_key,
             subject_regions=subject_regions,
+            target_region=target_region,
+            is_home_affairs=is_home_affairs,
             signal=signal,
             composite=composite,
             status=status,
@@ -531,4 +654,6 @@ class ImpactAssessor:
             short_topic_name=assessment.short_topic_name,
             topic_icon_key=assessment.topic_icon_key,
             subject_regions=assessment.subject_regions,
+            target_region=assessment.target_region,
+            is_home_affairs=assessment.is_home_affairs,
         )

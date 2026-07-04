@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 
 
 # ─── COLLECTION ───────────────────────────────────────────────────────────────
@@ -47,6 +48,7 @@ class Article:
     is_official_source: bool = False    # True for curated official fallback sources
     origin_region: str | None = None    # editorial/source region represented by the article
     searched_provider: str | None = None  # Provider stage that produced this searched article
+    ownership_suppressed: bool = False    # True when the ownership gate suppresses this article
 
 
 @dataclass
@@ -103,6 +105,10 @@ class ImpactAssessment:
     short_topic_name: str | None = None
     topic_icon_key: str | None = None
     subject_regions: list[str] = field(default_factory=list)
+    target_region: str | None = None      # ISO alpha-2 of whose domestic affairs the story is about
+    is_home_affairs: bool = False         # True when the story falls within the 内政 boundary
+    gate_blocked: list[str] = field(default_factory=list)   # sources the gate suppressed (foreign 内政)
+    gate_review: list[str] = field(default_factory=list)    # sources the gate downranked to review
     signal: float = 0.0
     composite: float = 0.0
     status: str = "publishable"     # publishable|needs_review|seek_more_evidence|suppress
@@ -305,6 +311,33 @@ CERTIFICATION_CODES: dict[str, tuple[str, str]] = {
     "MBFC": ("MBFC 事实报道 High", "MBFC High Factual"),
     "JTI":  ("RSF 新闻信任认证", "RSF Journalism Trust Initiative"),
 }
+
+# ─── SOURCE OWNERSHIP (State Media Matrix) ─────────────────────────────────────
+
+class Ownership(str, Enum):
+    """State Media Matrix classification per source. Editorial control, not funding, is decisive."""
+    INDEPENDENT_PUBLIC = "independent_public"
+    INDEPENDENT_NONPROFIT = "independent_nonprofit"
+    INDEPENDENT_PRIVATE = "independent_private"
+    PRIVATE_CONSTRAINED = "private_constrained"
+    INDEPENDENT_PRIVATE_LOW_EVIDENCE = "independent_private_low_evidence"
+    STATE_INFLUENCED_REVIEW = "state_influenced_review"
+    STATE_CONTROLLED_BLOCK = "state_controlled_block"
+
+# Gate outcomes derived from ownership × cross-border × 内政
+OWNERSHIP_GATE_ALLOW: frozenset[str] = frozenset({
+    Ownership.INDEPENDENT_PUBLIC.value,
+    Ownership.INDEPENDENT_NONPROFIT.value,
+    Ownership.INDEPENDENT_PRIVATE.value,
+})
+OWNERSHIP_GATE_REVIEW: frozenset[str] = frozenset({
+    Ownership.PRIVATE_CONSTRAINED.value,
+    Ownership.INDEPENDENT_PRIVATE_LOW_EVIDENCE.value,
+    Ownership.STATE_INFLUENCED_REVIEW.value,
+})
+OWNERSHIP_GATE_SUPPRESS: frozenset[str] = frozenset({
+    Ownership.STATE_CONTROLLED_BLOCK.value,
+})
 
 
 @dataclass(frozen=True)

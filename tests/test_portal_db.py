@@ -59,6 +59,25 @@ def test_query_evaluations_returns_subject_regions_and_selected_flag(tmp_path):
     assert rows[0]["selected"] == 0
 
 
+def test_query_evaluations_returns_gate(tmp_path):
+    db = tmp_path / "n.db"
+    init_db(db)
+    insert_cluster_evaluation(
+        report_date="2026-06-14", cluster_key="kg", dims={"scope": 7},
+        rationale="r", signal=0.4, composite=0.6, rank=1,
+        display_category="国际时政", status="suppress",
+        flags=["ownership_suppressed_all"], evaluated_by_llm=True, model="m",
+        subject_regions=["de"], db_path=db,
+        gate={"target": "de", "is_home_affairs": True,
+              "blocked": ["华尔街见闻", "中国新闻网"], "review": []},
+    )
+    rows = query_evaluations("2026-06-14", "2026-06-14", db_path=db)
+    assert len(rows) == 1
+    assert rows[0]["gate"]["target"] == "de"
+    assert rows[0]["gate"]["blocked"] == ["华尔街见闻", "中国新闻网"]
+    assert rows[0]["gate"]["review"] == []
+
+
 def test_insert_and_list_corrections(tmp_path):
     db = tmp_path / "n.db"
     init_db(db)

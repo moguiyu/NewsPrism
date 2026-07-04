@@ -288,6 +288,10 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute(
                 "ALTER TABLE cluster_evaluations ADD COLUMN subject_regions TEXT NOT NULL DEFAULT '[]'"
             )
+        if "gate" not in eval_columns:
+            conn.execute(
+                "ALTER TABLE cluster_evaluations ADD COLUMN gate TEXT NOT NULL DEFAULT '{}'"
+            )
 
 
 @contextmanager
@@ -661,6 +665,7 @@ def insert_cluster_evaluation(
     evaluated_by_llm: bool,
     model: str | None,
     subject_regions: list[str] | None = None,
+    gate: dict | None = None,
     db_path: Path = DB_PATH,
 ) -> int:
     """Persist one cluster's impact evaluation (upsert on report_date+cluster_key)."""
@@ -669,9 +674,9 @@ def insert_cluster_evaluation(
             """INSERT INTO cluster_evaluations (
                    report_date, cluster_key, dims, rationale, signal, composite,
                    rank, display_category, status, flags, evaluated_by_llm, model,
-                   subject_regions
+                   subject_regions, gate
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(report_date, cluster_key) DO UPDATE SET
                    dims = excluded.dims,
                    rationale = excluded.rationale,
@@ -684,6 +689,7 @@ def insert_cluster_evaluation(
                    evaluated_by_llm = excluded.evaluated_by_llm,
                    model = excluded.model,
                    subject_regions = excluded.subject_regions,
+                   gate = excluded.gate,
                    cluster_id = NULL,
                    selected = 0""",
             (
@@ -700,6 +706,7 @@ def insert_cluster_evaluation(
                 1 if evaluated_by_llm else 0,
                 model,
                 json.dumps(list(subject_regions or []), ensure_ascii=False),
+                json.dumps(gate or {}, ensure_ascii=False),
             ),
         )
         return cur.lastrowid
@@ -926,7 +933,7 @@ def query_evaluations(
         rows = conn.execute(
             """SELECT e.id, e.cluster_id, e.report_date, e.cluster_key, e.dims,
                       e.rationale, e.signal, e.composite, e.rank, e.selected,
-                      e.display_category, e.status, e.flags, e.subject_regions,
+                      e.display_category, e.status, e.flags, e.subject_regions, e.gate,
                       e.evaluated_by_llm, c.summary AS cluster_summary, c.article_ids,
                       (SELECT f.verdict FROM editorial_feedback f
                        WHERE f.cluster_id = e.cluster_id
@@ -940,11 +947,12 @@ def query_evaluations(
     result = []
     for row in rows:
         item = dict(row)
-        for key in ("dims", "flags", "subject_regions"):
+        for key in ("dims", "flags", "subject_regions", "gate"):
+            default = {} if key in ("dims", "gate") else []
             try:
-                item[key] = json.loads(item[key]) if item.get(key) else ([] if key != "dims" else {})
+                item[key] = json.loads(item[key]) if item.get(key) else default
             except (TypeError, ValueError):
-                item[key] = [] if key != "dims" else {}
+                item[key] = default
         result.append(item)
     return result
 

@@ -54,3 +54,8 @@ editorial_rules:
     description: Summaries must stay within confirmed or explicitly attributed evidence.
   - id: frame_attribution
     description: Attribute national, institutional, or commercial framing to its source.
+
+ownership:
+  weight_multipliers:
+    private_constrained: 0.85
+    independent_private_low_evidence: 0.75

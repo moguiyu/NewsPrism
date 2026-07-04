@@ -160,6 +160,28 @@ def heat_class(value: float, scale: float) -> str:
     return f"c{min(4, int(frac * 5))}" if frac < 1.0 else "c4"
 
 
+def gate_badge(gate: dict) -> dict:
+    """Ownership-gate verdict for one cluster evaluation, for the 单日审查 内政 column.
+
+    Returns {label, cls, title}. Gate is active only when target_region is set:
+    blocked = state-controlled source on foreign 内政 (suppress), review =
+    constrained/low-evidence source (downrank), else allowed (independent/public).
+    """
+    if not gate or not gate.get("target"):
+        return {"label": "—", "cls": "gate-none", "title": "非内政 / 门控未触发"}
+    target = gate["target"]
+    blocked = gate.get("blocked") or []
+    review = gate.get("review") or []
+    if blocked:
+        return {"label": "禁", "cls": "gate-block",
+                "title": f"{target} 内政 · 禁(state-controlled): {', '.join(blocked)}"}
+    if review:
+        return {"label": "审", "cls": "gate-review",
+                "title": f"{target} 内政 · 审(constrained/low-evidence): {', '.join(review)}"}
+    return {"label": "放", "cls": "gate-allow",
+            "title": f"{target} 内政 · 独立/公共媒体放行"}
+
+
 def sparkline_svg(values: list[float], width: int = 160, height: int = 32) -> str:
     """Tiny inline SVG line for a trend series (no JS, no deps)."""
     pts = [v for v in values if v is not None]
