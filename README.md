@@ -19,7 +19,7 @@ Current major release: `v0.5.1`.
 - LLM-driven event clustering (single API call) groups articles by real-world event identity, not just topic overlap; falls back to embedding-based clustering automatically
 - LLM multi-dimensional impact evaluation ranks stories by real-world consequence — scope, severity, novelty, actor influence, decision relevance, feelgood — blended with a cross-source signal under calibrated weights (no keyword matching)
 - Self-evolving selection: editor 👍/👎 feedback nudges the impact weights weekly and distills a persistent editorial-policy memo back into the scoring prompt
-- **State Media Matrix ownership gate**: every source is independently classified (7 tiers); state-controlled outlets are blocked from covering another country's 内政 (domestic governance) while independent and public-service media retain full standing
+- **State Media Matrix ownership gate**: every source is independently classified (7 tiers); state-controlled outlets are blocked from covering another country's 内政 (domestic governance only — disasters, diplomacy, trade, and war are excluded) while independent and public-service media retain full standing
 - Keyword-free storyline grouping with a coherence gate, plus compact cross-day timelines for developing topics
 - Batch summarisation processes all stories in one LLM call (~36 s → ~10 s per publish cycle)
 - Multilingual collection across Chinese, English, Japanese, Korean, Russian, Polish, Dutch, and more
