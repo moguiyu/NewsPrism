@@ -3,13 +3,14 @@
 {% include "_filters.html" %}
 <p class="muted">来源国仅对已入选报道可见（候选无来源展开）。</p>
 <table>
-<tr><th>#</th><th>类别</th><th>主题国</th><th>状态</th>
+<tr><th>#</th><th>类别</th><th>主题国</th><th>状态</th><th title="所有权门控：state-controlled 报道他国内政=禁，constrained/low-evidence=审">内政</th>
 {% for d in DIMENSIONS %}<th>{{ d[:4] }}</th>{% endfor %}
 <th>信号</th><th>综合</th><th>入选</th><th>标题/摘要</th><th>反馈</th></tr>
 {% for r in rows %}
 <tr>
 <td>{{ r.rank or '' }}</td><td>{{ r.display_category }}</td>
 <td>{{ r.subject_regions|join(', ') }}</td><td>{{ r.status }}</td>
+{% set gb = gate_badge(r.gate) %}<td class="{{ gb.cls }}" title="{{ gb.title }}">{{ gb.label }}</td>
 {% for d in DIMENSIONS %}<td class="{{ heat_class(r.dims.get(d,0), 10) }}">{{ r.dims.get(d,0) }}</td>{% endfor %}
 <td>{{ '%.2f'|format(r.signal) }}</td><td>{{ '%.3f'|format(r.composite) }}</td>
 <td>{{ '✓' if r.selected else '' }}</td>

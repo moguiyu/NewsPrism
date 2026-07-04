@@ -113,6 +113,8 @@ def test_state_controlled_block_foreign_naizheng_suppressed():
     assert article.ownership_suppressed is True
     assert assessment.status == "suppress"  # all articles suppressed
     assert "ownership_suppressed_all" in assessment.flags
+    assert assessment.gate_blocked == ["Sputnik"]
+    assert assessment.gate_review == []
 
 
 def test_state_controlled_block_own_naizheng_allowed():
@@ -161,6 +163,8 @@ def test_independent_public_foreign_naizheng_allowed():
 
     assert article.ownership_suppressed is False
     assert assessment.status == "publishable"
+    assert assessment.gate_blocked == []
+    assert assessment.gate_review == []
 
 
 def test_private_constrained_foreign_naizheng_needs_review():
@@ -179,6 +183,8 @@ def test_private_constrained_foreign_naizheng_needs_review():
     assert article.ownership_suppressed is False
     assert assessment.status == "needs_review"
     assert assessment.composite == original_composite * 0.85
+    assert assessment.gate_review == ["ITHome"]
+    assert assessment.gate_blocked == []
 
 
 def test_cluster_mixed_sources_suppress_only_blocked():

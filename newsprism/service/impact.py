@@ -348,8 +348,8 @@ class ImpactAssessor:
             f"- topic_icon_key：只能从这些键中选一个：{icons}\n"
             "- rationale：不超过 30 个中文字符，说明影响判断的核心依据\n"
             "- subject_regions：该事件主要涉及的国家/地区，用小写 ISO 代码数组（最多 3 个），如 [\"il\",\"ir\"]；与新闻来源国不同，指事件本身发生/影响的国家\n"
-            "- target_region：如果事件主要涉及一个国家的内政（国内治理），填写该国的小写 ISO 代码；如果是外交、贸易、战争、国际组织或科技/文化事件，填 null\n"
-            "- is_home_affairs：布尔值。true 表示这是某国的内政（选举、国内政策、法律、人权国内实施、社会保障、国内治安、抗议）；false 表示外交、战争、贸易、国际组织、科技、文化或无法确定\n"
+            "- target_region：如果事件主要涉及一个国家的内政（国内治理），填写该国的小写 ISO 代码；如果是外交、贸易、战争、国际组织、科技/文化事件，或自然灾害/事故及其纯伤亡报道，填 null\n"
+            "- is_home_affairs：布尔值。true 仅指某国的国内治理（选举、国内政策、法律、人权国内实施、社会保障、国内治安、抗议）；false 表示外交、战争、贸易、国际组织、科技、文化、体育、娱乐，或自然灾害/事故及其伤亡人数，或无法确定。关键：地震、洪水、矿难、爆炸等灾难的死亡/受伤人数本身不是内政，应填 false 与 target_region=null；只有当报道核心是该国政府的应急治理、问责或政策回应时才算内政\n"
             "要求：\n"
             "1. 按事件实际后果打分，不要因为来源多就抬高分数（来源信号由系统单独计算）。\n"
             "2. 例行市场波动、产品促销、明星八卦等低影响内容应得到明显低分。\n"
@@ -523,6 +523,9 @@ class ImpactAssessor:
         if target is None or not is_ha:
             return  # Gate inactive — no clear foreign 内政 target
 
+        # Reset so re-running (e.g. recompute_local) doesn't double-append.
+        assessment.gate_blocked = []
+        assessment.gate_review = []
         suppressed_count = 0
         needs_review = False
 
@@ -536,12 +539,14 @@ class ImpactAssessor:
             if ownership in OWNERSHIP_GATE_SUPPRESS:
                 article.ownership_suppressed = True
                 suppressed_count += 1
+                assessment.gate_blocked.append(article.source_name)
                 logger.debug(
                     "Ownership gate: suppressed %s (%s) on %s 内政 (%s)",
                     article.source_name, ownership, target, article.title[:60],
                 )
             elif ownership in OWNERSHIP_GATE_REVIEW:
                 needs_review = True
+                assessment.gate_review.append(article.source_name)
                 multiplier = self._gate_weight_multipliers.get(ownership, 1.0)
                 logger.debug(
                     "Ownership gate: review %s (%s) on %s 内政, multiplier=%.2f",
@@ -550,6 +555,7 @@ class ImpactAssessor:
             elif ownership not in OWNERSHIP_GATE_ALLOW:
                 # Unknown ownership value — default to review (safe)
                 needs_review = True
+                assessment.gate_review.append(article.source_name)
                 logger.warning(
                     "Ownership gate: unknown ownership %r for %s → flagging for review",
                     ownership, article.source_name,

@@ -107,6 +107,8 @@ class ImpactAssessment:
     subject_regions: list[str] = field(default_factory=list)
     target_region: str | None = None      # ISO alpha-2 of whose domestic affairs the story is about
     is_home_affairs: bool = False         # True when the story falls within the 内政 boundary
+    gate_blocked: list[str] = field(default_factory=list)   # sources the gate suppressed (foreign 内政)
+    gate_review: list[str] = field(default_factory=list)    # sources the gate downranked to review
     signal: float = 0.0
     composite: float = 0.0
     status: str = "publishable"     # publishable|needs_review|seek_more_evidence|suppress

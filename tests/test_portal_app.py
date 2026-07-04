@@ -45,6 +45,24 @@ def test_day_inspector_lists_rows(client):
     assert "国际时政" in r.text and "体育运动" in r.text
 
 
+def test_day_renders_ownership_gate_badge(tmp_path):
+    db = tmp_path / "n.db"
+    init_db(db)
+    insert_cluster_evaluation(report_date="2026-06-14", cluster_key="kg",
+        dims={"scope": 7}, rationale="r", signal=0.4, composite=0.6, rank=1,
+        display_category="国际时政", status="suppress",
+        flags=["ownership_suppressed_all"], evaluated_by_llm=True, model="m",
+        subject_regions=["de"], db_path=db,
+        gate={"target": "de", "is_home_affairs": True,
+              "blocked": ["华尔街见闻"], "review": []})
+    client = TestClient(create_app(db_path=db))
+    html = client.get("/day?date=2026-06-14").text
+    assert "内政" in html              # column header renders
+    assert "禁" in html                # blocked-verdict badge renders
+    assert "gate-block" in html        # badge CSS class applied
+    assert "华尔街见闻" in html          # blocked source appears in tooltip
+
+
 def test_matrices_ok(client):
     r = client.get("/matrices?date_from=2026-06-14&date_to=2026-06-14")
     assert r.status_code == 200
