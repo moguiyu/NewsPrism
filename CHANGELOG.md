@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## v0.5.2 - 2026-07-04
+
+### Added
+
+- State Media Matrix ownership gate: every source is classified into one of
+  seven ownership tiers (from `independent_public` to `state_controlled_block`)
+  in `config.yaml`. The impact-evaluation LLM classifies each cluster's
+  `target_region` and `is_home_affairs`; a per-article gate then suppresses
+  state-controlled / captured outlets from covering **another country's** 内政
+  (domestic governance), preserves own-country 内政 as the official perspective,
+  and applies a configurable weight penalty to constrained / low-evidence
+  sources. Independent and public-service media retain full standing on any
+  country's affairs. All failure paths safe-degrade to no block.
+- 内政 is calibrated to domestic governance only — natural disasters, casualties,
+  diplomacy, trade, and war are explicitly excluded (negative prompt examples
+  added after a Venezuela-earthquake over-block).
+- Ownership gate verdicts are visible in the admin portal 单日审查 view as a
+  内政 column (禁 / 审 / 放 / —) with target region and blocked sources in the
+  tooltip, backed by a new `gate` JSON column on `cluster_evaluations`.
+- Read-only audit script (`python -m newsprism.runtime.audit_ownership`) that
+  reports cross-border 内政 coverage by source, target region, and ownership tier.
+
+### Changed
+
+- All 51 sources stamped with `ownership` + `ownership_detail` corroboration
+  notes; `config/editorial-values.yaml` gains an `ownership.weight_multipliers`
+  key for the constrained / low-evidence tiers.
+
 ## v0.5.1 - 2026-06-21
 
 ### Added
