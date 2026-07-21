@@ -218,16 +218,16 @@ def select_report_clusters(
     main_pool: list[ArticleCluster] = []
     if hot_cfg.get("enabled", False):
         max_topic_tabs = int(hot_cfg.get("max_topic_tabs", 3))
-        min_items_per_topic = int(hot_cfg.get("min_items_per_topic", 5))
         families: dict[str, list[ArticleCluster]] = defaultdict(list)
         for cluster in ranked:
             if cluster.storyline_key and _cluster_is_hot_member(cluster):
                 families[cluster.storyline_key].append(cluster)
+        # Tab admission at cluster level mirrors select_hot_topic_families:
+        # every family with ≥2 members claims a tab. (Issue #2 rec #4)
         eligible = [
             (key, members)
             for key, members in families.items()
-            if len(members) >= min_items_per_topic
-            and any(cluster.storyline_role == "core" for cluster in members)
+            if len(members) >= 2
         ]
         eligible.sort(key=lambda item: (-len(item[1]), -max(_composite(c) for c in item[1])))
         hot_keys = {key for key, _members in eligible[:max_topic_tabs]}
@@ -314,14 +314,16 @@ def select_hot_topic_families(
         else:
             standalone.append(summary)
 
+    # Tab admission: every storyline family with ≥2 members claims a tab.
+    # (Issue #2 rec #4: country-conflict families that previously spilled into
+    # the main lane — Iran-US, RU-UA — now get their own tab.) Single-member
+    # families stay in the main lane; they are genuinely standalone events.
+    # The "has a core member" gate is dropped: when same_conflict_different_event
+    # glue produces a spillover-only family, we still want it visible as a tab.
     hot_keys = [
         key
         for key, members in grouped.items()
-        if len(members) >= min_items_per_topic
-        and any(
-            (member.storyline_role or getattr(member.cluster, "storyline_role", "none")) == "core"
-            for member in members
-        )
+        if len(members) >= 2
     ]
     hot_keys.sort(key=lambda key: (-len(grouped[key]), group_order.get(key, 0)))
     hot_keys = hot_keys[:max_topic_tabs]

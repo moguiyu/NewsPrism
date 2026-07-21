@@ -132,7 +132,10 @@ class StorylineRelationItem(BaseModel):
     left_index: int = Field(description="Left cluster index from the provided candidate pair list.")
     right_index: int = Field(description="Right cluster index from the provided candidate pair list.")
     relation: str = Field(
-        description="One of: same_core_storyline, same_direct_spillover_storyline, not_related.",
+        description=(
+            "One of: same_core_storyline, same_direct_spillover_storyline, "
+            "same_conflict_different_event, not_related."
+        ),
     )
     confidence: float = Field(description="Confidence between 0 and 1.")
 
@@ -462,6 +465,7 @@ class Summarizer:
                 if relation not in {
                     "same_core_storyline",
                     "same_direct_spillover_storyline",
+                    "same_conflict_different_event",
                     "not_related",
                 }:
                     relation = "not_related"
@@ -604,6 +608,7 @@ class Summarizer:
         valid_relations = {
             "same_core_storyline",
             "same_direct_spillover_storyline",
+            "same_conflict_different_event",
             "not_related",
         }
         for match in pattern.finditer(content):
@@ -915,11 +920,16 @@ class Summarizer:
             "关系定义：\n"
             "1. same_core_storyline: 两个条目属于同一个核心事件/政策/灾害/选举/危机主线。\n"
             "2. same_direct_spillover_storyline: 其中一个条目是另一个核心事件的直接外溢或直接后果，如航运、市场、监管、交通、外交即时反应。\n"
-            "3. not_related: 仅有宽泛地域、行业、主题相似，或属于更远的二级外溢，不应归为同一 storyline。\n"
-            "4. precision-first: 宁可判 not_related，也不要因为大区域相似或泛主题背景就硬合并。\n"
-            "5. history_storyline 只是辅助线索，不能单独决定相关性。\n"
-            "6. confidence 给出 0 到 1 之间的小数。\n"
-            "7. 只输出 JSON，格式如下：\n"
+            "3. same_conflict_different_event: 两个条目属于同一持续中的多日重大冲突/危机/长期对峙"
+            "（例如俄乌战争、美伊对峙、以巴冲突、中美贸易战、朝鲜半岛局势）的不同日常事件。"
+            "它们共享一个 storyline 但角色为 spillover；仅适用于这种已被定义为持续事件的多日冲突，"
+            "不适用于普通主题相似或一次性事件。\n"
+            "4. not_related: 仅有宽泛地域、行业、主题相似，或属于更远的二级外溢，不应归为同一 storyline。\n"
+            "5. precision-first: 对于 ordinary 主题相似宁可判 not_related，也不要因为大区域相似或泛主题背景就硬合并。"
+            "但对于第 3 类（同一持续冲突的不同日常事件），应主动识别并归入 same_conflict_different_event。\n"
+            "6. history_storyline 只是辅助线索，不能单独决定相关性。\n"
+            "7. confidence 给出 0 到 1 之间的小数。\n"
+            "8. 只输出 JSON，格式如下：\n"
             "{\n"
             '  "relations": [\n'
             '    {"left_index": 1, "right_index": 2, "relation": "same_core_storyline", "confidence": 0.82}\n'

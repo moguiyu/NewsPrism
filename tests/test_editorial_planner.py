@@ -121,12 +121,19 @@ def test_select_normalizes_legacy_categories_for_diversity_cap():
     ]
 
 
-def test_base_plan_returns_small_non_hot_group_to_regular_pool_without_focus_lane():
+def test_base_plan_two_member_storyline_claims_tab_under_new_policy():
+    """Issue #2 rec #4: every storyline family with ≥2 members gets a tab.
+
+    The previous behavior (small groups → main lane) produced the "spilled
+    into main lane" symptom for ongoing-conflict families. Under the new
+    policy, this 2-member family claims a tab; only the standalone summaries
+    flow to the main lane.
+    """
     cfg = _config(max_clusters=3)
     cfg.output["hot_topics"] = {
         "enabled": True,
-        "max_topic_tabs": 3,
-        "min_items_per_topic": 5,
+        "max_topic_tabs": 8,
+        "min_items_per_topic": 3,
         "tab_name_max_chars": 10,
     }
     summaries = [
@@ -138,11 +145,37 @@ def test_base_plan_returns_small_non_hot_group_to_regular_pool_without_focus_lan
 
     plan = EditorialPlanner(cfg).base_plan(summaries)
 
+    assert len(plan.hot_topics) == 1
+    assert plan.hot_topics[0]["macro_topic_key"] == "small-topic"
+    assert plan.hot_topics[0]["member_count"] == 2
+    assert plan.focus_storylines == []
+    # Standalones flow to the main lane (max_clusters=3, both fit), ranked by composite.
+    assert [summary.cluster.topic_category for summary in plan.regular_summaries] == [
+        "standalone high",
+        "standalone low",
+    ]
+
+
+def test_base_plan_single_member_storyline_stays_in_main_lane():
+    """Single-member storyline families do NOT get a tab — they are genuinely standalone."""
+    cfg = _config(max_clusters=3)
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 8,
+        "min_items_per_topic": 3,
+        "tab_name_max_chars": 10,
+    }
+    summaries = [
+        _storyline_summary("solo storyline", 0.95, "solo-topic", role="core"),
+        _summary("standalone high", 0.80, category="商业财经"),
+    ]
+
+    plan = EditorialPlanner(cfg).base_plan(summaries)
+
     assert plan.hot_topics == []
     assert plan.focus_storylines == []
     assert [summary.cluster.topic_category for summary in plan.regular_summaries] == [
-        "small group core",
-        "small group follow",
+        "solo storyline",
         "standalone high",
     ]
 

@@ -99,7 +99,14 @@ def _impact_item(
 
 
 def test_state_controlled_block_foreign_naizheng_suppressed():
-    """Sputnik (ru, state_controlled_block) on US elections -> suppressed."""
+    """Sputnik (ru, state_controlled_block) on US 内政 — single-article cluster.
+
+    Under the Issue #3 policy update (gate_suppress_min_cluster_size=4),
+    small clusters where all articles are state-controlled no longer
+    hard-suppress the event. The article is still marked suppressed at the
+    source level (so it carries the wrong frame), but the cluster becomes
+    needs_review so a human editor sees the event instead of it vanishing.
+    """
     assessor = ImpactAssessor(_config(
         _source("Sputnik", "ru", "state_controlled_block"),
     ))
@@ -111,8 +118,8 @@ def test_state_controlled_block_foreign_naizheng_suppressed():
     assessor._gate_cluster(cluster, assessment)
 
     assert article.ownership_suppressed is True
-    assert assessment.status == "suppress"  # all articles suppressed
-    assert "ownership_suppressed_all" in assessment.flags
+    assert assessment.status == "needs_review"  # small cluster: retain for human review
+    assert "ownership_all_blocked_review" in assessment.flags
     assert assessment.gate_blocked == ["Sputnik"]
     assert assessment.gate_review == []
 
@@ -208,7 +215,13 @@ def test_cluster_mixed_sources_suppress_only_blocked():
 
 
 def test_cluster_all_blocked_dropped():
-    """All articles state_controlled on foreign 内政 -> entire cluster suppressed."""
+    """All articles state_controlled on foreign 内政 with a small (2-article)
+    cluster → retained as needs_review (Issue #3: small clusters don't
+    hard-suppress; only larger clusters with cross-source signal do).
+
+    Use a 5-article variant below (test_large_cluster_all_blocked_still_suppressed)
+    to verify the size gate still triggers hard suppression when warranted.
+    """
     assessor = ImpactAssessor(_config(
         _source("Sputnik", "ru", "state_controlled_block"),
         _source("VOA", "us", "state_controlled_block"),
@@ -225,7 +238,64 @@ def test_cluster_all_blocked_dropped():
 
     assert a1.ownership_suppressed is True  # ru->fr, cross-border
     assert a2.ownership_suppressed is True  # us->fr, cross-border
+    # Small cluster (2 < 4) → demoted to needs_review, not hard-suppressed.
+    assert assessment.status == "needs_review"
+    assert "ownership_all_blocked_review" in assessment.flags
+
+
+def test_large_cluster_all_blocked_still_suppressed():
+    """≥4 state_controlled articles on foreign 内政 still hard-suppress — the
+    size gate (gate_suppress_min_cluster_size=4) preserves the original intent
+    for clusters with enough cross-source signal to be confidently state-only.
+    """
+    assessor = ImpactAssessor(_config(
+        _source("Sputnik", "ru", "state_controlled_block"),
+        _source("VOA", "us", "state_controlled_block"),
+        _source("Xinhua", "cn", "state_controlled_block"),
+        _source("PressTV", "ir", "state_controlled_block"),
+    ))
+    articles = [
+        _article("Sputnik", "France protests headline 1"),
+        _article("VOA", "France protests headline 2"),
+        _article("Xinhua", "France protests headline 3"),
+        _article("PressTV", "France protests headline 4"),
+    ]
+    cluster = _cluster(articles)
+    item = _impact_item(target_region="fr", is_home_affairs=True)
+
+    assessment = assessor._build_assessment(cluster, item, assessor.weights())
+    # Force composite below review_floor so the only path to suppress is the
+    # gate (not the composite floor).
+    assessment.composite = 0.20  # below review_floor (0.34) and suppress_floor (0.18) floor doesn't apply post-LLM
+    assessor._gate_cluster(cluster, assessment)
+
+    assert all(a.ownership_suppressed for a in articles)
     assert assessment.status == "suppress"
+    assert "ownership_suppressed_all" in assessment.flags
+
+
+def test_small_cluster_high_composite_needs_review():
+    """A 2-article all-state-controlled cluster on a major event (high composite)
+    is retained as needs_review — Issue #3 case: UK PM resignation had composite
+    ~0.59 but was hard-suppressed because both articles were CN state media.
+    """
+    assessor = ImpactAssessor(_config(
+        _source("凤凰网", "cn", "state_controlled_block"),
+        _source("卫星通讯社", "ru", "state_controlled_block"),
+    ))
+    a1 = _article("凤凰网", "UK PM Starmer resigns")
+    a2 = _article("卫星通讯社", "UK PM Starmer resigns")
+    cluster = _cluster([a1, a2])
+    item = _impact_item(target_region="gb", is_home_affairs=True)
+
+    assessment = assessor._build_assessment(cluster, item, assessor.weights())
+    assessment.composite = 0.59  # high-impact world event
+    assessor._gate_cluster(cluster, assessment)
+
+    assert a1.ownership_suppressed is True
+    assert a2.ownership_suppressed is True
+    assert assessment.status == "needs_review"  # not suppressed — high_impact override
+    assert "ownership_all_blocked_review" in assessment.flags
 
 
 def test_missing_ownership_defaults_to_review():

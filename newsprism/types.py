@@ -49,6 +49,11 @@ class Article:
     origin_region: str | None = None    # editorial/source region represented by the article
     searched_provider: str | None = None  # Provider stage that produced this searched article
     ownership_suppressed: bool = False    # True when the ownership gate suppresses this article
+    # Inline placeholder for a missing regional perspective (search failed / no result).
+    # Renders flat in the source list with flag + reason tooltip; never counts as a real source.
+    is_placeholder: bool = False
+    search_acceptance_status: str | None = None   # "accepted" | "failed" | None
+    search_acceptance_reason: str | None = None   # short machine code, e.g. "http_401", "stale_result"
 
 
 @dataclass
@@ -214,7 +219,13 @@ class ArticleCluster:
     display_category: str | None = None
 
     def __post_init__(self) -> None:
-        self.sources = list(dict.fromkeys(a.source_name for a in self.articles))
+        # Placeholders are inline "missing perspective" markers — never count
+        # toward sources, perspectives, or multi-source detection.
+        self.sources = list(
+            dict.fromkeys(
+                a.source_name for a in self.articles if not getattr(a, "is_placeholder", False)
+            )
+        )
 
     @property
     def is_multi_source(self) -> bool:

@@ -77,6 +77,12 @@ class Config:
     report_base_url: str = field(default_factory=lambda: os.environ.get("REPORT_BASE_URL", "http://localhost:8080"))
     
     # Active Search
+    # Tavily supports key rotation: TAVILY_API_KEYS is a comma-separated list,
+    # tried in order until one succeeds (HTTP 401/403 triggers failover).
+    # TAVILY_API_KEY (singular) remains as a backward-compat alias appended to the list.
+    tavily_api_keys: list[str] = field(default_factory=lambda: [
+        k.strip() for k in os.environ.get("TAVILY_API_KEYS", "").split(",") if k.strip()
+    ] or [os.environ.get("TAVILY_API_KEY", "") for _ in range(1)] if os.environ.get("TAVILY_API_KEY") else [])
     tavily_api_key: str = field(default_factory=lambda: os.environ.get("TAVILY_API_KEY", ""))
     brightdata_api_key: str = field(default_factory=lambda: os.environ.get("BRIGHTDATA_API_KEY", ""))
     brightdata_zone: str = field(default_factory=lambda: os.environ.get("BRIGHTDATA_ZONE", "serp_api1"))

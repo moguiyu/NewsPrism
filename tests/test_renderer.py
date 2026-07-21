@@ -1713,3 +1713,140 @@ def test_render_copies_fonts_to_output(tmp_path):
     assert (output_fonts / "fonts.css").exists()
     woff2_files = list(output_fonts.glob("*.woff2"))
     assert len(woff2_files) > 0
+
+
+def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer, tmp_path):
+    """Issue #1: when a regional perspective search fails, the reader sees a
+    flat inline ⚠️ placeholder with the country flag + failure reason tooltip
+    instead of silent absence.
+    """
+    renderer.output_dir = tmp_path
+    organic = Article(
+        url="https://reuters.com/event",
+        title="Major event headline",
+        source_name="Reuters",
+        published_at=datetime.now(tz=timezone.utc),
+        content="Major event body.",
+        origin_region="us",
+    )
+    placeholder = Article(
+        url="placeholder:fr:event-key",
+        title="待补充：France视角",
+        source_name="[France视角待补]",
+        published_at=datetime.now(tz=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="fr",
+        origin_region="fr",
+        searched_provider="tavily_search",
+    )
+    placeholder.is_placeholder = True
+    placeholder.search_acceptance_status = "failed"
+    placeholder.search_acceptance_reason = "http_401"
+    cluster = ArticleCluster(topic_category="World News", articles=[organic, placeholder])
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**Major event headline**\n\nBody.",
+        perspectives={},
+    )
+
+    html_path = renderer.render([summary], date(2026, 7, 21), update_latest=False)
+    html = html_path.read_text(encoding="utf-8")
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+    # Placeholder is in the article list with the right shape.
+    articles = payload["clusters"][0]["articles"]
+    placeholder_rows = [a for a in articles if a.get("is_placeholder")]
+    assert len(placeholder_rows) == 1
+    assert placeholder_rows[0]["search_acceptance_status"] == "failed"
+    assert placeholder_rows[0]["search_acceptance_reason"] == "http_401"
+
+    # Rendered HTML includes the placeholder source name + the 🇫🇷 flag +
+    # the ⚠️ marker + the failure-detail label, flat (no card/lift).
+    assert "[France视角待补]" in html
+    assert "🇫🇷" in html
+    assert "⚠️" in html
+    assert "鉴权失败" in html  # bilingual short label from _placeholder_failure_label
+
+
+def test_render_shared_storyline_tag_for_main_lane_same_key_clusters(renderer, tmp_path):
+    """Issue #2 rec #4 fallback: when 2+ main-lane clusters share a
+    storyline_key (they didn't claim a tab because of max_topic_tabs), each
+    card gets a flat shared-storyline tag above its title so the reader can
+    see the connection.
+    """
+    renderer.output_dir = tmp_path
+    cluster_a = ArticleCluster(
+        topic_category="World News",
+        articles=[Article(
+            url="https://reuters.com/a",
+            title="Conflict event A",
+            source_name="Reuters",
+            published_at=datetime.now(tz=timezone.utc),
+            content="A body.",
+        )],
+    )
+    cluster_a.storyline_key = "russia-ukraine-abcd1234"
+    cluster_a.storyline_name = "俄乌冲突"
+    cluster_a.macro_topic_key = "russia-ukraine-abcd1234"
+    cluster_a.macro_topic_name = "俄乌冲突"
+    cluster_b = ArticleCluster(
+        topic_category="World News",
+        articles=[Article(
+            url="https://reuters.com/b",
+            title="Conflict event B",
+            source_name="BBC",
+            published_at=datetime.now(tz=timezone.utc),
+            content="B body.",
+        )],
+    )
+    cluster_b.storyline_key = "russia-ukraine-abcd1234"
+    cluster_b.storyline_name = "俄乌冲突"
+    cluster_b.macro_topic_key = "russia-ukraine-abcd1234"
+    cluster_b.macro_topic_name = "俄乌冲突"
+
+    summaries = [
+        ClusterSummary(cluster=cluster_a, summary="**A**\n\nBody.", perspectives={}),
+        ClusterSummary(cluster=cluster_b, summary="**B**\n\nBody.", perspectives={}),
+    ]
+    # The renderer reads summary.storyline_key/name (set by editorial_planner
+    # from cluster attributes); mirror that here.
+    for s in summaries:
+        s.storyline_key = s.cluster.storyline_key
+        s.storyline_name = s.cluster.storyline_name
+        s.macro_topic_key = s.cluster.macro_topic_key
+        s.macro_topic_name = s.cluster.macro_topic_name
+
+    html_path = renderer.render(summaries, date(2026, 7, 21), update_latest=False)
+    html = html_path.read_text(encoding="utf-8")
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+    # Both clusters carry the shared label.
+    for c in payload["clusters"]:
+        assert c["shared_storyline_label"] == "俄乌冲突"
+    # The tag is rendered exactly twice in the HTML (once per main-lane card).
+    assert html.count('class="shared-storyline-tag"') == 2
+
+
+def test_render_does_not_add_shared_tag_when_only_one_cluster_per_key(renderer, tmp_path):
+    """Sanity: a single-member storyline in the main lane does NOT get a tag."""
+    renderer.output_dir = tmp_path
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[Article(
+            url="https://reuters.com/solo",
+            title="Solo event",
+            source_name="Reuters",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Solo body.",
+        )],
+    )
+    cluster.storyline_key = "russia-ukraine-abcd1234"
+    cluster.storyline_name = "俄乌冲突"
+    cluster.macro_topic_key = "russia-ukraine-abcd1234"
+    cluster.macro_topic_name = "俄乌冲突"
+    summary = ClusterSummary(cluster=cluster, summary="**Solo**\n\nBody.", perspectives={})
+
+    html_path = renderer.render([summary], date(2026, 7, 21), update_latest=False)
+    html = html_path.read_text(encoding="utf-8")
+    assert 'class="shared-storyline-tag"' not in html

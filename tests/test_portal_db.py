@@ -20,6 +20,41 @@ def test_subject_regions_column_added(tmp_path):
         assert "subject_regions" in _columns(conn, "cluster_evaluations")
 
 
+def test_ownership_suppressed_column_added_and_round_trips(tmp_path):
+    """Issue #5: ownership_suppressed is persisted at the article level so the
+    portal/audit can show WHICH articles were state-media-suppressed (not just
+    the aggregate cluster verdict).
+    """
+    db = tmp_path / "n.db"
+    init_db(db)
+    with get_conn(db) as conn:
+        assert "ownership_suppressed" in _columns(conn, "articles")
+
+    from newsprism.repo.db import get_articles_by_ids
+    blocked = Article(
+        url="https://example.com/blocked",
+        title="State media framing of foreign 内政",
+        source_name="Sputnik",
+        published_at=datetime.now(timezone.utc),
+        content="body",
+        ownership_suppressed=True,
+    )
+    allowed = Article(
+        url="https://example.com/allowed",
+        title="Independent reporting",
+        source_name="BBC",
+        published_at=datetime.now(timezone.utc),
+        content="body",
+        ownership_suppressed=False,
+    )
+    blocked_id = insert_article(blocked, db_path=db)
+    allowed_id = insert_article(allowed, db_path=db)
+
+    loaded = {a.id: a for a in get_articles_by_ids([blocked_id, allowed_id], db_path=db)}
+    assert loaded[blocked_id].ownership_suppressed is True
+    assert loaded[allowed_id].ownership_suppressed is False
+
+
 def test_feedback_corrections_table_created(tmp_path):
     db = tmp_path / "n.db"
     init_db(db)

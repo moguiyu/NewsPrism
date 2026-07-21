@@ -213,6 +213,74 @@ def test_resolver_ignores_subthreshold_edges():
     assert resolved[0].storyline_key != resolved[1].storyline_key
 
 
+def test_resolver_conflict_relation_glues_different_events_as_spillover():
+    """Issue #2 rec #3: same_conflict_different_event edges glue members into
+    one family with role=spillover (never core).
+
+    Simulates three distinct daily incidents of the Russia-Ukraine war that
+    have low pairwise centroid similarity (different locations, different
+    casualties). Under the OLD precision-first policy, the LLM marked them
+    not_related and they spilled into the main lane. Under the new policy,
+    the LLM mark of same_conflict_different_event glues them into one tab.
+    """
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer(
+            [
+                {"left_index": 0, "right_index": 1, "relation": "same_conflict_different_event", "confidence": 0.70},
+                {"left_index": 1, "right_index": 2, "relation": "same_conflict_different_event", "confidence": 0.65},
+            ]
+        ),
+        similarity_fn=lambda _t, _h: 0.0,
+    )
+    # Three semantically distinct Russia-Ukraine events (orthogonal embeddings
+    # would be rejected by the 0.60 coherence bar; the conflict relaxation
+    # lowers it to 0.40 for components glued by same_conflict_different_event).
+    # Titles share "Russia" / "Ukraine" tokens so they enter the pair-candidate
+    # pool via title_overlap; the LLM stub then returns the conflict relation.
+    clusters = [
+        ArticleCluster(topic_category="World News", articles=[_article("Russia Ukraine Odesa attack kills", [1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="World News", articles=[_article("Russia Ukraine merchant ships Black Sea", [0.0, 1.0, 0.0])]),
+        ArticleCluster(topic_category="World News", articles=[_article("Russia Ukraine troop losses 2022", [0.0, 0.0, 1.0])]),
+    ]
+    resolved = resolver.resolve(clusters, [], datetime(2026, 3, 15, tzinfo=timezone.utc).date())
+    # All three glued into one family.
+    keys = {c.storyline_key for c in resolved}
+    assert len(keys) == 1, f"expected single family, got keys={keys}"
+    # Roles: exactly one core (highest composite anchor), the rest spillover.
+    roles = [c.storyline_role for c in resolved]
+    assert roles.count("core") == 1
+    assert roles.count("spillover") == 2
+
+
+def test_resolver_conflict_relation_does_not_affect_non_conflict_components():
+    """The coherence relaxation applies ONLY to components with at least one
+    same_conflict_different_event edge — ordinary same_core/spillover components
+    keep the strict 0.60 coherence bar (don't re-introduce the over-merging bug
+    that motivated precision-first)."""
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer(
+            [
+                # Two unrelated events that happen to chain via a bogus same_core edge.
+                {"left_index": 0, "right_index": 1, "relation": "same_core_storyline", "confidence": 0.80},
+                {"left_index": 1, "right_index": 2, "relation": "same_core_storyline", "confidence": 0.78},
+            ]
+        ),
+        similarity_fn=lambda _t, _h: 0.0,
+    )
+    # Three semantically orthogonal events with NO conflict keywords.
+    clusters = [
+        ArticleCluster(topic_category="Tech", articles=[_article("Apple launches new phone", [1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="Sports", articles=[_article("World cup final preview", [0.0, 1.0, 0.0])]),
+        ArticleCluster(topic_category="Culture", articles=[_article("Museum opens new wing", [0.0, 0.0, 1.0])]),
+    ]
+    resolved = resolver.resolve(clusters, [], datetime(2026, 3, 15, tzinfo=timezone.utc).date())
+    # No conflict edges → strict 0.60 bar → split into separate families.
+    keys = {c.storyline_key for c in resolved}
+    assert len(keys) >= 2, f"expected split families, got keys={keys}"
+
+
 def test_resolver_reuses_historical_identity():
     resolver = StorylineResolver(
         _config(),

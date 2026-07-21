@@ -80,8 +80,12 @@ output:
     days: 3
   hot_topics:
     enabled: true
-    max_topic_tabs: 3
-    min_items_per_topic: 5
+    # Raised from 3 → 8 so each ongoing-conflict storyline family can claim its
+    # own tab (Issue #2 rec #4). The .cat-tabs horizontal scroll handles overflow.
+    max_topic_tabs: 8
+    # Lowered from 5 → 3: most storyline families had 1-3 members and spilled
+    # into the main lane even when they shared a clear storyline_key. (Issue #2)
+    min_items_per_topic: 3
     candidate_window: 40
     history_window_days: 5
     storyline_relation_batch_size: 8
@@ -89,12 +93,20 @@ output:
     storyline_blocker_similarity: 0.54
     storyline_blocker_title_overlap: 0.06
     storyline_edge_confidence_threshold: 0.50
-    storyline_history_similarity_threshold: 0.48
+    # Raised from 0.48 → 0.55 (Issue #4): tighter bar for reusing a historical
+    # storyline_key, so a weak match can't claim a key that has since been
+    # reassigned to an unrelated topic. Combined with content-derived keys.
+    storyline_history_similarity_threshold: 0.55
     storyline_admission_similarity: 0.64
     storyline_admission_title_overlap: 0.06
     # Min mean pairwise centroid cosine for all members of a storyline family;
     # incoherent transitively-chained components are split below this bar.
     storyline_coherence_min: 0.60
+    # Relaxed coherence bar for components whose members are glued by
+    # same_conflict_different_event edges (different daily incidents of the
+    # same ongoing conflict have low centroid similarity by design).
+    # Issue #2 rec #3.
+    storyline_conflict_coherence_min: 0.40
     cluster_validation_pair_similarity: 0.50
     cluster_validation_pair_title_overlap: 0.03
     cluster_validation_outlier_similarity: 0.58
