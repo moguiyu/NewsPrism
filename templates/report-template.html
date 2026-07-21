@@ -764,6 +764,20 @@
       color: var(--text);
     }
 
+    /* Flat shared-storyline tag — appears above the title when 2+ main-lane
+       cards belong to the same storyline family. (Issue #2 rec #4 fallback.) */
+    .shared-storyline-tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 6px;
+      margin-bottom: 8px;
+    }
+
     .card-title-text {
       flex: 1 1 280px;
       min-width: 0;
@@ -911,6 +925,25 @@
     .src-chip-link:hover {
       border-color: var(--border-hover);
       color: var(--text);
+    }
+
+    /* Inline missing-perspective placeholder (flat per AGENTS.md — no card/lift/shadow).
+       Muted italic text + dashed underline + help cursor; failure reason in tooltip. */
+    .src-chip:has(.source-placeholder-text),
+    .src-chip-link:has(.source-placeholder-text) {
+      cursor: help;
+      border-style: dashed;
+      opacity: .82;
+    }
+    .source-placeholder-text {
+      font-style: italic;
+      color: var(--muted);
+      text-decoration: underline dashed currentColor;
+      text-underline-offset: 3px;
+    }
+    .source-placeholder-detail {
+      color: var(--muted);
+      opacity: .85;
     }
 
     .footer-actions {
@@ -2551,6 +2584,14 @@
 <span data-lang-zh>{{ zh|safe }}</span><span data-lang-en>{{ (en if en is not none else zh)|safe }}</span>
 {%- endmacro %}
 
+{# ── 源条目内容宏 ──
+   flag + (🔍 for searched | ⚠️ for placeholder) + source name + cert badge + provenance label.
+   Placeholders (missing regional perspectives) render muted with a tooltip
+   carrying the failure reason; flat styling, no card/lift/shadow per AGENTS.md. #}
+{% macro source_chip_body(src) -%}
+{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_placeholder %}<span class="emoji" aria-hidden="true">⚠️</span>{% elif src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ src.source }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
+{%- endmacro %}
+
 <body>
 
   <div class="mobile-brand-bar">
@@ -2630,6 +2671,9 @@
       {% for c in clusters %}
       <div class="feed-card card" data-main-feed-card="true" data-cat="{{ c.broad_category }}" id="topic-{{ c.index }}">
           <div class="card-body">
+            {% if c.shared_storyline_label %}
+            <div class="shared-storyline-tag">{{ bilingual_text(c.shared_storyline_label, c.shared_storyline_label_en or c.shared_storyline_label) }}</div>
+            {% endif %}
             <div class="card-title">
               <span class="card-title-text"><span class="card-index">{{ c.display_rank }}.</span>{{ bilingual_text(c.headline, c.headline_en or c.headline) }}</span>
               {% if c.is_developing or c.quality_status == "needs_review" or c.quality_status == "seek_more_evidence" %}
@@ -2652,11 +2696,11 @@
                 {% for src in c.footer_sources %}
                 {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{{ source_chip_body(src) }}
                 </a>
                 {% else %}
-                <span class="src-chip">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                <span class="src-chip"{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>
+                  <span class="dot"></span>{{ source_chip_body(src) }}
                 </span>
                 {% endif %}
                 {% endfor %}
@@ -2678,12 +2722,12 @@
               <div class="persp-line">
                 <span class="persp-src">
                   {% for src in group.sources %}
-                  {% if src.url %}
+                  {% if src.url and not src.is_placeholder %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                    {{ source_chip_body(src) }}
                   </a>
                   {% else %}
-                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  <span{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>{{ source_chip_body(src) }}</span>
                   {% endif %}
                   {% endfor %}
                 </span>
@@ -2724,11 +2768,11 @@
                 {% for src in c.footer_sources %}
                 {% if src.url %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <span class="dot"></span>{{ source_chip_body(src) }}
                 </a>
                 {% else %}
-                <span class="src-chip">
-                  <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                <span class="src-chip"{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>
+                  <span class="dot"></span>{{ source_chip_body(src) }}
                 </span>
                 {% endif %}
                 {% endfor %}
@@ -2774,8 +2818,8 @@
               <div class="source-row">
                 <div class="source-chips">
                   {% for src in c.footer_sources %}
-                  <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
-                    <span class="dot"></span>{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                  <a class="src-chip src-chip-link"{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}{% if not src.is_placeholder %} href="{{ src.url }}" target="_blank" rel="noopener"{% endif %}>
+                    <span class="dot"></span>{{ source_chip_body(src) }}
                   </a>
                   {% endfor %}
                 </div>
@@ -2796,12 +2840,12 @@
                 <div class="persp-line">
                   <span class="persp-src">
                   {% for src in group.sources %}
-                  {% if src.url %}
+                  {% if src.url and not src.is_placeholder %}
                   <a href="{{ src.url }}" target="_blank" rel="noopener">
-                    {% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}
+                    {{ source_chip_body(src) }}
                   </a>
                   {% else %}
-                  <span>{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}</span>
+                  <span{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>{{ source_chip_body(src) }}</span>
                   {% endif %}
                   {% endfor %}
                   </span>

@@ -59,3 +59,9 @@ ownership:
   weight_multipliers:
     private_constrained: 0.85
     independent_private_low_evidence: 0.75
+  # Minimum cluster size for the ownership gate to hard-suppress when ALL
+  # articles are state-controlled. Below this size, "all blocked" is
+  # statistically easy (2-3 articles) and the event is retained as
+  # needs_review so a human editor sees it instead of the story vanishing.
+  # Combined with the review_floor override for high-impact events. (Issue #3)
+  gate_suppress_min_cluster_size: 4

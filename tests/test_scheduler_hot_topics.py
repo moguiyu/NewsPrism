@@ -28,8 +28,8 @@ def _config(main_limit: int = 3) -> Config:
         output={
             "hot_topics": {
                 "enabled": True,
-                "max_topic_tabs": 3,
-                "min_items_per_topic": 5,
+                "max_topic_tabs": 8,
+                "min_items_per_topic": 3,
                 "candidate_window": 40,
                 "tab_name_max_chars": 10,
                 "icon_allowlist": ["globe", "war", "trade", "chip", "ai", "energy"],
@@ -107,7 +107,13 @@ def test_report_clusters_promote_storyline_with_core_and_direct_spillover():
     assert len(main_clusters) == 2
 
 
-def test_report_clusters_do_not_promote_storyline_without_core_anchor():
+def test_report_clusters_promote_storyline_without_core_anchor_under_new_policy():
+    """Issue #2 rec #4: spillover-only families DO claim a tab under the new policy.
+
+    A same_conflict_different_event family may legitimately have no core
+    member (every event is a distinct daily incident of the same conflict).
+    The "has core" gate was dropped so these families surface as tabs.
+    """
     cfg = _config(main_limit=4)
     clusters = [
         _cluster(f"Spillover {idx}", role="spillover", storyline_key="market-rumor", storyline_name="市场传闻")
@@ -116,12 +122,21 @@ def test_report_clusters_do_not_promote_storyline_without_core_anchor():
 
     hot_clusters, main_clusters = select_report_clusters(clusters, cfg)
 
-    assert hot_clusters == []
-    assert main_clusters == clusters[:4]
-    assert all(cluster.is_hot_topic is False for cluster in clusters)
+    # All 5 spillover members promoted to the tab; main lane falls back to the
+    # main_limit cap (4) but hot clusters are removed from the pool first, so
+    # main_clusters is empty here.
+    assert len(hot_clusters) == 5
+    assert all(cluster.is_hot_topic for cluster in hot_clusters)
+    assert {cluster.storyline_key for cluster in hot_clusters} == {"market-rumor"}
 
 
 def test_report_clusters_exclude_non_members_from_hot_topic_quota():
+    """role=none members do NOT join the hot topic even under the new policy.
+
+    The 4 core/spillover members claim a tab; the role="none" cluster (e.g.
+    a stale-key-contaminated member) flows to the main lane along with the
+    truly standalone "Other story".
+    """
     cfg = _config(main_limit=3)
     clusters = [
         _cluster("Tariff core", role="core", storyline_key="tariff-shock", storyline_name="关税冲击"),
@@ -134,9 +149,18 @@ def test_report_clusters_exclude_non_members_from_hot_topic_quota():
 
     hot_clusters, main_clusters = select_report_clusters(clusters, cfg)
 
-    assert hot_clusters == []
-    assert main_clusters == clusters[:3]
-    assert all(cluster.is_hot_topic is False for cluster in clusters)
+    # 4 hot members (core + 3 spillover); the role=none one is NOT a hot member.
+    assert len(hot_clusters) == 4
+    assert all(cluster.is_hot_topic for cluster in hot_clusters)
+    assert {cluster.storyline_key for cluster in hot_clusters} == {"tariff-shock"}
+    # role=none + "Other story" both flow to main lane (capped at main_limit=3,
+    # but only 2 are available since the 4 hot members are removed from pool).
+    main_topics = [c.articles[0].title for c in main_clusters]
+    assert "Tariff stray none" in main_topics
+    assert "Other story" in main_topics
+    # The role=none cluster is never marked as hot.
+    none_cluster = next(c for c in clusters if c.articles[0].title == "Tariff stray none")
+    assert none_cluster.is_hot_topic is False
 
 
 def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch, tmp_path, caplog):

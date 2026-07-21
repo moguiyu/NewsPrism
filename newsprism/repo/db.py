@@ -21,6 +21,21 @@ def init_db(db_path: Path = DB_PATH) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
+
+        def _add_column(table: str, column: str, ddl: str) -> None:
+            """Race-safe ALTER TABLE ADD COLUMN.
+
+            Both the newsprism and newsprism-portal containers start
+            simultaneously from the same image and call init_db(); without
+            this guard, a concurrent add raises "duplicate column name" and
+            crashes whichever container loses the race.
+            """
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS articles (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -274,6 +289,18 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("ALTER TABLE articles ADD COLUMN origin_region TEXT")
         if "searched_provider" not in article_columns:
             conn.execute("ALTER TABLE articles ADD COLUMN searched_provider TEXT")
+        # Issue #5: persist the article-level ownership-gate decision so the
+        # portal/audit can show WHICH articles were state-media-suppressed,
+        # not just the aggregate cluster-level verdict. ALTER TABLE ADD COLUMN
+        # with a constant default is O(1) metadata on SQLite (safe on 3.5GB+ DBs).
+        # Uses the race-safe helper because newsprism + newsprism-portal start
+        # concurrently and both run init_db().
+        if "ownership_suppressed" not in article_columns:
+            _add_column(
+                "articles",
+                "ownership_suppressed",
+                "ownership_suppressed INTEGER NOT NULL DEFAULT 0",
+            )
 
         cursor = conn.execute("PRAGMA table_info(search_request_events)")
         search_event_columns = {row[1] for row in cursor.fetchall()}
@@ -318,9 +345,9 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                 """INSERT INTO articles (
                        url, title, source_name, published_at, content, topics, embedding,
                        is_searched, search_region, source_kind, platform, account_id,
-                       is_official_source, origin_region, searched_provider
+                       is_official_source, origin_region, searched_provider, ownership_suppressed
                    )
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     article.url,
                     article.title,
@@ -337,6 +364,7 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                     1 if article.is_official_source else 0,
                     article.origin_region,
                     article.searched_provider,
+                    1 if getattr(article, "ownership_suppressed", False) else 0,
                 ),
             )
             return cur.lastrowid
@@ -1032,6 +1060,7 @@ def _row_to_article(row: sqlite3.Row) -> Article:
         is_official_source=bool(row["is_official_source"]) if "is_official_source" in row.keys() else False,
         origin_region=row["origin_region"] if "origin_region" in row.keys() else None,
         searched_provider=row["searched_provider"] if "searched_provider" in row.keys() else None,
+        ownership_suppressed=bool(row["ownership_suppressed"]) if "ownership_suppressed" in row.keys() else False,
     )
 
 

@@ -125,6 +125,34 @@ _INVALID_PERSPECTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"irrelevant", re.IGNORECASE),
 )
 
+# Seeker placeholder failure reasons → bilingual short label. Surfaced as the
+# provenance label of an inline ⚠️ placeholder article so the reader sees WHY
+# a regional perspective is missing (tooltip), without polluting the page.
+_PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
+    "http_401": ("鉴权失败", "Auth failed"),
+    "http_403": ("鉴权失败", "Auth failed"),
+    "http_402": ("额度不足", "Quota exceeded"),
+    "http_429": ("限流", "Rate limited"),
+    "network": ("网络错误", "Network error"),
+    "empty_results": ("无新结果", "No fresh results"),
+    "no_acceptable_result": ("无可用结果", "No acceptable result"),
+    "stale_result": ("结果过旧", "Result too old"),
+    "region_mismatch": ("地区不匹配", "Region mismatch"),
+    "event_mismatch": ("事件不匹配", "Event mismatch"),
+    "duplicate_of_existing": ("已有相同报道", "Duplicate of existing"),
+    "thin_result": ("结果内容过少", "Result too thin"),
+    "unknown": ("未知原因", "Unknown reason"),
+}
+
+
+def _placeholder_failure_label(reason: str | None) -> tuple[str, str]:
+    """Return (zh, en) short label for a seeker placeholder failure reason."""
+    if not reason:
+        return _PLACEHOLDER_FAILURE_LABELS["unknown"]
+    # Reasons may be comma-separated (acceptance gate logs combined rejections).
+    primary = reason.split(",", 1)[0].strip()
+    return _PLACEHOLDER_FAILURE_LABELS.get(primary, _PLACEHOLDER_FAILURE_LABELS["unknown"])
+
 
 # ── TEXT HELPERS ──────────────────────────────────────────────────────────────
 
@@ -528,6 +556,9 @@ class HtmlRenderer:
                     "is_official_source": article.is_official_source,
                     "origin_region": article.origin_region,
                     "searched_provider": article.searched_provider,
+                    "is_placeholder": getattr(article, "is_placeholder", False),
+                    "search_acceptance_status": getattr(article, "search_acceptance_status", None),
+                    "search_acceptance_reason": getattr(article, "search_acceptance_reason", None),
                 }
             )
         return dict(by_source)
@@ -584,10 +615,26 @@ class HtmlRenderer:
             compact_label = f"{compact_label} · {provenance_label}"
         if provenance_label_en:
             compact_label_en = f"{compact_label_en} · {provenance_label_en}"
+        is_placeholder = bool(meta.get("is_placeholder", False))
+        acceptance_status = meta.get("search_acceptance_status")
+        acceptance_reason = meta.get("search_acceptance_reason") or ""
+        # Placeholders override the compact label + tooltip; readers see a flat
+        # inline "missing perspective" marker with the failure detail on hover.
+        placeholder_reason_zh, placeholder_reason_en = _placeholder_failure_label(acceptance_reason)
+        if is_placeholder:
+            compact_label = f"⚠️{source_name}"
+            compact_label_en = f"⚠️{source_name}"
+            provenance_label = placeholder_reason_zh
+            provenance_label_en = placeholder_reason_en
         return {
             "source": source_name,
             "flag": self._source_flag(source_name, search_region),
             "is_searched": is_searched,
+            "is_placeholder": is_placeholder,
+            "search_acceptance_status": acceptance_status,
+            "search_acceptance_reason": acceptance_reason,
+            "placeholder_reason_zh": placeholder_reason_zh,
+            "placeholder_reason_en": placeholder_reason_en,
             "search_region": search_region,
             "represented_region": meta.get("origin_region") or search_region,
             "source_kind": source_kind,
@@ -628,7 +675,15 @@ class HtmlRenderer:
 
     def _build_footer_sources(self, summary: ClusterSummary, preferred_sources: list[str] | None = None) -> list[dict]:
         article_meta = self._article_meta(summary)
-        ordered_sources = preferred_sources or summary.cluster.sources
+        # Issue #1: include inline placeholder sources (missing-perspective
+        # markers) even though they don't count toward cluster.sources /
+        # is_multi_source. Without this, a failed regional search leaves no
+        # visible trace in the source list.
+        ordered_sources = list(preferred_sources) if preferred_sources is not None else list(summary.cluster.sources)
+        if preferred_sources is None:
+            for article in summary.cluster.articles:
+                if getattr(article, "is_placeholder", False) and article.source_name not in ordered_sources:
+                    ordered_sources.append(article.source_name)
         seen: set[str] = set()
         footer_sources: list[dict] = []
         for source_name in ordered_sources:
@@ -785,6 +840,7 @@ class HtmlRenderer:
                 "search_acceptance_status": getattr(article, "search_acceptance_status", "accepted" if article.is_searched else None),
                 "search_acceptance_reason": getattr(article, "search_acceptance_reason", ""),
                 "result_freshness_state": getattr(article, "result_freshness_state", None),
+                "is_placeholder": getattr(article, "is_placeholder", False),
             }
             for article in summary.cluster.articles
         ]
@@ -1007,6 +1063,29 @@ class HtmlRenderer:
             )
             clusters_ctx.append(ctx_payload)
             clusters_json.append(json_payload)
+
+        # Defensive fallback (Issue #2 rec #4 main-lane branch): if 2+ main-lane
+        # clusters share a storyline_key (e.g. a 2-member family that didn't
+        # claim a tab because of max_topic_tabs), tag them with a shared label
+        # so the reader can see the connection. Flat tag — no card/lift/shadow.
+        shared_label_by_key: dict[str, str] = {}
+        shared_label_en_by_key: dict[str, str] = {}
+        key_counts: dict[str, int] = {}
+        for ctx in clusters_ctx:
+            key = ctx.get("storyline_key")
+            if not key or key.startswith("single-"):
+                continue
+            key_counts[key] = key_counts.get(key, 0) + 1
+            if key not in shared_label_by_key:
+                shared_label_by_key[key] = ctx.get("storyline_name") or ctx.get("macro_topic_name") or ""
+                shared_label_en_by_key[key] = ctx.get("storyline_name_en") or shared_label_by_key[key]
+        for ctx, jsonp in zip(clusters_ctx, clusters_json):
+            key = ctx.get("storyline_key")
+            if key and key_counts.get(key, 0) >= 2:
+                ctx["shared_storyline_label"] = shared_label_by_key.get(key, "")
+                ctx["shared_storyline_label_en"] = shared_label_en_by_key.get(key, "")
+                jsonp["shared_storyline_label"] = ctx["shared_storyline_label"]
+                jsonp["shared_storyline_label_en"] = ctx["shared_storyline_label_en"]
 
         present_categories = {cluster["broad_category"] for cluster in clusters_ctx}
         sections = []

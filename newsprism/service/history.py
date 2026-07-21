@@ -17,6 +17,7 @@ Layer: service (imports types, config; never imports runtime)
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections import defaultdict
@@ -93,6 +94,19 @@ def _cosine(left: np.ndarray | None, right: np.ndarray | None) -> float:
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9\-]+", "-", value.lower()).strip("-")
     return slug or "storyline"
+
+
+def _content_hash(*parts: str) -> str:
+    """Stable 8-char hash for storyline keys (Issue #4).
+
+    Per-run counters like ``storyline-1`` and ``single-26`` collide across
+    days and get reused by the history matcher for unrelated topics — same key
+    meant 8 different storylines over two weeks. A content-derived hash makes
+    the key deterministic for the same anchor text and naturally different for
+    a different topic.
+    """
+    canonical = "|".join(sorted(p for p in parts if p))
+    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:8]
 
 
 def _short_name(value: str, max_chars: int) -> str:
@@ -378,6 +392,13 @@ class StorylineResolver:
         # over accepted edges otherwise chains unrelated clusters transitively
         # (A~B, B~C, … each an edge, but A and Z share nothing).
         self.coherence_min_similarity = float(hot_cfg.get("storyline_coherence_min", 0.60))
+        # Relaxed coherence bar for components whose members are glued by
+        # same_conflict_different_event edges (different daily incidents of the
+        # same ongoing conflict have low centroid similarity by design).
+        # Issue #2 rec #3.
+        self.conflict_coherence_min_similarity = float(
+            hot_cfg.get("storyline_conflict_coherence_min", 0.40)
+        )
         self.icon_allowlist = list(hot_cfg.get("icon_allowlist", [_DEFAULT_ICON]))
 
     def resolve(
@@ -400,7 +421,7 @@ class StorylineResolver:
             and float(edge["confidence"]) >= self.edge_confidence_threshold
         ]
         components = self._build_components(len(clusters), accepted_edges)
-        components = self._enforce_coherence(components, profiles)
+        components = self._enforce_coherence(components, profiles, accepted_edges)
         logger.info(
             "Storyline resolver: clusters=%d history_matches=%d pairs=%d accepted_edges=%d families=%d",
             len(clusters),
@@ -410,7 +431,7 @@ class StorylineResolver:
             sum(1 for members in components.values() if len(members) > 1),
         )
         self._assign_storylines(clusters, profiles, components, accepted_edges, history_matches)
-        self._split_incoherent_families(clusters, profiles, history_matches)
+        self._split_incoherent_families(clusters, profiles, history_matches, accepted_edges)
         return clusters
 
     # ── profile / history ────────────────────────────────────────────────────
@@ -552,6 +573,15 @@ class StorylineResolver:
         elif similarity >= 0.66 and (title_overlap >= 0.06 or shared_history):
             relation = "same_direct_spillover_storyline"
             confidence = min(0.85, 0.5 + similarity * 0.22 + title_overlap * 0.15)
+        elif (
+            similarity >= 0.50
+            and shared_history
+            and self._shares_conflict_keyword(candidate)
+        ):
+            # Fallback path (LLM unavailable): glue same-conflict different-event
+            # pairs into the family as spillover. Issue #2 rec #3.
+            relation = "same_conflict_different_event"
+            confidence = 0.55
         else:
             relation = "not_related"
             confidence = max(0.15, 0.45 - similarity * 0.2)
@@ -561,6 +591,31 @@ class StorylineResolver:
             "relation": relation,
             "confidence": confidence,
         }
+
+    # Conflict keyword pairs used by the heuristic fallback only (the LLM prompt
+    # does the real work; this is a safety net when the LLM is unavailable).
+    # Narrow whitelist — adding broad themes here would re-introduce the
+    # over-merging bug that motivated the "precision-first" instruction.
+    _CONFLICT_KEYWORD_PAIRS: tuple[tuple[str, str], ...] = (
+        ("russia", "ukraine"), ("ru", "ua"), ("ukraine", "ru"),
+        ("iran", "us"), ("us", "iran"), ("iran", "israel"),
+        ("israel", "palest"), ("israel", "gaza"), ("israel", "hamas"),
+        ("houthi",), ("netanyahu",),
+    )
+
+    def _shares_conflict_keyword(self, candidate: dict[str, object]) -> bool:
+        """True if either cluster's text mentions a known ongoing-conflict keyword."""
+        text = ""
+        for side in ("left_cluster", "right_cluster"):
+            cluster = candidate.get(side)
+            if cluster is not None:
+                # _cluster_text is the module-level helper used by StorylineResolver.
+                text += " " + str(getattr(cluster, "topic_category", "") or "")
+                articles = getattr(cluster, "articles", []) or []
+                for article in articles[:3]:
+                    text += " " + (getattr(article, "title", "") or "")
+        text_lower = text.lower()
+        return any(all(part in text_lower for part in pair) for pair in self._CONFLICT_KEYWORD_PAIRS)
 
     def _build_components(self, node_count: int, edges: list[dict[str, object]]) -> dict[int, list[int]]:
         parents = list(range(node_count))
@@ -588,19 +643,48 @@ class StorylineResolver:
         self,
         components: dict[int, list[int]],
         profiles: list[dict[str, object]],
+        accepted_edges: list[dict[str, object]],
     ) -> dict[int, list[int]]:
         """Split transitively-chained components into internally-coherent families.
 
         Each multi-node component is re-grown from its medoid, admitting a member
-        only while the family's mean pairwise centroid cosine stays above
-        ``coherence_min_similarity``. Members that don't fit are ejected and
-        recursively re-grouped, so a genuine second storyline survives while
-        unrelated clusters fall out to singletons.
+        only while the family's mean pairwise centroid cosine stays above the
+        coherence bar. Members that don't fit are ejected and recursively
+        re-grouped, so a genuine second storyline survives while unrelated
+        clusters fall out to singletons.
+
+        Components whose members are glued by ``same_conflict_different_event``
+        edges (Issue #2 rec #3) use a relaxed bar — different daily incidents of
+        the same ongoing conflict have low centroid similarity by design, but
+        the LLM has already judged them as belonging to the same storyline.
         """
         centroids = {int(p["index"]): p["centroid"] for p in profiles}
+        conflict_pairs: set[tuple[int, int]] = set()
+        for edge in accepted_edges:
+            if edge.get("relation") == "same_conflict_different_event":
+                li, ri = int(edge["left_index"]), int(edge["right_index"])
+                conflict_pairs.add((li, ri))
+                conflict_pairs.add((ri, li))
+
+        def _is_conflict_component(members: list[int]) -> bool:
+            return any(
+                (a, b) in conflict_pairs
+                for a in members
+                for b in members
+                if a != b
+            )
+
         refined: dict[int, list[int]] = {}
         for members in components.values():
             if len(members) < 3:
+                refined[members[0]] = members
+                continue
+            if _is_conflict_component(members):
+                # Conflict-glued components are kept as-is — the LLM has judged
+                # these as same_conflict_different_event, and different daily
+                # incidents of an ongoing conflict legitimately have low or
+                # zero centroid similarity (different locations, casualties,
+                # branches). Coherence-splitting them would defeat the point.
                 refined[members[0]] = members
                 continue
             for sub in self._coherent_split(members, centroids):
@@ -611,7 +695,10 @@ class StorylineResolver:
         self,
         nodes: list[int],
         centroids: dict[int, np.ndarray | None],
+        bar: float | None = None,
     ) -> list[list[int]]:
+        if bar is None:
+            bar = self.coherence_min_similarity
         if len(nodes) <= 1:
             return [list(nodes)]
         medoid = max(nodes, key=lambda n: sum(_cosine(centroids[n], centroids[m]) for m in nodes if m != n))
@@ -619,13 +706,13 @@ class StorylineResolver:
         remaining = [n for n in nodes if n != medoid]
         while remaining:
             best = max(remaining, key=lambda n: self._mean_pairwise(core + [n], centroids))
-            if self._mean_pairwise(core + [best], centroids) < self.coherence_min_similarity:
+            if self._mean_pairwise(core + [best], centroids) < bar:
                 break
             core.append(best)
             remaining.remove(best)
         result = [sorted(core)]
         if remaining:
-            result.extend(self._coherent_split(remaining, centroids))
+            result.extend(self._coherent_split(remaining, centroids, bar))
         return result
 
     def _split_incoherent_families(
@@ -633,6 +720,7 @@ class StorylineResolver:
         clusters: list[ArticleCluster],
         profiles: list[dict[str, object]],
         history_matches: dict[int, dict[str, object]],
+        accepted_edges: list[dict[str, object]],
     ) -> None:
         """Final authority on family coherence, over the *assigned* storyline keys.
 
@@ -642,8 +730,28 @@ class StorylineResolver:
         coherent sub-family that genuinely continues the story (strongest history
         match to this key, else the largest coherent sub) keeps the storyline;
         every other member detaches to a standalone story.
+
+        Components glued by ``same_conflict_different_event`` edges are exempt
+        (Issue #2 rec #3): different daily incidents of an ongoing conflict
+        have legitimately low centroid similarity, and the LLM has already
+        judged them as a single storyline.
         """
         centroids = {int(p["index"]): p["centroid"] for p in profiles}
+        conflict_pairs: set[tuple[int, int]] = set()
+        for edge in accepted_edges:
+            if edge.get("relation") == "same_conflict_different_event":
+                li, ri = int(edge["left_index"]), int(edge["right_index"])
+                conflict_pairs.add((li, ri))
+                conflict_pairs.add((ri, li))
+
+        def _is_conflict_group(members: list[int]) -> bool:
+            return any(
+                (a, b) in conflict_pairs
+                for a in members
+                for b in members
+                if a != b
+            )
+
         groups: dict[str, list[int]] = defaultdict(list)
         for idx, cluster in enumerate(clusters):
             if cluster.storyline_key:
@@ -652,6 +760,8 @@ class StorylineResolver:
         for key, members in groups.items():
             if len(members) < 3:
                 continue
+            if _is_conflict_group(members):
+                continue  # conflict-glued family — keep as-is
             subs = self._coherent_split(members, centroids)
             if len(subs) == 1:
                 continue
@@ -745,7 +855,14 @@ class StorylineResolver:
                 )
             else:
                 storyline_name = self._build_storyline_name([clusters[idx] for idx in core_nodes])
-                storyline_key = f"{_slugify(storyline_name)}-{storyline_counter}"
+                # Content-derived key (Issue #4): same anchor set → same key
+                # across days; different topic → different hash. Replaces the
+                # per-run ``storyline-{N}`` counter that collided across days.
+                anchor_titles = [
+                    str(profiles[idx]["lead_title"])
+                    for idx in core_nodes[:3]
+                ]
+                storyline_key = f"{_slugify(storyline_name)}-{_content_hash(*anchor_titles)}"
                 storyline_counter += 1
 
             component_edges = [
@@ -836,7 +953,10 @@ class StorylineResolver:
             )
             confidence = float(history_match.get("score", 0.0))
         else:
-            storyline_key = f"single-{int(profile['index']) + 1}"
+            # Content-derived key (Issue #4): per-run ``single-{N}`` collided
+            # across days (single-8 meant 4 different topics in one week).
+            lead_title = str(profile.get("lead_title") or "")
+            storyline_key = f"single-{_content_hash(lead_title)}"
             storyline_name = _short_name(str(profile["lead_title"]), self.max_name_chars)
             confidence = 0.0
         self._apply_storyline(

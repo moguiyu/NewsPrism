@@ -79,7 +79,20 @@ class RegionConfig:
 class ActiveSeeker:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
-        self.tavily_api_key = cfg.tavily_api_key
+        # Tavily key rotation: build a de-duplicated list from TAVILY_API_KEYS (CSV)
+        # plus the legacy TAVILY_API_KEY (singular) for backward compat.
+        keys: list[str] = list(cfg.tavily_api_keys) if cfg.tavily_api_keys else []
+        if cfg.tavily_api_key and cfg.tavily_api_key not in keys:
+            keys.append(cfg.tavily_api_key)
+        self.tavily_api_keys = [k for k in keys if k]
+        # Backward-compat: single-key view of the list.
+        self.tavily_api_key = self.tavily_api_keys[0] if self.tavily_api_keys else ""
+        # Index of the key that last succeeded; rotation starts here on the next call.
+        self._active_key_idx = 0
+        # Track auth-exhausted keys within a single enhance_clusters() run so we
+        # don't retry a known-bad key on every region.
+        self._exhausted_keys: set[int] = set()
+
         self.evaluator_model = cfg.evaluator_model
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
@@ -105,11 +118,32 @@ class ActiveSeeker:
     # ─── PUBLIC API ──────────────────────────────────────────────────────────
 
     def enhance_clusters(self, clusters: list[ArticleCluster]) -> list[ArticleCluster]:
-        if not self.tavily_api_key:
-            logger.info("Active seeker disabled: no TAVILY_API_KEY configured")
+        if not self.tavily_api_keys:
+            logger.info("Active seeker disabled: no TAVILY_API_KEYS configured")
             return clusters
         if not self.region_config:
             return clusters
+
+        # Reset per-run state: keys that auth-failed earlier may have been reset by the provider.
+        self._exhausted_keys = set()
+        self._search_cache.clear()
+        enriched = 0
+        for cluster in clusters:
+            if not self._should_enrich(cluster):
+                continue
+            try:
+                if self._enrich_cluster(cluster):
+                    enriched += 1
+            except Exception as exc:
+                logger.warning("Seeker enrichment failed for '%s': %s", cluster.topic_category, exc)
+        if enriched:
+            logger.info("Active seeker enriched %d/%d clusters", enriched, len(clusters))
+        if len(self._exhausted_keys) == len(self.tavily_api_keys) and self.tavily_api_keys:
+            logger.warning(
+                "Active seeker: all %d Tavily keys are auth-exhausted; check TAVILY_API_KEYS",
+                len(self.tavily_api_keys),
+            )
+        return clusters
 
         self._search_cache.clear()
         enriched = 0
@@ -197,20 +231,32 @@ class ActiveSeeker:
         centroid = self._cluster_centroid(cluster)
         added = False
         for region in regions:
-            article = self._search_region(cluster, region, keyword, centroid)
-            if article is None:
+            article, fail_reason = self._search_region(cluster, region, keyword, centroid)
+            if article is not None:
+                cluster.articles.append(article)
+                if article.source_name not in cluster.sources:
+                    cluster.sources.append(article.source_name)
+                logger.info(
+                    "Seeker added %s perspective to '%s': %s (%s)",
+                    region,
+                    cluster.topic_category,
+                    article.title[:60],
+                    article.source_name,
+                )
+                added = True
                 continue
-            cluster.articles.append(article)
-            if article.source_name not in cluster.sources:
-                cluster.sources.append(article.source_name)
+            # Synthesize a flat inline placeholder so the reader sees that this
+            # region's perspective was targeted but unavailable — never silent.
+            placeholder = self._placeholder_article(cluster, region, fail_reason or "unknown")
+            cluster.articles.append(placeholder)
+            # Do NOT add the placeholder source_name to cluster.sources — it must
+            # not count toward is_multi_source or appear in perspective grouping.
             logger.info(
-                "Seeker added %s perspective to '%s': %s (%s)",
+                "Seeker placeholder for %s on '%s': reason=%s",
                 region,
                 cluster.topic_category,
-                article.title[:60],
-                article.source_name,
+                fail_reason,
             )
-            added = True
         return added
 
     def _search_region(
@@ -219,24 +265,73 @@ class ActiveSeeker:
         region: str,
         keyword: str,
         centroid: np.ndarray | None,
-    ) -> Article | None:
+    ) -> tuple[Article | None, str | None]:
+        """Return (accepted_article, failure_reason).
+
+        failure_reason is set only when no article was accepted, so the caller
+        can synthesize an inline placeholder that surfaces the cause to readers.
+        """
+        last_reason: str | None = None
         for query in self._build_search_queries(cluster, region, keyword):
-            results = self._search_tavily(region, query)
+            results, search_fail = self._search_tavily(region, query)
+            if search_fail:
+                # Provider-level failure (HTTP 401/403/network). Don't try more
+                # queries for this region; the same key/network is used.
+                return None, search_fail
             accepted, rejections = self._accept_results(cluster, region, results, keyword, centroid)
-            if rejections:
-                self._record_search_event(
-                    provider="tavily_search",
-                    request_type="acceptance",
-                    target_region=region,
-                    query=query,
-                    result_count=len(results),
-                    accepted_count=len(accepted),
-                    rejection_reason=",".join(sorted({reason for reason, _ in rejections})),
-                    rejection_count=len(rejections),
-                )
+            # Always record acceptance telemetry (not only when rejections exist)
+            # so we have positive signal that the gate ran.
+            self._record_search_event(
+                provider="tavily_search",
+                request_type="acceptance",
+                target_region=region,
+                query=query,
+                result_count=len(results),
+                accepted_count=len(accepted),
+                rejection_reason=",".join(sorted({reason for reason, _ in rejections})) or None,
+                rejection_count=len(rejections) or None,
+            )
             if accepted:
-                return accepted[0]
-        return None
+                return accepted[0], None
+            if rejections:
+                last_reason = ",".join(sorted({reason for reason, _ in rejections}))
+            elif not results:
+                last_reason = "empty_results"
+            else:
+                last_reason = "no_acceptable_result"
+        return None, last_reason
+
+    def _placeholder_article(
+        self,
+        cluster: ArticleCluster,
+        region: str,
+        reason: str,
+    ) -> Article:
+        """Synthesize an inline placeholder Article for a missing perspective.
+
+        The placeholder is rendered flat in the source list with the country
+        flag + a short failure label + tooltip detail. It never counts toward
+        cluster.is_multi_source (caller does not append its source_name).
+        """
+        region_name = _REGION_NAMES.get(region, region.upper())
+        cluster_key = getattr(cluster, "cluster_key", "") or getattr(cluster, "topic_category", "")
+        article = Article(
+            id=None,
+            url=f"placeholder:{region}:{cluster_key}",
+            title=f"待补充：{region_name}视角",
+            source_name=f"[{region_name}视角待补]",
+            published_at=datetime.now(tz=timezone.utc),
+            content="",
+            is_searched=True,
+            search_region=region,
+            source_kind="news",
+            origin_region=region,
+            searched_provider="tavily_search",
+        )
+        article.is_placeholder = True
+        article.search_acceptance_status = "failed"
+        article.search_acceptance_reason = reason
+        return article
 
     def _accept_results(
         self,
@@ -372,14 +467,20 @@ class ActiveSeeker:
 
     # ─── TAVILY ──────────────────────────────────────────────────────────────
 
-    def _search_tavily(self, region: str, query: str) -> list[dict[str, Any]]:
+    def _search_tavily(self, region: str, query: str) -> tuple[list[dict[str, Any]], str | None]:
+        """Return (results, failure_reason).
+
+        failure_reason is one of: http_401, http_403, http_<other>, network, None.
+        On 401/403, the active key is marked exhausted and the next configured
+        key is tried within the same call. Only when ALL keys are exhausted (or
+        a non-auth error occurs) is failure_reason returned.
+        """
         cache_key = (region, query)
         if cache_key in self._search_cache:
-            return self._search_cache[cache_key]
+            return self._search_cache[cache_key], None
 
         config = self.region_config.get(region)
-        payload: dict[str, Any] = {
-            "api_key": self.tavily_api_key,
+        base_payload: dict[str, Any] = {
             "query": query,
             "search_depth": "basic",
             "include_raw_content": True,
@@ -387,53 +488,129 @@ class ActiveSeeker:
             "days": 3,
         }
         if config and config.trusted_domains:
-            payload["include_domains"] = config.trusted_domains[:5]
+            base_payload["include_domains"] = config.trusted_domains[:5]
 
-        try:
-            started = monotonic()
-            with httpx.Client(timeout=30, follow_redirects=True) as client:
-                resp = client.post("https://api.tavily.com/search", json=payload)
-                duration_ms = int((monotonic() - started) * 1000)
-                resp.raise_for_status()
-                data = resp.json()
-
-            results: list[dict[str, Any]] = []
-            for result in data.get("results", []):
-                url = result.get("url", "")
-                source_domain = urllib.parse.urlparse(url).netloc.replace("www.", "")
-                results.append(
-                    {
-                        "url": url,
-                        "title": result.get("title"),
-                        "content": result.get("raw_content") or result.get("content", ""),
-                        "published_at": result.get("published_date") or result.get("published_at"),
-                        "source_name": source_domain,
-                        "searched_provider": "tavily_search",
-                    }
-                )
+        # Build the key try-order: start from the last known-good key, then any
+        # remaining keys that aren't yet exhausted this run.
+        try_order: list[int] = []
+        if self._active_key_idx not in self._exhausted_keys:
+            try_order.append(self._active_key_idx)
+        try_order.extend(
+            idx
+            for idx in range(len(self.tavily_api_keys))
+            if idx not in try_order and idx not in self._exhausted_keys
+        )
+        if not try_order:
+            # All keys exhausted earlier this run — short-circuit so we don't
+            # spam Tavily with known-bad credentials.
             self._record_search_event(
                 provider="tavily_search",
                 request_type="search",
                 target_region=region,
                 query=query,
-                http_status=resp.status_code,
-                result_count=len(results),
-                duration_ms=duration_ms,
-            )
-            self._search_cache[cache_key] = results
-            return results
-        except Exception as exc:
-            response = getattr(exc, "response", None)
-            self._record_search_event(
-                provider="tavily_search",
-                request_type="search",
-                target_region=region,
-                query=query,
-                http_status=getattr(response, "status_code", None),
+                http_status=401,
                 result_count=0,
             )
-            logger.debug("Tavily search failed: %s", exc)
-            return []
+            return [], "http_401"
+
+        last_failure_reason: str | None = None
+        last_status: int | None = None
+        for key_idx in try_order:
+            payload = {**base_payload, "api_key": self.tavily_api_keys[key_idx]}
+            try:
+                started = monotonic()
+                with httpx.Client(timeout=30, follow_redirects=True) as client:
+                    resp = client.post("https://api.tavily.com/search", json=payload)
+                    duration_ms = int((monotonic() - started) * 1000)
+                    if resp.status_code in (401, 403):
+                        # Auth/quota issue with this key — failover to the next.
+                        self._exhausted_keys.add(key_idx)
+                        last_failure_reason = f"http_{resp.status_code}"
+                        last_status = resp.status_code
+                        self._record_search_event(
+                            provider="tavily_search",
+                            request_type="search",
+                            target_region=region,
+                            query=query,
+                            http_status=resp.status_code,
+                            result_count=0,
+                            duration_ms=duration_ms,
+                        )
+                        logger.info(
+                            "Tavily key #%d returned HTTP %d; rotating to next key",
+                            key_idx + 1,
+                            resp.status_code,
+                        )
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+            except httpx.HTTPError as exc:
+                response = getattr(exc, "response", None)
+                status = getattr(response, "status_code", None)
+                if status in (401, 403):
+                    self._exhausted_keys.add(key_idx)
+                    last_failure_reason = f"http_{status}"
+                    last_status = status
+                    self._record_search_event(
+                        provider="tavily_search",
+                        request_type="search",
+                        target_region=region,
+                        query=query,
+                        http_status=status,
+                        result_count=0,
+                    )
+                    continue
+                # Non-auth HTTP error or network error — not a key problem, so
+                # don't rotate; just report the failure for this query.
+                self._record_search_event(
+                    provider="tavily_search",
+                    request_type="search",
+                    target_region=region,
+                    query=query,
+                    http_status=status,
+                    result_count=0,
+                )
+                logger.warning("Tavily search failed: %s", exc)
+                return [], f"http_{status}" if status else "network"
+            else:
+                # Success — pin this key as the active one for subsequent calls.
+                self._active_key_idx = key_idx
+                results: list[dict[str, Any]] = []
+                for result in data.get("results", []):
+                    url = result.get("url", "")
+                    source_domain = urllib.parse.urlparse(url).netloc.replace("www.", "")
+                    results.append(
+                        {
+                            "url": url,
+                            "title": result.get("title"),
+                            "content": result.get("raw_content") or result.get("content", ""),
+                            "published_at": result.get("published_date") or result.get("published_at"),
+                            "source_name": source_domain,
+                            "searched_provider": "tavily_search",
+                        }
+                    )
+                self._record_search_event(
+                    provider="tavily_search",
+                    request_type="search",
+                    target_region=region,
+                    query=query,
+                    http_status=resp.status_code,
+                    result_count=len(results),
+                    duration_ms=duration_ms,
+                )
+                self._search_cache[cache_key] = results
+                return results, None
+
+        # All candidate keys returned auth failure.
+        self._record_search_event(
+            provider="tavily_search",
+            request_type="search",
+            target_region=region,
+            query=query,
+            http_status=last_status,
+            result_count=0,
+        )
+        return [], last_failure_reason or "http_401"
 
     def _result_to_article(self, result: dict[str, Any], region: str) -> Article | None:
         url = result.get("url")

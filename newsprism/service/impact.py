@@ -155,6 +155,13 @@ class ImpactAssessor:
                 multipliers.get("independent_private_low_evidence", 0.75)
             ),
         }
+        # Minimum cluster size for the ownership gate to hard-suppress when all
+        # articles are state-controlled. Below this size, "all blocked" is
+        # statistically easy and the event is retained as needs_review so a
+        # human sees it. See docs/design-docs/decisions.md (Issue #3).
+        self.gate_suppress_min_cluster_size = int(
+            own_cfg.get("gate_suppress_min_cluster_size", 4) if isinstance(own_cfg, dict) else 4
+        )
 
         hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
         self.icon_allowlist = list(
@@ -561,12 +568,33 @@ class ImpactAssessor:
                     ownership, article.source_name,
                 )
 
-        if suppressed_count == len(cluster.articles) and cluster.articles:
+        all_blocked = (
+            cluster.articles and suppressed_count == len(cluster.articles)
+        )
+        # Hard-suppress only when we have enough cross-source signal to be
+        # confident the story is genuinely state-media-only AND the impact is
+        # low. For small clusters (where "all blocked" is statistically easy)
+        # or high-impact events, demote to needs_review so a human editor sees
+        # the event rather than it vanishing entirely. (Issue #3: this rule
+        # previously hard-suppressed UK-PM-resignation composites ~0.59 because
+        # 2 articles happened to both be CN state media covering GB 内政.)
+        small_cluster = len(cluster.articles) < self.gate_suppress_min_cluster_size
+        high_impact = assessment.composite >= self.review_floor
+        if all_blocked and not (small_cluster or high_impact):
             assessment.status = "suppress"
             assessment.flags.append("ownership_suppressed_all")
             logger.info(
                 "Ownership gate: suppressed entire cluster (key=%s, %d articles)",
                 assessment.cluster_key, suppressed_count,
+            )
+        elif all_blocked:
+            assessment.status = "needs_review"
+            assessment.flags.append("ownership_all_blocked_review")
+            logger.info(
+                "Ownership gate: cluster all-blocked but retained for review "
+                "(key=%s, %d articles, composite=%.3f, small=%s)",
+                assessment.cluster_key, suppressed_count,
+                assessment.composite, small_cluster,
             )
         elif needs_review and assessment.status == "publishable":
             assessment.status = "needs_review"
