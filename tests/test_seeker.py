@@ -100,7 +100,23 @@ def test_freshness_gate_rejects_old():
     old = datetime.now(tz=timezone.utc) - timedelta(hours=200)
     assert seeker._is_fresh(fresh) is True
     assert seeker._is_fresh(old) is False
-    assert seeker._is_fresh(None) is False
+    # Unknown publish date is now ACCEPTED (not rejected). Tavily frequently
+    # returns published_date=None even for fresh results — the search itself
+    # is date-bounded (days: 3), so trust that bound rather than dropping
+    # 100% of results. See the 2026-07-22 incident.
+    assert seeker._is_fresh(None) is True
+
+
+def test_parse_url_date_extracts_date_from_common_url_patterns():
+    """URL-path date fallback for the Tavily published_date=None problem."""
+    seeker = ActiveSeeker(_config())
+    # Major outlets embed the date in the path.
+    assert seeker._parse_url_date("https://www.cnn.com/2026/07/20/world/live-news/x").date().isoformat() == "2026-07-20"
+    assert seeker._parse_url_date("https://news.northeastern.edu/2026/07/20/andy-burnham").date().isoformat() == "2026-07-20"
+    # No date-like segment → None (freshness gate falls back to query-bound trust).
+    assert seeker._parse_url_date("https://www.bbc.co.uk/news/uk-politics-12345678") is None
+    assert seeker._parse_url_date("https://example.com/no-date-here") is None
+    assert seeker._parse_url_date(None) is None
 
 
 def test_result_to_article_rejects_thin_content():
