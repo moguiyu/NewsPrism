@@ -588,6 +588,19 @@ def resolve_display_duplicates(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary], list[ClusterSummary]]:
     displayed = _flatten_display_summaries(hot_topics, focus_storylines, regular_summaries, positive_summaries)
     positive_ids = {id(summary) for summary in positive_summaries}
+    # Build summary → family-key index. Two summaries in the SAME storyline
+    # family are never deduplicated against each other (Additional fix #2):
+    # the storyline resolver already decided they belong to one ongoing story
+    # (different daily incidents of the same conflict, different angles of one
+    # event, etc.) — collapsing them defeats the purpose of the tab.
+    family_id_by_summary: dict[int, str] = {}
+    for family in hot_topics + focus_storylines:
+        family_key = str(family.get("macro_topic_key") or family.get("storyline_key") or "")
+        if not family_key:
+            continue
+        for summary in family.get("summaries", []) or []:
+            if isinstance(summary, ClusterSummary):
+                family_id_by_summary[id(summary)] = family_key
     centroids: dict[int, np.ndarray | None] = {}
     for summary in displayed:
         centroids[id(summary)] = _summary_centroid(summary)
@@ -601,6 +614,14 @@ def resolve_display_duplicates(
             continue
         for right in displayed[left_index + 1 :]:
             if id(right) in suppressed_ids:
+                continue
+            # Additional fix #2: never dedupe two members of the same storyline
+            # family. The resolver grouped them intentionally (different daily
+            # incidents of the same conflict, different angles of one event);
+            # collapsing them defeats the purpose of the tab.
+            left_fam = family_id_by_summary.get(id(left))
+            right_fam = family_id_by_summary.get(id(right))
+            if left_fam and right_fam and left_fam == right_fam:
                 continue
             duplicate, reason, confidence = _display_duplicate(left, right, centroids)
             if not duplicate:

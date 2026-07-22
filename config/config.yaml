@@ -80,9 +80,10 @@ output:
     days: 3
   hot_topics:
     enabled: true
-    # Raised from 3 → 8 so each ongoing-conflict storyline family can claim its
-    # own tab (Issue #2 rec #4). The .cat-tabs horizontal scroll handles overflow.
-    max_topic_tabs: 8
+    # Cap of 3 storyline tabs per day — keep the navigation simple; the top-3
+    # families by size/impact claim a tab, the rest flow to the main lane
+    # (with shared-storyline labels there).
+    max_topic_tabs: 3
     # Lowered from 5 → 3: most storyline families had 1-3 members and spilled
     # into the main lane even when they shared a clear storyline_key. (Issue #2)
     min_items_per_topic: 3

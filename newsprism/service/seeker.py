@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -402,7 +403,12 @@ class ActiveSeeker:
 
     def _is_fresh(self, published_at: datetime | None) -> bool:
         if published_at is None:
-            return False
+            # No publish date extractable from either the Tavily field or the
+            # URL path. The search was already date-bounded by the query's
+            # ``days: 3`` parameter, so trust Tavily's freshness rather than
+            # rejecting 100% of results (the 2026-07-22 incident: 237 fresh
+            # results all rejected as stale because published_date=None).
+            return True
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=self.result_max_age_hours)
         if published_at.tzinfo is None:
             published_at = published_at.replace(tzinfo=timezone.utc)
@@ -623,12 +629,19 @@ class ActiveSeeker:
         configured_region = self.source_regions.get(source_name)
         tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
         origin_region = configured_region or _TLD_REGIONS.get(tld) or region
+        # Tavily frequently returns published_date=None even for fresh results
+        # (the URL path like /2026/07/20/ is clearly recent). Try the explicit
+        # field first, then fall back to a URL-path date parse so the freshness
+        # gate has something concrete to evaluate.
+        published_at = self._parse_published_at(result.get("published_at"))
+        if published_at is None:
+            published_at = self._parse_url_date(url)
         return Article(
             id=None,
             url=url,
             title=title,
             source_name=source_name,
-            published_at=self._parse_published_at(result.get("published_at")),
+            published_at=published_at,
             content=content,
             is_searched=True,
             search_region=region,
@@ -637,7 +650,7 @@ class ActiveSeeker:
             searched_provider=str(result.get("searched_provider") or "tavily_search"),
         )
 
-    def _parse_published_at(self, value: Any) -> datetime:
+    def _parse_published_at(self, value: Any) -> datetime | None:
         if isinstance(value, str) and value.strip():
             try:
                 from dateutil import parser as date_parser
@@ -646,8 +659,35 @@ class ActiveSeeker:
                 return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
             except (ValueError, OverflowError):
                 pass
-        # Unknown publish time fails the freshness gate via a sentinel in the past.
-        return datetime.now(tz=timezone.utc) - timedelta(hours=self.result_max_age_hours + 1)
+        return None
+
+    # Match common URL date patterns: /2026/07/20/, /2026-07-20/, /20260720/.
+    # Returns None when no date-like segment is found.
+    _URL_DATE_PATTERN = re.compile(r"/(?P<date>(?:19|20)\d{2})[-/]?(?P<month>[01]\d)[-/]?(?P<day>[0-3]\d)(?:[/-]|\b)")
+
+    def _parse_url_date(self, url: str | None) -> datetime | None:
+        """Best-effort extraction of a publish date from a URL path.
+
+        Tavily returns published_date=None for many outlets (NYT, CNN, Time,
+        northeastern.edu, …). Their URL paths almost always carry the date
+        (/2026/07/20/article-slug). Without this fallback the freshness gate
+        rejected 100% of results — see the 2026-07-22 incident where
+        accepted_count=0 despite 237 fresh results.
+        """
+        if not url:
+            return None
+        match = self._URL_DATE_PATTERN.search(url)
+        if not match:
+            return None
+        try:
+            return datetime(
+                int(match.group("date")),
+                int(match.group("month")),
+                int(match.group("day")),
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
 
     # ─── REGION CONFIG / TELEMETRY ───────────────────────────────────────────
 
