@@ -132,7 +132,7 @@ def test_base_plan_two_member_storyline_claims_tab_under_new_policy():
     cfg = _config(max_clusters=3)
     cfg.output["hot_topics"] = {
         "enabled": True,
-        "max_topic_tabs": 8,
+        "max_topic_tabs": 3,
         "min_items_per_topic": 3,
         "tab_name_max_chars": 10,
     }
@@ -161,7 +161,7 @@ def test_base_plan_single_member_storyline_stays_in_main_lane():
     cfg = _config(max_clusters=3)
     cfg.output["hot_topics"] = {
         "enabled": True,
-        "max_topic_tabs": 8,
+        "max_topic_tabs": 3,
         "min_items_per_topic": 3,
         "tab_name_max_chars": 10,
     }
@@ -178,6 +178,47 @@ def test_base_plan_single_member_storyline_stays_in_main_lane():
         "solo storyline",
         "standalone high",
     ]
+
+
+def test_base_plan_caps_tabs_at_three_promoting_largest_families():
+    """Additional fix #1: at most 3 storyline tabs per day. When 4 families
+    are eligible, only the 3 largest claim a tab; the smallest flows to the
+    main lane (its members carry the shared-storyline label there).
+    """
+    cfg = _config(max_clusters=10)
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 3,
+        "min_items_per_topic": 3,
+        "tab_name_max_chars": 10,
+    }
+    summaries = [
+        # 4 families, sizes 4 / 3 / 3 / 2 — the size-2 one should lose.
+        _storyline_summary("A1", 0.95, "topic-A", role="core"),
+        _storyline_summary("A2", 0.90, "topic-A"),
+        _storyline_summary("A3", 0.85, "topic-A"),
+        _storyline_summary("A4", 0.80, "topic-A"),
+        _storyline_summary("B1", 0.75, "topic-B", role="core"),
+        _storyline_summary("B2", 0.70, "topic-B"),
+        _storyline_summary("B3", 0.65, "topic-B"),
+        _storyline_summary("C1", 0.60, "topic-C", role="core"),
+        _storyline_summary("C2", 0.55, "topic-C"),
+        _storyline_summary("C3", 0.50, "topic-C"),
+        _storyline_summary("D1", 0.45, "topic-D", role="core"),
+        _storyline_summary("D2", 0.40, "topic-D"),
+    ]
+
+    plan = EditorialPlanner(cfg).base_plan(summaries)
+
+    tab_keys = {ht["macro_topic_key"] for ht in plan.hot_topics}
+    assert len(plan.hot_topics) == 3
+    # The size-4 family wins, two size-3 families tie, size-2 loses.
+    assert "topic-A" in tab_keys
+    assert "topic-D" not in tab_keys
+    # The demoted family's members flow to the main lane.
+    main_titles = [s.cluster.topic_category for s in plan.regular_summaries]
+    assert "D1" in main_titles
+    assert "D2" in main_titles
 
 
 def test_positive_selects_high_feelgood_low_severity():
@@ -230,6 +271,34 @@ def test_display_dedup_keeps_distinct_stories():
     right = _summary("event B", 0.6, url="https://b.com/2", embedding=[0.0, 1.0, 0.0])
     _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
     assert len(regular) == 2
+
+
+def test_display_dedup_preserves_within_family_members():
+    """Additional fix #2: two members of the SAME storyline family are never
+    deduped against each other — even if they're near-identical embeddings.
+
+    The storyline resolver grouped them intentionally (different daily
+    incidents of one conflict, different angles of one event). Collapsing
+    them produced 1-member tabs (the 7/22 AndyBurnham incident: 3 family
+    members collapsed to 1 by display dedup).
+    """
+    # Two near-identical summaries that WOULD merge if they were in regular.
+    left = _storyline_summary("UK PM event A", 0.9, "burnham", role="core")
+    right = _storyline_summary("UK PM event B", 0.85, "burnham")
+    # Patch their embeddings to be near-identical so the dedup check would
+    # trigger if it ran.
+    left.cluster.articles[0].embedding = [1.0, 0.0, 0.0]
+    right.cluster.articles[0].embedding = [0.99, 0.01, 0.0]
+    family = {
+        "macro_topic_key": "burnham",
+        "storyline_key": "burnham",
+        "summaries": [left, right],
+    }
+    hot, _f, regular, _p = resolve_display_duplicates([family], [], [], [])
+    assert len(hot) == 1
+    # Both members preserved — the family did not collapse to 1.
+    assert hot[0]["member_count"] == 2
+    assert regular == []
 
 
 def test_display_dedup_merges_crosslang_same_event_in_positive_lane():

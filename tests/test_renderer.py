@@ -1170,7 +1170,7 @@ class TestHotTopics:
         assert "font-variant-emoji: emoji;" in html
         assert tree.xpath('//button[contains(@class, "cat-tab") and not(contains(@class, "hot-tab"))]//span[@class="emoji" and text()="🌍"]')
         assert tree.xpath('//button[contains(@class, "hot-tab")]//span[@class="emoji" and text()="⚠️"]')
-        assert tree.xpath('//div[contains(@class, "overview-title")]//span[@class="emoji" and text()="⚠️"]')
+        assert tree.xpath('//*[contains(@class, "overview-title")]//span[@class="emoji" and text()="⚠️"]')
         assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="emoji" and text()="🇯🇵"]')
         assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="emoji" and text()="🔍"]')
         assert tree.xpath('//*[contains(@class, "persp-src")]//span[@class="emoji" and text()="🇯🇵"]')

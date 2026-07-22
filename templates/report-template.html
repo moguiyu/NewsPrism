@@ -543,6 +543,9 @@
       border: 1px solid rgba(255, 255, 255, 0.06);
     }
 
+    /* Storyline title is now a button (Additional fix #4): click to enter the
+       tab. Flat styling per AGENTS.md — no card/lift/shadow; only a subtle
+       accent-color underline on hover signals interactivity. */
     .overview-title {
       display: flex;
       align-items: center;
@@ -551,6 +554,17 @@
       font-weight: 700;
       color: var(--text);
       margin-bottom: 4px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+      text-decoration: none;
+    }
+    .overview-title:hover {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 4px;
     }
 
     .overview-title .hot-icon {
@@ -2650,7 +2664,7 @@
         {% for hot in hot_topics %}
         <article class="overview-item">
           <div>
-            <div class="overview-title"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
+            <button class="overview-title" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</button>
             <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
             <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
             <div class="overview-anchors">
