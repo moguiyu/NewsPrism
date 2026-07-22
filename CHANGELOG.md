@@ -1,6 +1,78 @@
 # Changelog
 
-## Unreleased
+## v0.5.3 - 2026-07-22
+
+### Added
+
+- **Tavily key rotation** — the Active Seeker now reads `TAVILY_API_KEYS` (a
+  comma-separated list) and rotates to the next key on HTTP 401/403 within the
+  same call. The active key is pinned for subsequent calls, and a single
+  warning fires only when all keys are exhausted. Fixes a 37-day incident
+  (2026-06-15 → 2026-07-21) where one invalid key silently returned 0 results
+  for every regional-perspective search.
+- **Inline missing-perspective placeholders** — when a region is targeted by
+  the seeker but the search fails (auth, no results, or all rejected), a flat
+  `⚠️` placeholder is rendered in the cluster's source list with the country
+  flag, a short bilingual failure label, and the failure detail in a tooltip.
+  Never silent, never counts toward `is_multi_source`.
+- **`same_conflict_different_event` storyline relation** — a fourth storyline
+  relation added to the LLM classifier so that distinct daily incidents of the
+  same ongoing conflict (Russia-Ukraine, Iran-US, Israel-Palestine, China-US
+  trade) glue into one storyline family with role `spillover`. Components glued
+  by this edge bypass the strict 0.60 coherence gate (different daily incidents
+  have low centroid similarity by design); a `storyline_conflict_coherence_min`
+  config knob exposes the relaxed bar.
+- **Content-derived storyline keys** — `storyline-{slug}-{hash8}` and
+  `single-{hash8}` replace the per-run counter keys (`storyline-1`, `single-26`)
+  that collided across days. Same anchor set → same key across runs; different
+  topic → different hash.
+- **Storyline name coherence on history reuse** — when a historical
+  `storyline_key` is reused for a topic that has drifted (≥3 days old), the
+  name is regenerated from today's anchors while the key is kept for
+  cross-day continuity. Adjacent history (≤2 days) keeps the name
+  unconditionally.
+- **`ownership_suppressed` article column** — the per-article ownership-gate
+  decision is now persisted (was in-memory only), so the portal/audit can show
+  which articles were state-media-suppressed, not just the aggregate
+  cluster-level verdict. Race-safe migration for concurrent container startup.
+- **Clickable storyline title** — the focus-map title is now a button that
+  enters the storyline tab on click (flat hover underline, no card/lift).
+- **Shared-storyline tag** — when 2+ main-lane clusters share a storyline key
+  (e.g. a family that didn't reach the tab cap), a flat uppercase tag is
+  rendered above each card so the connection is visible.
+- `docs/generated/db-schema.md` and `docs/design-docs/decisions.md` added per
+  AGENTS.md (schema reference + decision log).
+
+### Changed
+
+- **Ownership gate no longer hard-suppresses small high-impact clusters** —
+  the `ownership_suppressed_all` rule now requires ≥
+  `gate_suppress_min_cluster_size` (default 4) articles AND composite <
+  `review_floor` (0.34). Smaller or high-impact clusters demote to
+  `needs_review` with flag `ownership_all_blocked_review` so a human editor
+  sees the event (was: UK PM resignation at composite 0.587 vanished entirely).
+- **Hot topic tab admission lowered to ≥2 members** — `min_items_per_topic`
+  lowered from 5 → 3; every storyline family with ≥2 members claims a tab,
+  capped at `max_topic_tabs: 3` per day (was: most families spilled to the
+  main lane as standalone cards).
+- **Within-family members preserved** — `resolve_display_duplicates` now
+  skips pairs that belong to the same storyline family. The resolver grouped
+  them intentionally; collapsing them (e.g. 3 UK-PM articles → 1) defeated the
+  tab.
+- **Seeker freshness gate trusts Tavily's `days` bound** — when
+  `published_date` is missing (Tavily returns `None` for most outlets), the
+  gate now parses the date from the URL path, or trusts the query's `days:3`
+  bound. Previously 100% of fresh results were rejected as stale.
+- Seeker acceptance telemetry always records (was empty for 2+ months because
+  it only fired on rejections).
+- `storyline_history_similarity_threshold` raised 0.48 → 0.55.
+
+### Fixed
+
+- All five root causes from the 2026-07-21 systematic review: missing
+  perspective searches, conflict-news spillover into the main lane,
+  ownership-gate over-suppression, storyline-key contamination, and the
+  article-level observability gap.
 
 ## v0.5.2 - 2026-07-04
 
