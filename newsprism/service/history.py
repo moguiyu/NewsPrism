@@ -116,6 +116,55 @@ def _short_name(value: str, max_chars: int) -> str:
     return compact or "焦点话题"
 
 
+# Token-overlap bar for the "is the historical storyline name still relevant?"
+# check. Low overlap → the name is stale and a fresh name should be generated
+# from today's content (Issue #4 / Additional fix #3).
+_STORYLINE_NAME_MIN_OVERLAP = 0.18
+
+
+def _storyline_name_matches_content(name: str, content: str) -> bool:
+    """Return True if a (possibly historical) storyline name is still a good
+    description of today's cluster content.
+
+    Uses a lightweight CJK/latin token-overlap heuristic rather than an
+    embedding call (this runs inside the resolver hot path). When the historical
+    name has drifted — e.g. ``特朗普再提选举舞弊`` was reused for a Philippines
+    reef story — overlap is ~0 and the caller regenerates the name from today's
+    anchors.
+    """
+    if not name or not content:
+        return False
+    name_tokens = _content_tokens(name)
+    content_tokens = _content_tokens(content)
+    if not name_tokens or not content_tokens:
+        return False
+    overlap = len(name_tokens & content_tokens) / len(name_tokens)
+    return overlap >= _STORYLINE_NAME_MIN_OVERLAP
+
+
+# CJK char + latin word tokenization for the name-coherence check.
+_TOKEN_PATTERN = re.compile(r"[一-鿿]|[a-zA-Z]{2,}")
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Tokenize text into individual CJK chars + latin words (lowercased)."""
+    if not text:
+        return set()
+    return {tok.lower() for tok in _TOKEN_PATTERN.findall(text)}
+
+
+def _days_between(old_iso: str, new_iso: str) -> int:
+    """Non-raising day difference between two ISO date strings.
+
+    Returns a large number (maxint) when either side is unparseable, so the
+    name-coherence check errs on the side of validating the name.
+    """
+    try:
+        return max((date.fromisoformat(new_iso) - date.fromisoformat(old_iso)).days, 0)
+    except (ValueError, TypeError):
+        return 9999
+
+
 # ─── FRESHNESS ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -430,7 +479,7 @@ class StorylineResolver:
             len(accepted_edges),
             sum(1 for members in components.values() if len(members) > 1),
         )
-        self._assign_storylines(clusters, profiles, components, accepted_edges, history_matches)
+        self._assign_storylines(clusters, profiles, components, accepted_edges, history_matches, current_date)
         self._split_incoherent_families(clusters, profiles, history_matches, accepted_edges)
         return clusters
 
@@ -479,6 +528,7 @@ class StorylineResolver:
                     "storyline_role": historical.storyline_role,
                     "score": score,
                     "cluster_id": historical.id,
+                    "report_date": historical.report_date,
                 }
             if best_match is not None:
                 matches[int(profile["index"])] = best_match
@@ -799,6 +849,7 @@ class StorylineResolver:
         components: dict[int, list[int]],
         edges: list[dict[str, object]],
         history_matches: dict[int, dict[str, object]],
+        current_date: date,
     ) -> None:
         edge_map: dict[int, list[dict[str, object]]] = defaultdict(list)
         for edge in edges:
@@ -850,9 +901,29 @@ class StorylineResolver:
                     ),
                     None,
                 )
-                storyline_name = _short_name(
-                    str((reuse_match or {}).get("storyline_name") or reuse_key), self.max_name_chars
+                historical_name = str((reuse_match or {}).get("storyline_name") or reuse_key)
+                # Issue #4 (Fix 2 + Additional 3): the historical name may be
+                # stale — a weak cosine match reused this key even though the
+                # topic has drifted (e.g. storyline-3 meant "特朗普再提选举舞弊"
+                # on 7/18 but got attached to Philippines reef content on 7/22).
+                # Only validate the name when the history is non-adjacent
+                # (≥3 days old): for yesterday's storylines the name is
+                # obviously still fresh, and the cross-language token-overlap
+                # heuristic is unreliable for adjacent reuse. For older
+                # history, regenerate the name from today's anchors if the
+                # historical name no longer describes today's content.
+                reuse_report_date = (reuse_match or {}).get("report_date") or ""
+                days_old = _days_between(reuse_report_date, current_date.isoformat())
+                today_text = " ".join(
+                    str(profiles[idx]["lead_title"])
+                    for idx in core_nodes[:3]
                 )
+                if days_old >= 3 and not _storyline_name_matches_content(historical_name, today_text):
+                    storyline_name = self._build_storyline_name(
+                        [clusters[idx] for idx in core_nodes]
+                    )
+                else:
+                    storyline_name = _short_name(historical_name, self.max_name_chars)
             else:
                 storyline_name = self._build_storyline_name([clusters[idx] for idx in core_nodes])
                 # Content-derived key (Issue #4): same anchor set → same key

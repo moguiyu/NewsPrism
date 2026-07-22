@@ -28,7 +28,7 @@ def _config(main_limit: int = 3) -> Config:
         output={
             "hot_topics": {
                 "enabled": True,
-                "max_topic_tabs": 8,
+                "max_topic_tabs": 3,
                 "min_items_per_topic": 3,
                 "candidate_window": 40,
                 "tab_name_max_chars": 10,
