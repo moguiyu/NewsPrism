@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -28,6 +29,10 @@ from newsprism.service.embeddings import get_model as _get_model
 from newsprism.types import Article, ArticleCluster
 
 logger = logging.getLogger(__name__)
+
+# Sentinel for sorting when published_at is None (searched articles with no
+# recoverable date). Puts them last in descending-time ordering.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class Clusterer:
@@ -128,12 +133,15 @@ class Clusterer:
                 key=lambda idx: (
                     sum(1 for neighbor in adjacency.get(idx, ()) if neighbor in component_set),
                     len(articles[idx].content),
-                    articles[idx].published_at.timestamp(),
+                    (articles[idx].published_at.timestamp() if articles[idx].published_at else 0.0),
                 ),
             )
             kept_indices.append(best_idx)
 
-        kept_indices.sort(key=lambda idx: articles[idx].published_at, reverse=True)
+        kept_indices.sort(
+            key=lambda idx: articles[idx].published_at or _EPOCH,
+            reverse=True,
+        )
         return [articles[idx] for idx in kept_indices]
 
     def _embedding_text(self, article: Article) -> str:

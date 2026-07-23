@@ -836,7 +836,7 @@ class HtmlRenderer:
                 "title": article.title,
                 "url": article.url,
                 "source": article.source_name,
-                "published_at": article.published_at.strftime("%H:%M"),
+                "published_at": article.published_at.strftime("%H:%M") if article.published_at else "",
                 "search_acceptance_status": getattr(article, "search_acceptance_status", "accepted" if article.is_searched else None),
                 "search_acceptance_reason": getattr(article, "search_acceptance_reason", ""),
                 "result_freshness_state": getattr(article, "result_freshness_state", None),
