@@ -69,6 +69,11 @@ def test_should_enrich_hot_cluster_above_trigger():
     assert seeker._should_enrich(_cluster(status="publishable", composite=0.7, hot=True)) is True
 
 
+def test_should_enrich_main_feed_cluster_above_trigger():
+    seeker = ActiveSeeker(_config())
+    assert seeker._should_enrich(_cluster(status="publishable", composite=0.7, hot=False)) is True
+
+
 def test_should_not_enrich_ordinary_publishable():
     seeker = ActiveSeeker(_config())
     assert seeker._should_enrich(_cluster(status="publishable", composite=0.3, hot=False)) is False

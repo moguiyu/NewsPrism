@@ -1,7 +1,8 @@
 """Active Perspective Seeker — fetches missing regional perspectives via Tavily.
 
 Triggered only where the impact evaluation says search money is worth spending
-(seek_more_evidence status, or high-composite hot-topic clusters). One small
+(seek_more_evidence status, or any high-composite cluster — main feed or hot
+topic). One small
 evaluator LLM call per enriched cluster picks the event-relevant regions that
 are missing from the cluster and an English search keyword; non-English regions
 get one keyword-localization call. Candidates must pass region, freshness, and
@@ -173,7 +174,9 @@ class ActiveSeeker:
             return False
         if impact.status == "seek_more_evidence":
             return True
-        return bool(cluster.is_hot_topic and impact.composite >= self.hot_composite_trigger)
+        # No longer gated on is_hot_topic — high-composite main-feed clusters
+        # earn the same search budget as hot-topic ones.
+        return bool(impact.composite >= self.hot_composite_trigger)
 
     def _cluster_regions(self, cluster: ArticleCluster) -> set[str]:
         return {
