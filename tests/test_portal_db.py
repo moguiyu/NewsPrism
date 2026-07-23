@@ -55,6 +55,35 @@ def test_ownership_suppressed_column_added_and_round_trips(tmp_path):
     assert loaded[allowed_id].ownership_suppressed is False
 
 
+def test_insert_article_handles_missing_published_at(tmp_path):
+    """Regression: searched articles with no recoverable publish date
+    (Tavily returns None + URL has no date segment) must still persist.
+
+    The 2026-07-23 incident: seeker enriched 6 clusters successfully, then
+    the publish stage crashed with AttributeError on published_at.isoformat()
+    because published_at was None. The whole day's report failed to publish.
+    """
+    db = tmp_path / "n.db"
+    init_db(db)
+    from newsprism.repo.db import get_articles_by_ids
+    # published_at=None — simulates a Tavily result with no date anywhere.
+    article = Article(
+        url="https://example.com/no-date",
+        title="Searched article with unknown publish time",
+        source_name="SomeOutlet",
+        published_at=None,
+        content="body",
+        is_searched=True,
+        search_region="us",
+    )
+    article_id = insert_article(article, db_path=db)
+    assert article_id is not None
+    loaded = get_articles_by_ids([article_id], db_path=db)
+    assert len(loaded) == 1
+    # Fallback to "now" — published_at must round-trip as a real datetime.
+    assert loaded[0].published_at is not None
+
+
 def test_feedback_corrections_table_created(tmp_path):
     db = tmp_path / "n.db"
     init_db(db)

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
 
@@ -339,6 +339,14 @@ def get_conn(db_path: Path = DB_PATH) -> Generator[sqlite3.Connection, None, Non
 
 def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
     """Insert article, return id or None if URL already exists."""
+    # published_at is NOT NULL in the schema. Searched articles may have no
+    # recoverable publish date (Tavily returns None and the URL has no date
+    # segment); fall back to now so the row can be persisted. The freshness
+    # gate already accepted the result (trust-the-bound), so "now" is a safe
+    # lower bound on recency.
+    published_at = article.published_at
+    if published_at is None:
+        published_at = datetime.now(timezone.utc)
     with get_conn(db_path) as conn:
         try:
             cur = conn.execute(
@@ -352,7 +360,7 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                     article.url,
                     article.title,
                     article.source_name,
-                    article.published_at.isoformat(),
+                    published_at.isoformat(),
                     article.content,
                     json.dumps(article.topics, ensure_ascii=False),
                     json.dumps(article.embedding) if article.embedding else None,
