@@ -279,3 +279,30 @@ def test_assess_clusters_llm_failure_falls_back_to_signal(monkeypatch):
     # deterministic degradation: multi-source outranks single-source
     assert assessments[0].composite > assessments[1].composite
     assert all(a.status != "suppress" for a in assessments)
+
+
+def test_voice_needs_are_normalized_and_preserved_on_recompute():
+    assessor = _assessor()
+    cluster = _cluster("Acme incident", "Acme response")
+    item = ImpactItem(
+        cluster_index=1,
+        scope=5,
+        severity=5,
+        novelty=5,
+        actor_influence=5,
+        decision_relevance=5,
+        voice_needs=[
+            {"label": " Acme Labs ", "country": "US", "kind": "company"},
+            {"label": "acme labs", "country": "us", "kind": "company"},
+            {"label": "", "country": "us", "kind": "company"},
+        ],
+    )
+    cluster.impact = assessor._build_assessment(cluster, item, assessor.weights())
+
+    assert [(need.label, need.country, need.kind) for need in cluster.impact.voice_needs] == [
+        ("Acme Labs", "us", "company")
+    ]
+    assessor.recompute_local(cluster)
+    assert [(need.label, need.country, need.kind) for need in cluster.impact.voice_needs] == [
+        ("Acme Labs", "us", "company")
+    ]

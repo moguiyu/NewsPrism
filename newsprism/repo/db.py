@@ -12,7 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
 
-from newsprism.types import Article, Cluster, ClusterQualityReport, ClusterSummary, SearchRequestEvent
+from newsprism.types import (
+    Article, Cluster, ClusterQualityReport, ClusterSummary, SearchCandidateReview,
+    SearchRequestEvent,
+)
 
 DB_PATH = Path("data/newsprism.db")
 
@@ -94,6 +97,22 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 duration_ms INTEGER,
                 estimated_cost_usd REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS search_candidate_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                title TEXT NOT NULL,
+                source_name TEXT NOT NULL,
+                target_label TEXT NOT NULL,
+                target_region TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(url, target_label, stage)
             );
 
             CREATE TABLE IF NOT EXISTS cluster_quality_reports (
@@ -232,6 +251,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 ON search_request_events(created_at);
             CREATE INDEX IF NOT EXISTS idx_search_request_events_provider
                 ON search_request_events(provider, request_type);
+            CREATE INDEX IF NOT EXISTS idx_search_candidate_reviews_decision
+                ON search_candidate_reviews(decision, created_at);
             CREATE INDEX IF NOT EXISTS idx_cluster_quality_reports_cluster_id
                 ON cluster_quality_reports(cluster_id);
             CREATE INDEX IF NOT EXISTS idx_cluster_claims_cluster_id
@@ -455,6 +476,29 @@ def insert_search_request_event(event: SearchRequestEvent, db_path: Path = DB_PA
             ),
         )
         return cur.lastrowid
+
+
+def insert_search_candidate_review(
+    review: SearchCandidateReview, db_path: Path = DB_PATH
+) -> int | None:
+    """Record a discovered candidate once for audit/review without publishing it."""
+    with get_conn(db_path) as conn:
+        try:
+            cur = conn.execute(
+                """INSERT INTO search_candidate_reviews (
+                       url, domain, title, source_name, target_label, target_region,
+                       stage, verdict, decision, reason, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+                (
+                    review.url, review.domain, review.title, review.source_name,
+                    review.target_label, review.target_region, review.stage,
+                    review.verdict, review.decision, review.reason,
+                    review.created_at.isoformat() if review.created_at else None,
+                ),
+            )
+            return cur.lastrowid
+        except sqlite3.IntegrityError:
+            return None
 
 
 # ─── CLUSTERS ──────────────────────────────────────────────────────────────────

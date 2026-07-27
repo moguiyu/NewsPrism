@@ -75,6 +75,22 @@ class SearchRequestEvent:
 
 
 @dataclass
+class SearchCandidateReview:
+    """A discovered Active Seeker candidate that needs an auditable verdict."""
+    url: str
+    domain: str
+    title: str
+    source_name: str
+    target_label: str
+    target_region: str
+    stage: str
+    verdict: str
+    decision: str               # accepted | pending_review | rejected
+    reason: str = ""
+    created_at: datetime | None = None
+
+
+@dataclass
 class Cluster:
     """Persisted cluster record (SQLite). Separate from in-memory ArticleCluster."""
     topic_category: str
@@ -97,6 +113,14 @@ class Cluster:
 
 # ─── IMPACT EVALUATION ───────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class VoiceNeed:
+    """A named party whose direct response would materially inform an event."""
+    label: str
+    country: str
+    kind: str = "organization"
+
+
 @dataclass
 class ImpactAssessment:
     """LLM multi-dimensional impact judgment + local cross-source signal for one cluster.
@@ -110,6 +134,7 @@ class ImpactAssessment:
     short_topic_name: str | None = None
     topic_icon_key: str | None = None
     subject_regions: list[str] = field(default_factory=list)
+    voice_needs: list[VoiceNeed] = field(default_factory=list)
     target_region: str | None = None      # ISO alpha-2 of whose domestic affairs the story is about
     is_home_affairs: bool = False         # True when the story falls within the 内政 boundary
     gate_blocked: list[str] = field(default_factory=list)   # sources the gate suppressed (foreign 内政)

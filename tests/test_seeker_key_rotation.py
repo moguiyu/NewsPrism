@@ -34,7 +34,9 @@ def _config_with_keys(*keys: str) -> Config:
         active_search={
             "telemetry_enabled": False,
             "max_regions_per_cluster": 2,
-            "min_organic_sources_to_skip": 8,
+            "source_verdicts": {
+                "lemonde.fr": {"verdict": "country_editorial", "region": "fr"},
+            },
             "search_profiles": {"us": {"language": "en"}, "fr": {"language": "fr"}},
         },
     )
@@ -58,7 +60,9 @@ def _cluster_with_target_region(target_region: str = "fr") -> ArticleCluster:
             )
         ],
     )
-    cluster.impact = ImpactAssessment(cluster_key="k", composite=0.7, status="seek_more_evidence")
+    cluster.impact = ImpactAssessment(
+        cluster_key="k", composite=0.7, status="seek_more_evidence", subject_regions=[target_region]
+    )
     return cluster
 
 
@@ -162,8 +166,7 @@ def test_placeholder_synthesized_when_search_fails():
     seeker = ActiveSeeker(_config_with_keys("bad"))
     cluster = _cluster_with_target_region()
 
-    # Force the analyzer to target "fr" (a missing region) with a known keyword.
-    with patch.object(ActiveSeeker, "_analyze_search_targets", return_value=("US event", ["fr"])), \
+    with patch.object(ActiveSeeker, "_analyze_search_keyword", return_value="US event"), \
          patch.object(httpx.Client, "post", side_effect=lambda *a, **k: _tavily_401_response()):
         seeker.enhance_clusters([cluster])
 
@@ -182,7 +185,7 @@ def test_placeholder_does_not_count_as_source():
     cluster = _cluster_with_target_region()
     organic_source_count_before = len(cluster.sources)
 
-    with patch.object(ActiveSeeker, "_analyze_search_targets", return_value=("US event", ["fr"])), \
+    with patch.object(ActiveSeeker, "_analyze_search_keyword", return_value="US event"), \
          patch.object(httpx.Client, "post", side_effect=lambda *a, **k: _tavily_401_response()):
         seeker.enhance_clusters([cluster])
 
@@ -196,7 +199,7 @@ def test_placeholder_not_synthesized_when_search_succeeds():
     seeker = ActiveSeeker(_config_with_keys("good"))
     cluster = _cluster_with_target_region()
 
-    with patch.object(ActiveSeeker, "_analyze_search_targets", return_value=("US event", ["fr"])), \
+    with patch.object(ActiveSeeker, "_analyze_search_keyword", return_value="US event"), \
          patch.object(httpx.Client, "post", side_effect=lambda *a, **k: _tavily_200_response()):
         seeker.enhance_clusters([cluster])
 
@@ -216,7 +219,7 @@ def test_failure_reasons_for_common_rejection_paths():
         json={"results": []},
         request=httpx.Request("POST", "https://api.tavily.com/search"),
     )
-    with patch.object(ActiveSeeker, "_analyze_search_targets", return_value=("US event", ["fr"])), \
+    with patch.object(ActiveSeeker, "_analyze_search_keyword", return_value="US event"), \
          patch.object(httpx.Client, "post", side_effect=lambda *a, **k: empty_200):
         seeker.enhance_clusters([cluster])
 

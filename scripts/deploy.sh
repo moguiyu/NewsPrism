@@ -52,6 +52,7 @@ rsync -av \
   --exclude output \
   --exclude __pycache__ \
   --exclude .pytest_cache \
+  --exclude .zcode \
   --exclude .playwright-mcp \
   --exclude .worktrees \
   --exclude .claude \

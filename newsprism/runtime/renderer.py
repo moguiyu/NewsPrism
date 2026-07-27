@@ -120,9 +120,11 @@ _INVALID_PERSPECTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"无关"),
     re.compile(r"不相关"),
     re.compile(r"未提供.{0,8}(视角|信息|内容)"),
+    re.compile(r"未稳定提炼出可单列的差异化视角"),
     re.compile(r"not related", re.IGNORECASE),
     re.compile(r"unrelated", re.IGNORECASE),
     re.compile(r"irrelevant", re.IGNORECASE),
+    re.compile(r"no distinct perspective could be extracted", re.IGNORECASE),
 )
 
 # Seeker placeholder failure reasons → bilingual short label. Surfaced as the
@@ -134,6 +136,12 @@ _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "http_402": ("额度不足", "Quota exceeded"),
     "http_429": ("限流", "Rate limited"),
     "network": ("网络错误", "Network error"),
+    "official_not_found": ("未找到官方回应", "No official response found"),
+    "country_fallback_not_found": ("未找到当地报道", "No local reporting found"),
+    "candidate_unverified": ("来源未能核验", "Source could not be verified"),
+    "candidate_pending_review": ("来源待人工核验", "Source pending review"),
+    "not_official_source": ("非官方来源", "Not an official source"),
+    "not_related_country_source": ("非相关当地来源", "Not related local reporting"),
     "empty_results": ("无新结果", "No fresh results"),
     "no_acceptable_result": ("无可用结果", "No acceptable result"),
     "stale_result": ("结果过旧", "Result too old"),
@@ -141,6 +149,8 @@ _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "event_mismatch": ("事件不匹配", "Event mismatch"),
     "duplicate_of_existing": ("已有相同报道", "Duplicate of existing"),
     "thin_result": ("结果内容过少", "Result too thin"),
+    "query_generation_failed": ("查询生成失败", "Query generation failed"),
+    "entity_mismatch": ("实体不匹配", "Entity mismatch"),
     "unknown": ("未知原因", "Unknown reason"),
 }
 
