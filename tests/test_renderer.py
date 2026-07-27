@@ -755,6 +755,34 @@ class TestPerspectivesContext:
         assert payload["clusters"][0]["has_expandable_perspectives"] is False
         assert len(payload["clusters"][0]["grouped_perspectives"]) == 1
 
+    def test_fallback_confirmations_do_not_count_as_distinct_perspectives(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        fallback = "该来源报道与主摘要角度接近，未稳定提炼出可单列的差异化视角。"
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Business",
+                articles=[
+                    Article("https://thepaper.cn/ctrip", "携程整改", "澎湃新闻", datetime.now(tz=timezone.utc), "整改措施"),
+                    Article("https://36kr.com/ctrip", "携程回应", "36氪", datetime.now(tz=timezone.utc), "回应处罚"),
+                ],
+            ),
+            summary="**携程整改**\n\n两家来源报道相同事实。",
+            grouped_perspectives=[
+                PerspectiveGroup(sources=["澎湃新闻"], perspective=fallback),
+                PerspectiveGroup(sources=["36氪"], perspective=fallback),
+            ],
+        )
+
+        html_path = renderer.render([summary], date(2026, 7, 26))
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert fallback not in html
+        assert "查看 2 个视角" not in html
+        assert payload["clusters"][0]["distinct_perspective_count"] == 0
+        assert payload["clusters"][0]["has_expandable_perspectives"] is False
+        assert {source["source"] for source in payload["clusters"][0]["footer_sources"]} == {"澎湃新闻", "36氪"}
+
     def test_empty_render_keeps_existing_latest_symlink(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         previous_date = "2026-03-26"

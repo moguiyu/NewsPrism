@@ -38,6 +38,7 @@ from newsprism.types import (
     OWNERSHIP_GATE_ALLOW,
     OWNERSHIP_GATE_REVIEW,
     OWNERSHIP_GATE_SUPPRESS,
+    VoiceNeed,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ class ImpactItem(BaseModel):
     short_topic_name: str | None = None
     topic_icon_key: str | None = None
     subject_regions: list[str] = Field(default_factory=list)
+    voice_needs: list[dict[str, str]] = Field(default_factory=list)
     target_region: str | None = None     # ISO alpha-2 of whose 内政 this is about
     is_home_affairs: bool = False        # True when the story falls within the 内政 boundary
 
@@ -108,6 +110,25 @@ def _norm_regions(values: list[str] | None) -> list[str]:
         if len(out) == 3:
             break
     return out
+
+
+def _norm_voice_needs(values: list[dict[str, str]] | None) -> list[VoiceNeed]:
+    """Keep a small, deduplicated set of explicit named first-party needs."""
+    needs: list[VoiceNeed] = []
+    for value in values or []:
+        if not isinstance(value, dict):
+            continue
+        label = re.sub(r"\s+", " ", str(value.get("label") or "").strip())[:100]
+        country = str(value.get("country") or "").strip().lower()
+        kind = str(value.get("kind") or "organization").strip().lower()[:40]
+        if not label or not re.fullmatch(r"[a-z]{2}", country):
+            continue
+        if label.casefold() in {need.label.casefold() for need in needs}:
+            continue
+        needs.append(VoiceNeed(label=label, country=country, kind=kind))
+        if len(needs) == 3:
+            break
+    return needs
 
 
 class ImpactAssessor:
@@ -355,6 +376,7 @@ class ImpactAssessor:
             f"- topic_icon_key：只能从这些键中选一个：{icons}\n"
             "- rationale：不超过 30 个中文字符，说明影响判断的核心依据\n"
             "- subject_regions：该事件主要涉及的国家/地区，用小写 ISO 代码数组（最多 3 个），如 [\"il\",\"ir\"]；与新闻来源国不同，指事件本身发生/影响的国家\n"
+            "- voice_needs：最多 3 个需要补充直接回应的具名公司、政府、部委、政党或组织。仅当其本人的声明能实质澄清本事件时才列出；不要列媒体、个人、产品、泛技术词、仅被提到的国家，或新闻中已作为官方来源出现的主体。每项为 {label,country,kind}，country 是该主体主要所在国的小写 ISO 代码；不确定则不要列\n"
             "- target_region：如果事件主要涉及一个国家的内政（国内治理），填写该国的小写 ISO 代码；如果是外交、贸易、战争、国际组织、科技/文化事件，或自然灾害/事故及其纯伤亡报道，填 null\n"
             "- is_home_affairs：布尔值。true 仅指某国的国内治理（选举、国内政策、法律、人权国内实施、社会保障、国内治安、抗议）；false 表示外交、战争、贸易、国际组织、科技、文化、体育、娱乐，或自然灾害/事故及其伤亡人数，或无法确定。关键：地震、洪水、矿难、爆炸等灾难的死亡/受伤人数本身不是内政，应填 false 与 target_region=null；网络攻击/黑客入侵、数据泄露等安全事件同样不是内政（即便受害方是政府机构），应填 false 与 target_region=null；只有当报道核心是该国政府的应急治理、问责或政策回应时才算内政\n"
             "要求：\n"
@@ -365,6 +387,7 @@ class ImpactAssessor:
             "\"actor_influence\":8,\"decision_relevance\":7,\"feelgood\":0,"
             "\"rationale\":\"...\",\"display_category\":\"World\",\"short_topic_name\":\"...\","
             "\"topic_icon_key\":\"globe\",\"subject_regions\":[\"il\"],"
+            "\"voice_needs\":[{\"label\":\"Example Ministry\",\"country\":\"il\",\"kind\":\"government\"}],"
             "\"target_region\":\"il\",\"is_home_affairs\":true}]}\n\n"
             f"事件簇：\n{json.dumps(rows, ensure_ascii=False)}"
         )
@@ -415,6 +438,7 @@ class ImpactAssessor:
                 [r.strip().strip('"').strip() for r in regions_match.group(1).split(",")]
                 if regions_match else []
             )
+            voice_needs: list[dict[str, str]] = []
             target_region_match = re.search(r'"target_region"\s*:\s*"([^"]*)"', body)
             is_ha_match = re.search(r'"is_home_affairs"\s*:\s*(true|false)', body)
             target_region = (
@@ -434,6 +458,7 @@ class ImpactAssessor:
                     short_topic_name=short_name.group(1) if short_name else None,
                     topic_icon_key=icon.group(1) if icon else None,
                     subject_regions=subject_regions,
+                    voice_needs=voice_needs,
                     target_region=target_region,
                     is_home_affairs=is_home_affairs,
                 )
@@ -633,6 +658,7 @@ class ImpactAssessor:
             short_topic_name = None
             topic_icon_key = self.icon_allowlist[0] if self.icon_allowlist else None
             subject_regions = []
+            voice_needs = []
             target_region = None
             is_home_affairs = False
         else:
@@ -648,6 +674,7 @@ class ImpactAssessor:
                 else (self.icon_allowlist[0] if self.icon_allowlist else None)
             )
             subject_regions = _norm_regions(item.subject_regions)
+            voice_needs = _norm_voice_needs(item.voice_needs)
             target_region = item.target_region
             is_home_affairs = bool(item.is_home_affairs)
 
@@ -660,6 +687,7 @@ class ImpactAssessor:
             short_topic_name=short_topic_name,
             topic_icon_key=topic_icon_key,
             subject_regions=subject_regions,
+            voice_needs=voice_needs,
             target_region=target_region,
             is_home_affairs=is_home_affairs,
             signal=signal,
@@ -682,6 +710,7 @@ class ImpactAssessor:
             short_topic_name=assessment.short_topic_name,
             topic_icon_key=assessment.topic_icon_key,
             subject_regions=assessment.subject_regions,
+            voice_needs=[{"label": need.label, "country": need.country, "kind": need.kind} for need in assessment.voice_needs],
             target_region=assessment.target_region,
             is_home_affairs=assessment.is_home_affairs,
         )

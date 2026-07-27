@@ -121,12 +121,17 @@ active_search:
   result_max_age_hours: 72
   min_content_chars: 150
   max_results_per_region: 1
-  max_regions_per_cluster: 3        # cap missing regions searched per cluster (RC-1)
-  min_organic_sources_to_skip: 8   # skip seeker when cluster already has this many organic articles (RC-3)
-  min_query_token_overlap: 0.34
-  min_cluster_title_overlap: 0.08
+  max_regions_per_cluster: 3        # cap identified missing voices searched per cluster
+  max_localized_query_variants: 2
   max_existing_title_overlap: 0.82
-  allow_unknown_freshness_for_official: false
+  min_semantic_event_match: 0.58
+  # The impact evaluator extracts each named party from the event, so active
+  # search can discover sources outside the normal intake. Candidates are
+  # verified first-party voices or independently operated local editorial
+  # sources; a country TLD or Tavily country label never proves provenance.
+  # Manually reviewed overrides only. They do not limit search discovery:
+  # unknown local publishers enter pending review instead of becoming a voice.
+  source_verdicts: {}
   search_profiles:
     us:
       language: en

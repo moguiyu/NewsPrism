@@ -1,12 +1,10 @@
-"""Active Perspective Seeker — fetches missing regional perspectives via Tavily.
+"""Active Perspective Seeker — fills a specific missing first-party voice.
 
-Triggered only where the impact evaluation says search money is worth spending
-(seek_more_evidence status, or any high-composite cluster — main feed or hot
-topic). One small
-evaluator LLM call per enriched cluster picks the event-relevant regions that
-are missing from the cluster and an English search keyword; non-English regions
-get one keyword-localization call. Candidates must pass region, freshness, and
-embedding event-match gates — the seeker prefers no injection over a bad one.
+Search is allowed only after impact selection. It extracts the named actor from
+the event itself, seeks that actor's official site or verified social account
+first, and only then seeks a rigorously verified editorial source in that
+actor's related country. It never searches unrelated absent countries and
+never treats a result's country label as evidence of provenance.
 
 Layer: service (imports types, config, repo for telemetry)
 """
@@ -16,7 +14,7 @@ import json
 import logging
 import re
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import Any
@@ -27,55 +25,29 @@ import numpy as np
 from rapidfuzz import fuzz
 
 from newsprism.config import Config
-from newsprism.repo import DB_PATH, insert_search_request_event
+from newsprism.repo import DB_PATH, insert_search_candidate_review, insert_search_request_event
 from newsprism.service.embeddings import get_model
 from newsprism.service.llm_compat import completion_compat_kwargs
-from newsprism.types import Article, ArticleCluster, SearchRequestEvent
+from newsprism.service.locales import country_name, language_name, query_languages
+from newsprism.types import Article, ArticleCluster, SearchCandidateReview, SearchRequestEvent
 
 logger = logging.getLogger(__name__)
 
 litellm.set_verbose = False
 
-_REGION_NAMES: dict[str, str] = {
-    "us": "United States",
-    "gb": "United Kingdom",
-    "cn": "China",
-    "jp": "Japan",
-    "kr": "South Korea",
-    "ru": "Russia",
-    "de": "Germany",
-    "fr": "France",
-    "in": "India",
-    "ua": "Ukraine",
-    "il": "Israel",
-    "sa": "Saudi Arabia",
-}
-
-_LANGUAGE_NAMES: dict[str, str] = {
-    "en": "English",
-    "zh": "Chinese",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "ru": "Russian",
-    "de": "German",
-    "fr": "French",
-    "uk": "Ukrainian",
-    "he": "Hebrew",
-    "ar": "Arabic",
-}
-
-_TLD_REGIONS: dict[str, str] = {
-    "jp": "jp", "kr": "kr", "ru": "ru", "de": "de", "fr": "fr",
-    "in": "in", "ua": "ua", "il": "il", "sa": "sa", "cn": "cn",
-    "uk": "gb",
-}
-
-
 @dataclass
 class RegionConfig:
     """Search configuration for one major region."""
-    language: str = "en"
-    trusted_domains: list[str] = field(default_factory=list)
+    language: str | list[str] | None = None
+
+
+@dataclass(frozen=True)
+class VoiceTarget:
+    """One event-derived voice need, with country fallback when official fails."""
+    region: str
+    label: str
+    role: str = "entity"
+    official_first: bool = True
 
 
 class ActiveSeeker:
@@ -107,13 +79,19 @@ class ActiveSeeker:
         self.min_content_chars = int(search_cfg.get("min_content_chars", 150))
         self.max_results_per_region = int(search_cfg.get("max_results_per_region", 1))
         self.max_regions_per_cluster = int(search_cfg.get("max_regions_per_cluster", 2))
-        self.min_organic_sources_to_skip = int(search_cfg.get("min_organic_sources_to_skip", 8))
+        self.max_localized_query_variants = int(search_cfg.get("max_localized_query_variants", 2))
         self.max_existing_title_overlap = float(search_cfg.get("max_existing_title_overlap", 0.82))
-        self.min_semantic_event_match = float(search_cfg.get("min_semantic_event_match", 0.45))
+        self.min_semantic_event_match = float(search_cfg.get("min_semantic_event_match", 0.58))
         self.hot_composite_trigger = float(search_cfg.get("hot_composite_trigger", 0.55))
 
         profiles = search_cfg.get("search_profiles", {}) if isinstance(search_cfg, dict) else {}
         self.region_config = self._build_region_config(profiles)
+        verdicts = search_cfg.get("source_verdicts", {}) if isinstance(search_cfg, dict) else {}
+        self.source_verdicts = {
+            str(domain).lower().removeprefix("www."): dict(spec)
+            for domain, spec in (verdicts or {}).items()
+            if isinstance(spec, dict)
+        }
         self.source_regions = {source.name: source.region for source in cfg.sources}
         self._search_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
@@ -123,9 +101,6 @@ class ActiveSeeker:
         if not self.tavily_api_keys:
             logger.info("Active seeker disabled: no TAVILY_API_KEYS configured")
             return clusters
-        if not self.region_config:
-            return clusters
-
         # Reset per-run state: keys that auth-failed earlier may have been reset by the provider.
         self._exhausted_keys = set()
         self._search_cache.clear()
@@ -133,8 +108,12 @@ class ActiveSeeker:
         for cluster in clusters:
             if not self._should_enrich(cluster):
                 continue
+            targets = self._missing_voice_targets(cluster)
+            if not targets:
+                continue
+            keyword = self._analyze_search_keyword(cluster, targets)
             try:
-                if self._enrich_cluster(cluster):
+                if self._enrich_cluster(cluster, targets, keyword):
                     enriched += 1
             except Exception as exc:
                 logger.warning("Seeker enrichment failed for '%s': %s", cluster.topic_category, exc)
@@ -147,28 +126,9 @@ class ActiveSeeker:
             )
         return clusters
 
-        self._search_cache.clear()
-        enriched = 0
-        for cluster in clusters:
-            if not self._should_enrich(cluster):
-                continue
-            try:
-                if self._enrich_cluster(cluster):
-                    enriched += 1
-            except Exception as exc:
-                logger.warning("Seeker enrichment failed for '%s': %s", cluster.topic_category, exc)
-        if enriched:
-            logger.info("Active seeker enriched %d/%d clusters", enriched, len(clusters))
-        return clusters
-
     # ─── TRIGGER / TARGETING ─────────────────────────────────────────────────
 
     def _should_enrich(self, cluster: ArticleCluster) -> bool:
-        organic_sources = {
-            article.source_name for article in cluster.articles if not article.is_searched
-        }
-        if len(organic_sources) >= self.min_organic_sources_to_skip:
-            return False
         impact = cluster.impact
         if impact is None:
             return False
@@ -178,27 +138,58 @@ class ActiveSeeker:
         # earn the same search budget as hot-topic ones.
         return bool(impact.composite >= self.hot_composite_trigger)
 
-    def _cluster_regions(self, cluster: ArticleCluster) -> set[str]:
-        return {
-            article.origin_region or self.source_regions.get(article.source_name)
-            for article in cluster.articles
-        } - {None}
+    def _missing_voice_targets(self, cluster: ArticleCluster) -> list[VoiceTarget]:
+        """Return missing event entities; only use country as a fallback target.
 
-    def _analyze_search_targets(self, cluster: ArticleCluster) -> tuple[str, list[str]]:
-        """One evaluator call: an English search keyword + event-relevant regions."""
-        present = self._cluster_regions(cluster)
-        missing = [region for region in self.region_config if region not in present]
-        if not missing:
-            return "", []
-        titles = "\n".join(f"- {article.title}" for article in cluster.articles[:5])
+        The entity list comes from impact evaluation of the news text, not a
+        maintained catalogue. A country-only target is used only when the
+        event has no eligible
+        named actor but the impact evaluator identified an involved country.
+        """
+        impact = cluster.impact
+        if impact is None:
+            return []
+        targets = [
+            VoiceTarget(region=need.country, label=need.label, role=need.kind)
+            for need in impact.voice_needs
+            if not self._has_official_voice(
+                cluster, VoiceTarget(region=need.country, label=need.label, role=need.kind)
+            )
+        ]
+        if targets:
+            return targets[: self.max_regions_per_cluster]
+        if impact.voice_needs:
+            return []
+        for region in impact.subject_regions:
+            target = VoiceTarget(region=region, label=country_name(region), role="country")
+            if not self._has_country_voice(cluster, target):
+                targets.append(target)
+        return targets[: self.max_regions_per_cluster]
+
+    def _has_country_voice(self, cluster: ArticleCluster, target: VoiceTarget) -> bool:
+        return any(
+            not article.is_searched
+            and (article.origin_region or self.source_regions.get(article.source_name)) == target.region
+            for article in cluster.articles
+        )
+
+    def _has_official_voice(self, cluster: ArticleCluster, target: VoiceTarget) -> bool:
+        return any(
+            article.is_official_source
+            and not article.is_placeholder
+            and self._article_mentions_target(article, target)
+            for article in cluster.articles
+        )
+
+    def _analyze_search_keyword(self, cluster: ArticleCluster, targets: list[VoiceTarget]) -> str:
+        """Formulate an exact event query; the impact layer supplies the targets."""
+        evidence = "\n".join(f"- {article.title}" for article in cluster.articles[:5])
+        labels = ", ".join(target.label for target in targets)
         prompt = (
-            "You are targeting a news search to add missing regional perspectives to one event.\n"
-            f"Event headlines:\n{titles}\n\n"
-            f"Candidate regions (ISO codes): {', '.join(missing)}\n\n"
-            "Return compact JSON only:\n"
-            '{"keyword": "<concise English search query for this exact event, 3-8 words>", '
-            '"regions": ["<up to ' + str(self.max_regions_per_cluster) + " region codes from the candidate list whose "
-            'perspective genuinely matters for THIS event; [] if none>"]}'
+            "Write one concise English web-search query for this exact news event.\n"
+            f"Event headlines:\n{evidence}\n\n"
+            f"Missing voices: {labels}\n\n"
+            "Return compact JSON only: {\"keyword\": \"<3-8 words for this exact event>\"}."
         )
         try:
             response = litellm.completion(
@@ -213,36 +204,30 @@ class ActiveSeeker:
             )
             content = (response.choices[0].message.content or "").strip()
             parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
-            keyword = str(parsed.get("keyword") or "").strip()
-            regions = [
-                str(region).strip().lower()
-                for region in parsed.get("regions", [])
-                if str(region).strip().lower() in self.region_config
-                and str(region).strip().lower() in missing
-            ]
-            return keyword, regions[: self.max_regions_per_cluster]
+            return str(parsed.get("keyword") or "").strip()[:160]
         except Exception as exc:
             logger.debug("Search target analysis failed for '%s': %s", cluster.topic_category, exc)
-            return "", []
+            return ""
 
     # ─── ENRICHMENT ──────────────────────────────────────────────────────────
 
-    def _enrich_cluster(self, cluster: ArticleCluster) -> bool:
-        keyword, regions = self._analyze_search_targets(cluster)
-        if not keyword or not regions:
-            return False
-
+    def _enrich_cluster(
+        self, cluster: ArticleCluster, targets: list[VoiceTarget], keyword: str
+    ) -> bool:
         centroid = self._cluster_centroid(cluster)
         added = False
-        for region in regions:
-            article, fail_reason = self._search_region(cluster, region, keyword, centroid)
+        for target in targets:
+            if not keyword:
+                cluster.articles.append(self._placeholder_article(cluster, target, "query_generation_failed"))
+                continue
+            article, fail_reason = self._search_target(cluster, target, keyword, centroid)
             if article is not None:
                 cluster.articles.append(article)
                 if article.source_name not in cluster.sources:
                     cluster.sources.append(article.source_name)
                 logger.info(
                     "Seeker added %s perspective to '%s': %s (%s)",
-                    region,
+                    target.label,
                     cluster.topic_category,
                     article.title[:60],
                     article.source_name,
@@ -251,22 +236,22 @@ class ActiveSeeker:
                 continue
             # Synthesize a flat inline placeholder so the reader sees that this
             # region's perspective was targeted but unavailable — never silent.
-            placeholder = self._placeholder_article(cluster, region, fail_reason or "unknown")
+            placeholder = self._placeholder_article(cluster, target, fail_reason or "unknown")
             cluster.articles.append(placeholder)
             # Do NOT add the placeholder source_name to cluster.sources — it must
             # not count toward is_multi_source or appear in perspective grouping.
             logger.info(
                 "Seeker placeholder for %s on '%s': reason=%s",
-                region,
+                target.label,
                 cluster.topic_category,
                 fail_reason,
             )
         return added
 
-    def _search_region(
+    def _search_target(
         self,
         cluster: ArticleCluster,
-        region: str,
+        target: VoiceTarget,
         keyword: str,
         centroid: np.ndarray | None,
     ) -> tuple[Article | None, str | None]:
@@ -275,40 +260,42 @@ class ActiveSeeker:
         failure_reason is set only when no article was accepted, so the caller
         can synthesize an inline placeholder that surfaces the cause to readers.
         """
+        stages = ("official", "country") if target.official_first else ("country",)
         last_reason: str | None = None
-        for query in self._build_search_queries(cluster, region, keyword):
-            results, search_fail = self._search_tavily(region, query)
-            if search_fail:
-                # Provider-level failure (HTTP 401/403/network). Don't try more
-                # queries for this region; the same key/network is used.
-                return None, search_fail
-            accepted, rejections = self._accept_results(cluster, region, results, keyword, centroid)
-            # Always record acceptance telemetry (not only when rejections exist)
-            # so we have positive signal that the gate ran.
-            self._record_search_event(
-                provider="tavily_search",
-                request_type="acceptance",
-                target_region=region,
-                query=query,
-                result_count=len(results),
-                accepted_count=len(accepted),
-                rejection_reason=",".join(sorted({reason for reason, _ in rejections})) or None,
-                rejection_count=len(rejections) or None,
-            )
-            if accepted:
-                return accepted[0], None
-            if rejections:
-                last_reason = ",".join(sorted({reason for reason, _ in rejections}))
-            elif not results:
-                last_reason = "empty_results"
-            else:
-                last_reason = "no_acceptable_result"
+        for stage in stages:
+            for query in self._build_search_queries(cluster, target, keyword, stage):
+                results, search_fail = self._search_tavily(target.region, query)
+                if search_fail:
+                    # Provider-level failure means no reliable conclusion about
+                    # this missing voice; do not disguise it as no result.
+                    return None, search_fail
+                accepted, rejections = self._accept_results(
+                    cluster, target, results, centroid, stage
+                )
+                self._record_search_event(
+                    provider="tavily_search",
+                    request_type=f"acceptance_{stage}",
+                    target_region=target.region,
+                    query=query,
+                    result_count=len(results),
+                    accepted_count=len(accepted),
+                    rejection_reason=",".join(sorted({reason for reason, _ in rejections})) or None,
+                    rejection_count=len(rejections) or None,
+                )
+                if accepted:
+                    return accepted[0], None
+                if rejections:
+                    last_reason = ",".join(sorted({reason for reason, _ in rejections}))
+                elif not results:
+                    last_reason = "official_not_found" if stage == "official" else "country_fallback_not_found"
+                else:
+                    last_reason = "candidate_unverified"
         return None, last_reason
 
     def _placeholder_article(
         self,
         cluster: ArticleCluster,
-        region: str,
+        target: VoiceTarget,
         reason: str,
     ) -> Article:
         """Synthesize an inline placeholder Article for a missing perspective.
@@ -317,19 +304,19 @@ class ActiveSeeker:
         flag + a short failure label + tooltip detail. It never counts toward
         cluster.is_multi_source (caller does not append its source_name).
         """
-        region_name = _REGION_NAMES.get(region, region.upper())
+        target_name = target.label or country_name(target.region)
         cluster_key = getattr(cluster, "cluster_key", "") or getattr(cluster, "topic_category", "")
         article = Article(
             id=None,
-            url=f"placeholder:{region}:{cluster_key}",
-            title=f"待补充：{region_name}视角",
-            source_name=f"[{region_name}视角待补]",
+            url=f"placeholder:{target.region}:{cluster_key}",
+            title=f"待补充：{target_name}声音",
+            source_name=f"[{target_name}声音待补]",
             published_at=datetime.now(tz=timezone.utc),
             content="",
             is_searched=True,
-            search_region=region,
+            search_region=target.region,
             source_kind="news",
-            origin_region=region,
+            origin_region=target.region,
             searched_provider="tavily_search",
         )
         article.is_placeholder = True
@@ -340,27 +327,56 @@ class ActiveSeeker:
     def _accept_results(
         self,
         cluster: ArticleCluster,
-        region: str,
+        target: VoiceTarget,
         results: list[dict[str, Any]],
-        keyword: str,
         centroid: np.ndarray | None,
+        stage: str,
     ) -> tuple[list[Article], list[tuple[str, str]]]:
         accepted: list[Article] = []
         rejections: list[tuple[str, str]] = []
         existing_urls = {article.url for article in cluster.articles}
         existing_titles = [article.title for article in cluster.articles]
         for result in results:
-            article = self._result_to_article(result, region)
+            article = self._result_to_article(result, target.region)
             if article is None:
                 rejections.append(("thin_result", str(result.get("url"))))
                 continue
             if article.url in existing_urls:
                 rejections.append(("already_present", article.url))
                 continue
-            reason = self._rejection_reason(article, region, existing_titles, centroid)
+            reason = self._rejection_reason(article, target, existing_titles, centroid)
             if reason:
                 rejections.append((reason, article.url))
                 continue
+            verdict = self._verify_candidate(article, target, stage)
+            registry_verdict = self._registry_verdict(article.url, target, stage)
+            if registry_verdict:
+                verdict = registry_verdict
+            if verdict not in {"official_web", "official_social", "country_editorial"}:
+                self._record_candidate_review(article, target, stage, verdict, "rejected")
+                rejections.append(("candidate_unverified", article.url))
+                continue
+            if stage == "official" and verdict not in {"official_web", "official_social"}:
+                self._record_candidate_review(article, target, stage, verdict, "rejected")
+                rejections.append(("not_official_source", article.url))
+                continue
+            if stage == "country" and verdict != "country_editorial":
+                self._record_candidate_review(article, target, stage, verdict, "rejected")
+                rejections.append(("not_related_country_source", article.url))
+                continue
+            if verdict == "country_editorial" and not registry_verdict:
+                # Discovery remains open, but a newly found local publisher is
+                # not promoted to a country's voice until reviewed. This avoids
+                # recreating a static search whitelist or trusting sponsored
+                # outlets based only on a model's first impression.
+                self._record_candidate_review(article, target, stage, verdict, "pending_review")
+                rejections.append(("candidate_pending_review", article.url))
+                continue
+            article.origin_region = target.region
+            article.is_official_source = verdict.startswith("official_")
+            article.source_kind = verdict if article.is_official_source else "news"
+            article.searched_provider = f"tavily_search_{stage}"
+            self._record_candidate_review(article, target, stage, verdict, "accepted")
             accepted.append(article)
             if len(accepted) >= self.max_results_per_region:
                 break
@@ -369,12 +385,12 @@ class ActiveSeeker:
     def _rejection_reason(
         self,
         article: Article,
-        region: str,
+        target: VoiceTarget,
         existing_titles: list[str],
         centroid: np.ndarray | None,
     ) -> str:
-        if not self._is_region_valid(article, region):
-            return "region_mismatch"
+        if target.role != "country" and not self._article_mentions_target(article, target):
+            return "entity_mismatch"
         if not self._is_fresh(article.published_at):
             return "stale_result"
         if any(
@@ -392,17 +408,89 @@ class ActiveSeeker:
                 return "event_mismatch"
         return ""
 
-    def _is_region_valid(self, article: Article, region: str) -> bool:
-        if article.origin_region == region:
-            return True
-        domain = urllib.parse.urlparse(article.url).netloc.lower()
-        tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
-        if _TLD_REGIONS.get(tld) == region:
-            return True
-        config = self.region_config.get(region)
-        if config and any(domain.endswith(trusted) for trusted in config.trusted_domains):
-            return True
-        return False
+    def _article_mentions_target(self, article: Article, target: VoiceTarget) -> bool:
+        text = f"{article.title}\n{article.content[:1200]}".casefold()
+        return target.label.casefold() in text
+
+    def _verify_candidate(self, article: Article, target: VoiceTarget, stage: str) -> str:
+        """Fail closed unless the candidate is clearly official or local editorial.
+
+        A country TLD, provider country label, or a page claiming an affiliation
+        is explicitly insufficient. This is intentionally conservative because
+        sponsored/shadow outlets cannot be safely identified from a domain list.
+        """
+        host = urllib.parse.urlparse(article.url).netloc.lower().removeprefix("www.")
+        required = "official_web or official_social" if stage == "official" else "country_editorial"
+        prompt = (
+            "Verify one news-search candidate for a missing event voice. Return JSON only. "
+            "A result is official_web only when the page is directly published by the named actor; "
+            "official_social only when it is that actor's clearly verified/owned social account. "
+            "country_editorial only when it is an independently operated editorial publisher based in "
+            "the target country; reject aggregators, mirrors, generic social platforms, state/sponsored "
+            "outlets with unclear independence, and any affiliation that cannot be confirmed from the "
+            "candidate. Do not infer from country TLD or search query. If uncertain, reject.\n\n"
+            f"Required stage: {stage}; accepted verdicts: {required}.\n"
+            f"Named actor: {target.label}; actor country: {target.region}; actor type: {target.role}.\n"
+            f"Candidate host: {host}\nTitle: {article.title}\nContent: {article.content[:1800]}\n\n"
+            "Return {\"verdict\":\"official_web|official_social|country_editorial|reject\"}."
+        )
+        try:
+            response = litellm.completion(
+                model=self.evaluator_model,
+                api_key=self.api_key,
+                api_base=self.base_url,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=80,
+                response_format={"type": "json_object"},
+                **self.completion_compat_kwargs,
+            )
+            content = (response.choices[0].message.content or "").strip()
+            verdict = str(json.loads(content[content.find("{"): content.rfind("}") + 1]).get("verdict") or "")
+            return verdict if verdict in {"official_web", "official_social", "country_editorial"} else "reject"
+        except Exception as exc:
+            logger.debug("Search candidate verification failed for %s: %s", article.url, exc)
+            return "reject"
+
+    def _registry_verdict(self, url: str, target: VoiceTarget, stage: str) -> str:
+        """Read manual approvals/blocks; never infer a verdict from the domain."""
+        host = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
+        for domain, spec in self.source_verdicts.items():
+            if host != domain and not host.endswith(f".{domain}"):
+                continue
+            verdict = str(spec.get("verdict") or "").strip()
+            approved_region = str(spec.get("region") or "").strip().lower()
+            approved_entity = str(spec.get("entity") or "").strip().casefold()
+            if approved_region and approved_region != target.region:
+                return "reject"
+            if stage == "official" and approved_entity and approved_entity != target.label.casefold():
+                return "reject"
+            return verdict if verdict in {"official_web", "official_social", "country_editorial", "reject"} else ""
+        return ""
+
+    def _record_candidate_review(
+        self, article: Article, target: VoiceTarget, stage: str, verdict: str, decision: str
+    ) -> None:
+        if not self.telemetry_enabled:
+            return
+        try:
+            host = urllib.parse.urlparse(article.url).netloc.lower().removeprefix("www.")
+            insert_search_candidate_review(
+                SearchCandidateReview(
+                    url=article.url,
+                    domain=host,
+                    title=article.title,
+                    source_name=article.source_name,
+                    target_label=target.label,
+                    target_region=target.region,
+                    stage=stage,
+                    verdict=verdict,
+                    decision=decision,
+                ),
+                db_path=self.telemetry_db_path,
+            )
+        except Exception as exc:
+            logger.debug("Search candidate telemetry write failed: %s", exc)
 
     def _is_fresh(self, published_at: datetime | None) -> bool:
         if published_at is None:
@@ -433,25 +521,44 @@ class ActiveSeeker:
 
     # ─── QUERIES ─────────────────────────────────────────────────────────────
 
-    def _build_search_queries(self, cluster: ArticleCluster, region: str, keyword: str) -> list[str]:
-        config = self.region_config.get(region)
-        english_query = f"{keyword} news {_REGION_NAMES.get(region, region)}"
-        if not config or config.language == "en":
-            return [english_query]
-        localized = self._localize_search_keyword(cluster, region, keyword)
-        if localized and localized != keyword:
-            return [localized, english_query]
-        return [english_query]
+    def _build_search_queries(
+        self,
+        cluster: ArticleCluster,
+        target: VoiceTarget,
+        keyword: str,
+        stage: str,
+    ) -> list[str]:
+        config = self.region_config.get(target.region)
+        if stage == "official":
+            english_query = f"{target.label} official statement {keyword}"
+        else:
+            english_query = f"{keyword} {country_name(target.region)} local news"
+        languages = query_languages(target.region, config.language if config else None)
+        if not languages:
+            # ISO country names are complete via Babel, while the language list
+            # is intentionally conservative. For an uncovered country, ask the
+            # evaluator to choose its mainstream local-news language instead of
+            # silently treating English as authoritative.
+            localized = self._localize_search_keyword(cluster, target.region, english_query, None)
+            return list(dict.fromkeys([localized, english_query]))
+        queries: list[str] = []
+        for language in languages[: self.max_localized_query_variants]:
+            if language == "en":
+                continue
+            queries.append(self._localize_search_keyword(cluster, target.region, english_query, language))
+        queries.append(english_query)
+        return list(dict.fromkeys(query for query in queries if query))
 
-    def _localize_search_keyword(self, cluster: ArticleCluster, region: str, keyword: str) -> str:
-        config = self.region_config.get(region)
-        if not config or config.language == "en":
+    def _localize_search_keyword(
+        self, cluster: ArticleCluster, region: str, keyword: str, language: str | None
+    ) -> str:
+        if language == "en":
             return keyword
-        language_name = _LANGUAGE_NAMES.get(config.language, config.language)
-        region_name = _REGION_NAMES.get(region, region)
+        target_language = language_name(language) if language else "the predominant language used by mainstream local news outlets"
+        region_name = country_name(region)
         context = "\n".join(f"- {article.title}" for article in cluster.articles[:5])
         prompt = (
-            f"Convert this English news search query into concise natural {language_name} used by local media in "
+            f"Convert this English news search query into concise natural {target_language} used by local media in "
             f"{region_name}. Use native script when normal for that language.\n\n"
             f"Event headlines:\n{context}\n\n"
             f"English query: {keyword}\n\n"
@@ -476,7 +583,11 @@ class ActiveSeeker:
 
     # ─── TAVILY ──────────────────────────────────────────────────────────────
 
-    def _search_tavily(self, region: str, query: str) -> tuple[list[dict[str, Any]], str | None]:
+    def _search_tavily(
+        self,
+        region: str,
+        query: str,
+    ) -> tuple[list[dict[str, Any]], str | None]:
         """Return (results, failure_reason).
 
         failure_reason is one of: http_401, http_403, http_<other>, network, None.
@@ -488,7 +599,6 @@ class ActiveSeeker:
         if cache_key in self._search_cache:
             return self._search_cache[cache_key], None
 
-        config = self.region_config.get(region)
         base_payload: dict[str, Any] = {
             "query": query,
             "search_depth": "basic",
@@ -496,9 +606,6 @@ class ActiveSeeker:
             "max_results": max(self.max_results_per_region + 2, 4),
             "days": 3,
         }
-        if config and config.trusted_domains:
-            base_payload["include_domains"] = config.trusted_domains[:5]
-
         # Build the key try-order: start from the last known-good key, then any
         # remaining keys that aren't yet exhausted this run.
         try_order: list[int] = []
@@ -630,8 +737,7 @@ class ActiveSeeker:
         domain = urllib.parse.urlparse(url).netloc.replace("www.", "")
         source_name = result.get("source_name") or domain
         configured_region = self.source_regions.get(source_name)
-        tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
-        origin_region = configured_region or _TLD_REGIONS.get(tld) or region
+        origin_region = configured_region
         # Tavily frequently returns published_date=None even for fresh results
         # (the URL path like /2026/07/20/ is clearly recent). Try the explicit
         # field first, then fall back to a URL-path date parse so the freshness
@@ -697,17 +803,8 @@ class ActiveSeeker:
     def _build_region_config(self, profiles: dict[str, Any]) -> dict[str, RegionConfig]:
         region_config: dict[str, RegionConfig] = {}
         for region, profile in (profiles or {}).items():
-            if region not in _REGION_NAMES:
-                continue
-            language = str((profile or {}).get("language", "en"))
-            region_config[region] = RegionConfig(language=language)
-        for source in self.cfg.sources:
-            config = region_config.get(source.region)
-            if config is None:
-                continue
-            domain = urllib.parse.urlparse(source.url).netloc.lower().removeprefix("www.")
-            if domain and domain not in config.trusted_domains:
-                config.trusted_domains.append(domain)
+            language = (profile or {}).get("language")
+            region_config[str(region).lower()] = RegionConfig(language=language)
         return region_config
 
     def _record_search_event(

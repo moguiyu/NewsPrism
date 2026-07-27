@@ -6,9 +6,10 @@ from newsprism.repo import (
     get_unclustered_articles,
     init_db,
     insert_article,
+    insert_search_candidate_review,
     insert_search_request_event,
 )
-from newsprism.types import Article, SearchRequestEvent
+from newsprism.types import Article, SearchCandidateReview, SearchRequestEvent
 
 
 def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
@@ -70,3 +71,24 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
             "FROM search_request_events"
         ).fetchone()
     assert telemetry == ("x", "user_timeline", "jp", 1, "generic_page", 2, 0.02)
+
+    review_id = insert_search_candidate_review(
+        SearchCandidateReview(
+            url="https://new-local.example/acme",
+            domain="new-local.example",
+            title="Acme response",
+            source_name="new-local.example",
+            target_label="Acme",
+            target_region="cd",
+            stage="country",
+            verdict="country_editorial",
+            decision="pending_review",
+        ),
+        db_path=db_path,
+    )
+    assert review_id is not None
+    with sqlite3.connect(db_path) as conn:
+        candidate = conn.execute(
+            "SELECT domain, target_region, verdict, decision FROM search_candidate_reviews"
+        ).fetchone()
+    assert candidate == ("new-local.example", "cd", "country_editorial", "pending_review")
