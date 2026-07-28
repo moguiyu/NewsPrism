@@ -129,9 +129,18 @@ active_search:
   # search can discover sources outside the normal intake. Candidates are
   # verified first-party voices or independently operated local editorial
   # sources; a country TLD or Tavily country label never proves provenance.
-  # Manually reviewed overrides only. They do not limit search discovery:
-  # unknown local publishers enter pending review instead of becoming a voice.
+  # Manually reviewed acceptance bindings only. They do not limit discovery:
+  # official entries require verdict + entity (+ optional region); local
+  # editorial entries require verdict: country_editorial + region. Unknown
+  # publishers enter pending review instead of becoming a voice.
   source_verdicts: {}
+  # Reviewed social ownership is account-scoped, never host-scoped:
+  # official_account_bindings:
+  #   x:
+  #     openai: {entity: OpenAI, region: us}
+  #   youtube:
+  #     UC_EXAMPLE: {entity: Example Ministry, region: ex}
+  official_account_bindings: {}
   search_profiles:
     us:
       language: en

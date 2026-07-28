@@ -294,6 +294,7 @@ def test_voice_needs_are_normalized_and_preserved_on_recompute():
         voice_needs=[
             {"label": " Acme Labs ", "country": "US", "kind": "company"},
             {"label": "acme labs", "country": "us", "kind": "company"},
+            {"label": "France", "country": "fr", "kind": "country"},
             {"label": "", "country": "us", "kind": "company"},
         ],
     )

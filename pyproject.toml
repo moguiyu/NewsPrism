@@ -58,6 +58,7 @@ dependencies = [
     "python-dateutil>=2.9",
     "Babel>=2.14",
     "rapidfuzz>=3.6",
+    "tldextract>=5.1",
     "numpy>=1.26",
     # DB
     # sqlite3 is stdlib

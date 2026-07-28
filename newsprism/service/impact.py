@@ -30,6 +30,7 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.llm_compat import completion_compat_kwargs
+from newsprism.service.locales import is_recognized_country, is_territory_name
 from newsprism.types import (
     Article,
     ArticleCluster,
@@ -121,7 +122,12 @@ def _norm_voice_needs(values: list[dict[str, str]] | None) -> list[VoiceNeed]:
         label = re.sub(r"\s+", " ", str(value.get("label") or "").strip())[:100]
         country = str(value.get("country") or "").strip().lower()
         kind = str(value.get("kind") or "organization").strip().lower()[:40]
-        if not label or not re.fullmatch(r"[a-z]{2}", country):
+        if (
+            not label
+            or not is_recognized_country(country)
+            or kind == "country"
+            or is_territory_name(label)
+        ):
             continue
         if label.casefold() in {need.label.casefold() for need in needs}:
             continue

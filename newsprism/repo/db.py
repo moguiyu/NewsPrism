@@ -87,6 +87,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 provider TEXT NOT NULL,
                 request_type TEXT NOT NULL,
                 target_region TEXT,
+                target_label TEXT,
+                target_role TEXT,
                 query TEXT,
                 account_id TEXT,
                 http_status INTEGER,
@@ -107,10 +109,12 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 source_name TEXT NOT NULL,
                 target_label TEXT NOT NULL,
                 target_region TEXT NOT NULL,
+                target_role TEXT,
                 stage TEXT NOT NULL,
                 verdict TEXT NOT NULL,
                 decision TEXT NOT NULL,
                 reason TEXT NOT NULL DEFAULT '',
+                identity_evidence TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(url, target_label, stage)
             );
@@ -329,6 +333,17 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_reason TEXT")
         if "rejection_count" not in search_event_columns:
             conn.execute("ALTER TABLE search_request_events ADD COLUMN rejection_count INTEGER")
+        if "target_label" not in search_event_columns:
+            _add_column("search_request_events", "target_label", "target_label TEXT")
+        if "target_role" not in search_event_columns:
+            _add_column("search_request_events", "target_role", "target_role TEXT")
+
+        cursor = conn.execute("PRAGMA table_info(search_candidate_reviews)")
+        candidate_columns = {row[1] for row in cursor.fetchall()}
+        if "target_role" not in candidate_columns:
+            _add_column("search_candidate_reviews", "target_role", "target_role TEXT")
+        if "identity_evidence" not in candidate_columns:
+            _add_column("search_candidate_reviews", "identity_evidence", "identity_evidence TEXT")
 
         cursor = conn.execute("PRAGMA table_info(cluster_evaluations)")
         eval_columns = {row[1] for row in cursor.fetchall()}
@@ -454,15 +469,17 @@ def insert_search_request_event(event: SearchRequestEvent, db_path: Path = DB_PA
     with get_conn(db_path) as conn:
         cur = conn.execute(
             """INSERT INTO search_request_events (
-                   provider, request_type, target_region, query, account_id,
+                   provider, request_type, target_region, target_label, target_role, query, account_id,
                    http_status, result_count, accepted_count, rejection_reason, rejection_count,
                    duration_ms, estimated_cost_usd, created_at
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
             (
                 event.provider,
                 event.request_type,
                 event.target_region,
+                event.target_label,
+                event.target_role,
                 event.query,
                 event.account_id,
                 event.http_status,
@@ -487,12 +504,14 @@ def insert_search_candidate_review(
             cur = conn.execute(
                 """INSERT INTO search_candidate_reviews (
                        url, domain, title, source_name, target_label, target_region,
-                       stage, verdict, decision, reason, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+                       target_role, stage, verdict, decision, reason, identity_evidence, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
                 (
                     review.url, review.domain, review.title, review.source_name,
-                    review.target_label, review.target_region, review.stage,
+                    review.target_label, review.target_region, review.target_role, review.stage,
                     review.verdict, review.decision, review.reason,
+                    json.dumps(review.identity_evidence, ensure_ascii=False, separators=(",", ":"))
+                    if review.identity_evidence is not None else None,
                     review.created_at.isoformat() if review.created_at else None,
                 ),
             )
