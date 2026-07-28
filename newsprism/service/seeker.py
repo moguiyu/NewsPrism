@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import urllib.parse
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import monotonic
@@ -22,13 +23,20 @@ from typing import Any
 import httpx
 import litellm
 import numpy as np
+import tldextract
 from rapidfuzz import fuzz
 
 from newsprism.config import Config
 from newsprism.repo import DB_PATH, insert_search_candidate_review, insert_search_request_event
 from newsprism.service.embeddings import get_model
 from newsprism.service.llm_compat import completion_compat_kwargs
-from newsprism.service.locales import country_name, language_name, query_languages
+from newsprism.service.locales import (
+    country_name,
+    is_recognized_country,
+    is_territory_name,
+    language_name,
+    query_languages,
+)
 from newsprism.types import Article, ArticleCluster, SearchCandidateReview, SearchRequestEvent
 
 logger = logging.getLogger(__name__)
@@ -46,8 +54,37 @@ class VoiceTarget:
     """One event-derived voice need, with country fallback when official fails."""
     region: str
     label: str
-    role: str = "entity"
-    official_first: bool = True
+    role: str = "organization"
+
+
+@dataclass(frozen=True)
+class CandidateIdentity:
+    """Publisher ownership evidence produced by the candidate verifier."""
+
+    source_type: str = "reject"
+    publisher_entity: str = ""
+    relationship: str = "uncertain"
+    ownership_evidence: str = ""
+    confidence: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source_type": self.source_type,
+            "publisher_entity": self.publisher_entity,
+            "relationship": self.relationship,
+            "ownership_evidence": self.ownership_evidence,
+            "confidence": self.confidence,
+        }
+
+
+_ACTOR_ROLES = {
+    "company", "government", "government_agency", "ministry", "party", "organization",
+}
+_SOURCE_TYPES = {"official_web", "official_social", "country_editorial", "reject"}
+_RELATIONSHIPS = {
+    "same_entity", "quoted_by_third_party", "covered_by_third_party", "uncertain", "unrelated",
+}
+_TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
 
 
 class ActiveSeeker:
@@ -91,6 +128,16 @@ class ActiveSeeker:
             str(domain).lower().removeprefix("www."): dict(spec)
             for domain, spec in (verdicts or {}).items()
             if isinstance(spec, dict)
+        }
+        account_bindings = search_cfg.get("official_account_bindings", {}) if isinstance(search_cfg, dict) else {}
+        self.official_account_bindings = {
+            str(platform).casefold(): {
+                str(account).casefold(): dict(spec)
+                for account, spec in (accounts or {}).items()
+                if isinstance(spec, dict)
+            }
+            for platform, accounts in (account_bindings or {}).items()
+            if isinstance(accounts, dict)
         }
         self.source_regions = {source.name: source.region for source in cfg.sources}
         self._search_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -149,22 +196,126 @@ class ActiveSeeker:
         impact = cluster.impact
         if impact is None:
             return []
-        targets = [
-            VoiceTarget(region=need.country, label=need.label, role=need.kind)
-            for need in impact.voice_needs
-            if not self._has_official_voice(
-                cluster, VoiceTarget(region=need.country, label=need.label, role=need.kind)
-            )
-        ]
-        if targets:
-            return targets[: self.max_regions_per_cluster]
-        if impact.voice_needs:
-            return []
+        impact_targets = self._validated_actor_targets(
+            cluster,
+            ((need.label, need.country, need.kind, need.label) for need in impact.voice_needs),
+        )
+        if impact_targets:
+            return [
+                target for target in impact_targets if not self._has_official_voice(cluster, target)
+            ][: self.max_regions_per_cluster]
+
+        recovered_targets = self._recover_actor_targets(cluster)
+        if recovered_targets:
+            return [
+                target for target in recovered_targets if not self._has_official_voice(cluster, target)
+            ][: self.max_regions_per_cluster]
+
+        targets: list[VoiceTarget] = []
         for region in impact.subject_regions:
+            if not is_recognized_country(region):
+                continue
             target = VoiceTarget(region=region, label=country_name(region), role="country")
             if not self._has_country_voice(cluster, target):
                 targets.append(target)
         return targets[: self.max_regions_per_cluster]
+
+    def _validated_actor_targets(
+        self,
+        cluster: ArticleCluster,
+        values: Any,
+    ) -> list[VoiceTarget]:
+        targets: list[VoiceTarget] = []
+        seen: set[tuple[str, str]] = set()
+        for label, region, role, evidence_text in values:
+            target = self._validate_actor_target(cluster, label, region, role, evidence_text)
+            if target is None:
+                continue
+            key = (self._identity_text(target.label), target.region)
+            if key not in seen:
+                seen.add(key)
+                targets.append(target)
+        return targets
+
+    def _validate_actor_target(
+        self,
+        cluster: ArticleCluster,
+        label: Any,
+        region: Any,
+        role: Any,
+        evidence_text: Any,
+    ) -> VoiceTarget | None:
+        normalized_label = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(label or "")).strip())[:100]
+        normalized_region = str(region or "").strip().lower()
+        normalized_role = str(role or "organization").strip().lower()
+        normalized_evidence = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(evidence_text or "")).strip())[:200]
+        if not is_recognized_country(normalized_region) or not normalized_label:
+            return None
+        config = self.region_config.get(normalized_region)
+        territory_languages = query_languages(
+            normalized_region, config.language if config else None
+        )
+        if normalized_role == "country" or is_territory_name(normalized_label, territory_languages):
+            return None
+        if normalized_role not in _ACTOR_ROLES:
+            normalized_role = "organization"
+        event_text = self._event_text(cluster)
+        normalized_event_text = self._identity_text(event_text)
+        label_present = self._identity_text(normalized_label) in normalized_event_text
+        evidence_present = bool(
+            normalized_evidence
+            and self._identity_text(normalized_evidence) in normalized_event_text
+        )
+        if not label_present and not evidence_present:
+            return None
+        return VoiceTarget(region=normalized_region, label=normalized_label, role=normalized_role)
+
+    def _recover_actor_targets(self, cluster: ArticleCluster) -> list[VoiceTarget]:
+        """Recover explicit event actors only when impact supplied none."""
+        impact = cluster.impact
+        if impact is None:
+            return []
+        evidence = "\n".join(
+            f"- {article.title}\n  {article.content[:400]}" for article in cluster.articles[:5]
+        )
+        official_sources = [article.source_name for article in cluster.articles if article.is_official_source]
+        prompt = (
+            "Extract only named organizations whose direct response would clarify this exact news event. "
+            "Do not return countries, people, products, media, or inferred formal names. "
+            "Return JSON only: {\"targets\":[{\"label\":\"Microsoft\",\"country\":\"us\","
+            "\"kind\":\"company\",\"evidence_text\":\"Microsoft\"}]}.\n\n"
+            f"Event material:\n{evidence}\n\nExisting official sources: {official_sources}\n"
+            f"Related countries: {impact.subject_regions}"
+        )
+        try:
+            response = litellm.completion(
+                model=self.evaluator_model,
+                api_key=self.api_key,
+                api_base=self.base_url,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=220,
+                response_format={"type": "json_object"},
+                **self.completion_compat_kwargs,
+            )
+            content = (response.choices[0].message.content or "").strip()
+            parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
+            values = (
+                (item.get("label"), item.get("country"), item.get("kind"), item.get("evidence_text"))
+                for item in parsed.get("targets", []) if isinstance(item, dict)
+            )
+            return self._validated_actor_targets(cluster, values)
+        except Exception as exc:
+            logger.debug("Actor recovery failed for '%s': %s", cluster.topic_category, exc)
+            return []
+
+    @staticmethod
+    def _event_text(cluster: ArticleCluster) -> str:
+        return "\n".join(f"{article.title}\n{article.content[:1200]}" for article in cluster.articles[:5])
+
+    @staticmethod
+    def _identity_text(value: str) -> str:
+        return "".join(char for char in unicodedata.normalize("NFKC", value).casefold() if char.isalnum())
 
     def _has_country_voice(self, cluster: ArticleCluster, target: VoiceTarget) -> bool:
         return any(
@@ -260,11 +411,11 @@ class ActiveSeeker:
         failure_reason is set only when no article was accepted, so the caller
         can synthesize an inline placeholder that surfaces the cause to readers.
         """
-        stages = ("official", "country") if target.official_first else ("country",)
+        stages = ("country",) if target.role == "country" else ("official", "country")
         last_reason: str | None = None
         for stage in stages:
             for query in self._build_search_queries(cluster, target, keyword, stage):
-                results, search_fail = self._search_tavily(target.region, query)
+                results, search_fail = self._search_tavily(target, query)
                 if search_fail:
                     # Provider-level failure means no reliable conclusion about
                     # this missing voice; do not disguise it as no result.
@@ -275,7 +426,7 @@ class ActiveSeeker:
                 self._record_search_event(
                     provider="tavily_search",
                     request_type=f"acceptance_{stage}",
-                    target_region=target.region,
+                    target=target,
                     query=query,
                     result_count=len(results),
                     accepted_count=len(accepted),
@@ -348,35 +499,68 @@ class ActiveSeeker:
             if reason:
                 rejections.append((reason, article.url))
                 continue
-            verdict = self._verify_candidate(article, target, stage)
-            registry_verdict = self._registry_verdict(article.url, target, stage)
-            if registry_verdict:
-                verdict = registry_verdict
-            if verdict not in {"official_web", "official_social", "country_editorial"}:
-                self._record_candidate_review(article, target, stage, verdict, "rejected")
-                rejections.append(("candidate_unverified", article.url))
+            identity = self._candidate_identity(self._verify_candidate(article, target, stage))
+            registry_identity, registry_reason = self._registry_identity(article.url, target, stage)
+            if registry_reason:
+                decision = (
+                    "pending_review"
+                    if registry_reason == "publisher_binding_unverified"
+                    else "rejected"
+                )
+                self._record_candidate_review(
+                    article, target, stage, identity, decision, registry_reason
+                )
+                rejections.append((registry_reason, article.url))
                 continue
-            if stage == "official" and verdict not in {"official_web", "official_social"}:
-                self._record_candidate_review(article, target, stage, verdict, "rejected")
-                rejections.append(("not_official_source", article.url))
+            if registry_identity is not None:
+                identity = registry_identity
+            elif stage == "official" and self._social_account_binding(article.url, target):
+                identity = CandidateIdentity(
+                    source_type="official_social",
+                    publisher_entity=target.label,
+                    relationship="same_entity",
+                    ownership_evidence="reviewed exact social account binding",
+                )
+            if stage == "official" and target.role == "country":
+                self._record_candidate_review(
+                    article, target, stage, identity, "rejected", "country_target_official_forbidden"
+                )
+                rejections.append(("country_target_official_forbidden", article.url))
                 continue
-            if stage == "country" and verdict != "country_editorial":
-                self._record_candidate_review(article, target, stage, verdict, "rejected")
+            if stage == "official":
+                official_reason = self._official_identity_reason(article, target, identity, registry_identity)
+                if official_reason:
+                    decision = (
+                        "pending_review"
+                        if official_reason == "publisher_binding_unverified"
+                        else "rejected"
+                    )
+                    self._record_candidate_review(
+                        article, target, stage, identity, decision, official_reason
+                    )
+                    rejections.append((official_reason, article.url))
+                    continue
+            elif identity.source_type != "country_editorial":
+                self._record_candidate_review(
+                    article, target, stage, identity, "rejected", "not_related_country_source"
+                )
                 rejections.append(("not_related_country_source", article.url))
                 continue
-            if verdict == "country_editorial" and not registry_verdict:
+            if stage == "country" and registry_identity is None:
                 # Discovery remains open, but a newly found local publisher is
                 # not promoted to a country's voice until reviewed. This avoids
                 # recreating a static search whitelist or trusting sponsored
                 # outlets based only on a model's first impression.
-                self._record_candidate_review(article, target, stage, verdict, "pending_review")
+                self._record_candidate_review(
+                    article, target, stage, identity, "pending_review", "candidate_pending_review"
+                )
                 rejections.append(("candidate_pending_review", article.url))
                 continue
             article.origin_region = target.region
-            article.is_official_source = verdict.startswith("official_")
-            article.source_kind = verdict if article.is_official_source else "news"
+            article.is_official_source = identity.source_type.startswith("official_")
+            article.source_kind = identity.source_type if article.is_official_source else "news"
             article.searched_provider = f"tavily_search_{stage}"
-            self._record_candidate_review(article, target, stage, verdict, "accepted")
+            self._record_candidate_review(article, target, stage, identity, "accepted", "")
             accepted.append(article)
             if len(accepted) >= self.max_results_per_region:
                 break
@@ -412,7 +596,7 @@ class ActiveSeeker:
         text = f"{article.title}\n{article.content[:1200]}".casefold()
         return target.label.casefold() in text
 
-    def _verify_candidate(self, article: Article, target: VoiceTarget, stage: str) -> str:
+    def _verify_candidate(self, article: Article, target: VoiceTarget, stage: str) -> CandidateIdentity:
         """Fail closed unless the candidate is clearly official or local editorial.
 
         A country TLD, provider country label, or a page claiming an affiliation
@@ -432,7 +616,10 @@ class ActiveSeeker:
             f"Required stage: {stage}; accepted verdicts: {required}.\n"
             f"Named actor: {target.label}; actor country: {target.region}; actor type: {target.role}.\n"
             f"Candidate host: {host}\nTitle: {article.title}\nContent: {article.content[:1800]}\n\n"
-            "Return {\"verdict\":\"official_web|official_social|country_editorial|reject\"}."
+            "Return {\"source_type\":\"official_web|official_social|country_editorial|reject\","
+            "\"publisher_entity\":\"publisher name\","
+            "\"relationship\":\"same_entity|quoted_by_third_party|covered_by_third_party|uncertain|unrelated\","
+            "\"ownership_evidence\":\"short evidence\",\"confidence\":0.0}."
         )
         try:
             response = litellm.completion(
@@ -441,35 +628,129 @@ class ActiveSeeker:
                 api_base=self.base_url,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=80,
+                max_tokens=160,
                 response_format={"type": "json_object"},
                 **self.completion_compat_kwargs,
             )
             content = (response.choices[0].message.content or "").strip()
-            verdict = str(json.loads(content[content.find("{"): content.rfind("}") + 1]).get("verdict") or "")
-            return verdict if verdict in {"official_web", "official_social", "country_editorial"} else "reject"
+            return self._candidate_identity(json.loads(content[content.find("{"): content.rfind("}") + 1]))
         except Exception as exc:
             logger.debug("Search candidate verification failed for %s: %s", article.url, exc)
-            return "reject"
+            return CandidateIdentity()
 
-    def _registry_verdict(self, url: str, target: VoiceTarget, stage: str) -> str:
-        """Read manual approvals/blocks; never infer a verdict from the domain."""
+    def _candidate_identity(self, value: CandidateIdentity | dict[str, Any] | str) -> CandidateIdentity:
+        """Normalize verifier output; string support keeps older test doubles harmless."""
+        if isinstance(value, CandidateIdentity):
+            return value
+        if isinstance(value, str):
+            return CandidateIdentity(source_type=value if value in _SOURCE_TYPES else "reject")
+        source_type = str(value.get("source_type") or value.get("verdict") or "reject")
+        relationship = str(value.get("relationship") or "uncertain")
+        confidence = value.get("confidence")
+        try:
+            confidence = float(confidence) if confidence is not None else None
+        except (TypeError, ValueError):
+            confidence = None
+        return CandidateIdentity(
+            source_type=source_type if source_type in _SOURCE_TYPES else "reject",
+            publisher_entity=str(value.get("publisher_entity") or "").strip()[:120],
+            relationship=relationship if relationship in _RELATIONSHIPS else "uncertain",
+            ownership_evidence=str(value.get("ownership_evidence") or "").strip()[:300],
+            confidence=confidence,
+        )
+
+    def _registry_identity(
+        self, url: str, target: VoiceTarget, stage: str
+    ) -> tuple[CandidateIdentity | None, str | None]:
+        """Read reviewed bindings; discovery candidates never become a binding."""
         host = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
         for domain, spec in self.source_verdicts.items():
             if host != domain and not host.endswith(f".{domain}"):
                 continue
             verdict = str(spec.get("verdict") or "").strip()
             approved_region = str(spec.get("region") or "").strip().lower()
-            approved_entity = str(spec.get("entity") or "").strip().casefold()
+            approved_entity = str(spec.get("entity") or "").strip()
             if approved_region and approved_region != target.region:
-                return "reject"
-            if stage == "official" and approved_entity and approved_entity != target.label.casefold():
-                return "reject"
-            return verdict if verdict in {"official_web", "official_social", "country_editorial", "reject"} else ""
-        return ""
+                return None, "not_related_country_source"
+            if stage == "official":
+                # Social ownership is account-scoped; a host/domain binding is
+                # never enough to establish who published a social post.
+                if verdict == "official_social":
+                    return None, "publisher_binding_unverified"
+                if verdict != "official_web":
+                    return None, "not_official_source"
+                if not approved_entity or self._identity_text(approved_entity) != self._identity_text(target.label):
+                    return None, "publisher_binding_unverified"
+                return CandidateIdentity(
+                    source_type=verdict,
+                    publisher_entity=approved_entity,
+                    relationship="same_entity",
+                    ownership_evidence="reviewed exact entity binding",
+                ), None
+            if verdict != "country_editorial" or not approved_region:
+                return None, "not_related_country_source"
+            return CandidateIdentity(
+                source_type="country_editorial",
+                ownership_evidence="reviewed country editorial binding",
+            ), None
+        return None, None
+
+    def _official_identity_reason(
+        self,
+        article: Article,
+        target: VoiceTarget,
+        identity: CandidateIdentity,
+        registry_identity: CandidateIdentity | None,
+    ) -> str | None:
+        if identity.source_type == "official_social" and self._social_account_binding(article.url, target):
+            return None
+        if identity.source_type not in {"official_web", "official_social"}:
+            return "not_official_source"
+        if registry_identity is not None:
+            return None
+        if identity.relationship != "same_entity" or self._identity_text(identity.publisher_entity) != self._identity_text(target.label):
+            return "publisher_target_mismatch"
+        if identity.source_type == "official_social":
+            return None if self._social_account_binding(article.url, target) else "publisher_binding_unverified"
+        registered = _TLD_EXTRACT(urllib.parse.urlparse(article.url).netloc)
+        if self._identity_text(registered.domain) != self._identity_text(target.label):
+            return "publisher_binding_unverified"
+        return None
+
+    def _social_account_binding(self, url: str, target: VoiceTarget) -> bool:
+        social = self._social_account(url)
+        if social is None:
+            return False
+        platform, account_id = social
+        spec = self.official_account_bindings.get(platform, {}).get(account_id.casefold())
+        return bool(
+            spec
+            and self._identity_text(str(spec.get("entity") or "")) == self._identity_text(target.label)
+            and str(spec.get("region") or "").strip().lower() == target.region
+        )
+
+    @staticmethod
+    def _social_account(url: str) -> tuple[str, str] | None:
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.netloc.casefold().removeprefix("www.")
+        parts = [part for part in parsed.path.split("/") if part]
+        if host == "x.com" and parts and re.fullmatch(r"[A-Za-z0-9_]{1,15}", parts[0]):
+            return "x", parts[0]
+        if host == "youtube.com" and parts:
+            if parts[0].startswith("@") and len(parts[0]) > 1:
+                return "youtube", parts[0][1:]
+            if parts[0] == "channel" and len(parts) == 2 and parts[1]:
+                return "youtube", parts[1]
+        return None
 
     def _record_candidate_review(
-        self, article: Article, target: VoiceTarget, stage: str, verdict: str, decision: str
+        self,
+        article: Article,
+        target: VoiceTarget,
+        stage: str,
+        identity: CandidateIdentity,
+        decision: str,
+        reason: str,
     ) -> None:
         if not self.telemetry_enabled:
             return
@@ -483,9 +764,12 @@ class ActiveSeeker:
                     source_name=article.source_name,
                     target_label=target.label,
                     target_region=target.region,
+                    target_role=target.role,
                     stage=stage,
-                    verdict=verdict,
+                    verdict=identity.source_type,
                     decision=decision,
+                    reason=reason,
+                    identity_evidence=identity.as_dict(),
                 ),
                 db_path=self.telemetry_db_path,
             )
@@ -585,7 +869,7 @@ class ActiveSeeker:
 
     def _search_tavily(
         self,
-        region: str,
+        target: VoiceTarget | str,
         query: str,
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Return (results, failure_reason).
@@ -595,6 +879,12 @@ class ActiveSeeker:
         key is tried within the same call. Only when ALL keys are exhausted (or
         a non-auth error occurs) is failure_reason returned.
         """
+        target_obj = (
+            target
+            if isinstance(target, VoiceTarget)
+            else VoiceTarget(region=str(target), label=country_name(str(target)), role="country")
+        )
+        region = target_obj.region
         cache_key = (region, query)
         if cache_key in self._search_cache:
             return self._search_cache[cache_key], None
@@ -622,7 +912,7 @@ class ActiveSeeker:
             self._record_search_event(
                 provider="tavily_search",
                 request_type="search",
-                target_region=region,
+                target=target_obj,
                 query=query,
                 http_status=401,
                 result_count=0,
@@ -646,7 +936,7 @@ class ActiveSeeker:
                         self._record_search_event(
                             provider="tavily_search",
                             request_type="search",
-                            target_region=region,
+                            target=target_obj,
                             query=query,
                             http_status=resp.status_code,
                             result_count=0,
@@ -670,7 +960,7 @@ class ActiveSeeker:
                     self._record_search_event(
                         provider="tavily_search",
                         request_type="search",
-                        target_region=region,
+                        target=target_obj,
                         query=query,
                         http_status=status,
                         result_count=0,
@@ -681,7 +971,7 @@ class ActiveSeeker:
                 self._record_search_event(
                     provider="tavily_search",
                     request_type="search",
-                    target_region=region,
+                    target=target_obj,
                     query=query,
                     http_status=status,
                     result_count=0,
@@ -708,7 +998,7 @@ class ActiveSeeker:
                 self._record_search_event(
                     provider="tavily_search",
                     request_type="search",
-                    target_region=region,
+                    target=target_obj,
                     query=query,
                     http_status=resp.status_code,
                     result_count=len(results),
@@ -721,7 +1011,7 @@ class ActiveSeeker:
         self._record_search_event(
             provider="tavily_search",
             request_type="search",
-            target_region=region,
+            target=target_obj,
             query=query,
             http_status=last_status,
             result_count=0,
@@ -811,6 +1101,7 @@ class ActiveSeeker:
         self,
         provider: str,
         request_type: str,
+        target: VoiceTarget | None = None,
         target_region: str | None = None,
         query: str | None = None,
         http_status: int | None = None,
@@ -827,7 +1118,9 @@ class ActiveSeeker:
                 SearchRequestEvent(
                     provider=provider,
                     request_type=request_type,
-                    target_region=target_region,
+                    target_region=target.region if target is not None else target_region,
+                    target_label=target.label if target is not None else None,
+                    target_role=target.role if target is not None else None,
                     query=query,
                     http_status=http_status,
                     result_count=result_count,

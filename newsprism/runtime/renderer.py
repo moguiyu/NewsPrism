@@ -151,6 +151,9 @@ _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "thin_result": ("结果内容过少", "Result too thin"),
     "query_generation_failed": ("查询生成失败", "Query generation failed"),
     "entity_mismatch": ("实体不匹配", "Entity mismatch"),
+    "publisher_target_mismatch": ("发布者与目标不匹配", "Publisher does not match target"),
+    "publisher_binding_unverified": ("未确认官方归属", "Official ownership unverified"),
+    "country_target_official_forbidden": ("国家目标不可使用官方搜索", "Country target cannot use official search"),
     "unknown": ("未知原因", "Unknown reason"),
 }
 
@@ -690,10 +693,9 @@ class HtmlRenderer:
         # is_multi_source. Without this, a failed regional search leaves no
         # visible trace in the source list.
         ordered_sources = list(preferred_sources) if preferred_sources is not None else list(summary.cluster.sources)
-        if preferred_sources is None:
-            for article in summary.cluster.articles:
-                if getattr(article, "is_placeholder", False) and article.source_name not in ordered_sources:
-                    ordered_sources.append(article.source_name)
+        for article in summary.cluster.articles:
+            if getattr(article, "is_placeholder", False) and article.source_name not in ordered_sources:
+                ordered_sources.append(article.source_name)
         seen: set[str] = set()
         footer_sources: list[dict] = []
         for source_name in ordered_sources:

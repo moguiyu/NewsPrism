@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from newsprism.config import Config, SourceConfig
 from newsprism.service.locales import country_name, query_languages
-from newsprism.service.seeker import ActiveSeeker, VoiceTarget
+from newsprism.service.seeker import ActiveSeeker, CandidateIdentity, VoiceTarget
 from newsprism.types import Article, ArticleCluster, ImpactAssessment, VoiceNeed
 
 
@@ -176,6 +176,7 @@ def test_event_voice_needs_only_targets_the_named_related_entities():
 def test_official_search_precedes_country_fallback_and_unreviewed_local_source_stays_pending():
     seeker = ActiveSeeker(_config())
     cluster = _cluster()
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
     cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
     target = seeker._missing_voice_targets(cluster)[0]
     calls: list[str] = []
@@ -207,6 +208,7 @@ def test_reviewed_local_source_can_be_used_as_country_fallback():
     }
     seeker = ActiveSeeker(cfg)
     cluster = _cluster()
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
     cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
     target = seeker._missing_voice_targets(cluster)[0]
     result = {
@@ -226,6 +228,7 @@ def test_reviewed_local_source_can_be_used_as_country_fallback():
 def test_unverified_candidate_is_not_accepted_as_official_or_country_voice():
     seeker = ActiveSeeker(_config())
     cluster = _cluster()
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
     cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
     target = seeker._missing_voice_targets(cluster)[0]
     result = {
@@ -238,7 +241,7 @@ def test_unverified_candidate_is_not_accepted_as_official_or_country_voice():
          patch.object(ActiveSeeker, "_verify_candidate", return_value="reject"):
         article, reason = seeker._search_target(cluster, target, "Acme breach", None)
     assert article is None
-    assert "candidate_unverified" in (reason or "")
+    assert "not_related_country_source" in (reason or "")
 
 
 def test_existing_verified_official_voice_skips_search():
@@ -282,3 +285,175 @@ def test_result_to_article_rejects_thin_content():
     full = {"url": "https://x.fr/a", "title": "Titre", "content": "x" * 200, "published_at": None}
     article = seeker._result_to_article(full, "fr")
     assert article is not None and article.is_searched and article.search_region == "fr"
+
+
+def test_country_target_skips_official_stage_and_never_labels_broadcaster_official():
+    seeker = ActiveSeeker(_config())
+    cluster = _cluster()
+    target = VoiceTarget(region="fr", label="France", role="country")
+    calls: list[str] = []
+    rfi_result = {
+        "url": "https://rfi.fr/bordeaux",
+        "title": "French mayor comments on Bordeaux wildfire",
+        "content": "Bordeaux wildfire response reported by a French broadcaster. " * 8,
+        "published_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+
+    def search(searched_target, query):
+        calls.append(query)
+        assert searched_target == target
+        return [rfi_result], None
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search), \
+         patch.object(
+             ActiveSeeker,
+             "_verify_candidate",
+             return_value=CandidateIdentity(
+                 source_type="official_web", publisher_entity="RFI", relationship="same_entity"
+             ),
+         ):
+        article, reason = seeker._search_target(cluster, target, "Bordeaux wildfire", None)
+
+    assert article is None
+    assert any("local news" in query for query in calls)
+    assert all("official statement" not in query for query in calls)
+    assert "not_related_country_source" in (reason or "")
+
+
+def test_recovery_target_drives_official_query_and_matching_domain_acceptance():
+    seeker = ActiveSeeker(_config())
+    cluster = _cluster()
+    cluster.articles[0].title = "Microsoft releases MAI-Cyber-1-Flash"
+    cluster.articles[0].content = "Microsoft introduced the MAI-Cyber-1-Flash model. " * 8
+    cluster.impact.voice_needs = []
+    recovered = VoiceTarget(region="us", label="Microsoft", role="company")
+    with patch.object(ActiveSeeker, "_recover_actor_targets", return_value=[recovered]):
+        assert seeker._missing_voice_targets(cluster) == [recovered]
+    assert seeker._build_search_queries(cluster, recovered, "MAI Cyber release", "official")[0].startswith(
+        "Microsoft official statement"
+    )
+
+    candidate = _article(
+        "microsoft.ai",
+        "Microsoft posts technical details for its new model",
+        url="https://microsoft.ai/news/mai-cyber",
+    )
+    candidate.content = "Microsoft announces MAI-Cyber-1-Flash. " * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web", publisher_entity="Microsoft", relationship="same_entity"
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(
+            cluster,
+            recovered,
+            [{"url": candidate.url, "title": candidate.title, "content": candidate.content}],
+            None,
+            "official",
+        )
+    assert len(accepted) == 1
+    assert rejected == []
+
+
+def test_recovery_target_accepts_localized_evidence_for_canonical_actor_label():
+    seeker = ActiveSeeker(_config())
+    cluster = _cluster()
+    cluster.articles[0].title = "微软发布网络安全模型"
+    cluster.articles[0].content = "微软发布新的网络安全模型。" * 10
+
+    targets = seeker._validated_actor_targets(
+        cluster,
+        [("Microsoft", "us", "company", "微软")],
+    )
+
+    assert targets == [VoiceTarget(region="us", label="Microsoft", role="company")]
+
+
+def test_official_publisher_mismatch_is_rejected_even_when_event_matches():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget(region="us", label="Example Ministry", role="ministry")
+    article = _article("microsoft.ai", "Example Ministry policy", url="https://microsoft.ai/policy")
+    article.content = "Example Ministry policy announcement. " * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web", publisher_entity="Microsoft", relationship="same_entity"
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(_cluster(), target, [
+            {"url": article.url, "title": article.title, "content": article.content}
+        ], None, "official")
+    assert accepted == []
+    assert rejected == [("publisher_target_mismatch", article.url)]
+
+
+def test_ambiguous_official_binding_is_queued_for_review():
+    seeker = ActiveSeeker(_config())
+    cluster = _cluster()
+    target = VoiceTarget(region="us", label="Example Ministry", role="ministry")
+    result = {
+        "url": "https://shared-government.example/statement",
+        "title": "Example Ministry issues statement",
+        "content": "Example Ministry issues a detailed statement. " * 10,
+    }
+
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web",
+            publisher_entity="Example Ministry",
+            relationship="same_entity",
+        ),
+    ), patch.object(ActiveSeeker, "_record_candidate_review") as record_review:
+        accepted, rejected = seeker._accept_results(
+            cluster, target, [result], None, "official"
+        )
+
+    assert accepted == []
+    assert rejected == [("publisher_binding_unverified", result["url"])]
+    assert record_review.call_args.args[4:] == (
+        "pending_review",
+        "publisher_binding_unverified",
+    )
+
+
+def test_official_registry_requires_exact_entity_binding_and_social_account_is_exact():
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "shared-government.example": {"verdict": "official_web", "entity": "Example Ministry", "region": "us"},
+        "missing-entity.example": {"verdict": "official_web", "region": "us"},
+    }
+    cfg.active_search["official_account_bindings"] = {
+        "x": {"exampleministry": {"entity": "Example Ministry", "region": "us"}},
+    }
+    seeker = ActiveSeeker(cfg)
+    target = VoiceTarget(region="us", label="Example Ministry", role="ministry")
+    identity, reason = seeker._registry_identity("https://shared-government.example/statement", target, "official")
+    assert identity is not None and identity.relationship == "same_entity" and reason is None
+    _, wrong_entity_reason = seeker._registry_identity(
+        "https://shared-government.example/statement", VoiceTarget("us", "Other Ministry", "ministry"), "official"
+    )
+    assert wrong_entity_reason == "publisher_binding_unverified"
+    _, missing_entity_reason = seeker._registry_identity("https://missing-entity.example/a", target, "official")
+    assert missing_entity_reason == "publisher_binding_unverified"
+    assert seeker._social_account_binding("https://x.com/ExampleMinistry/status/1", target)
+    assert not seeker._social_account_binding("https://x.com/OtherMinistry/status/1", target)
+    assert seeker._social_account("https://youtube.com/watch?v=abc") is None
+
+
+def test_country_name_voice_need_cannot_become_actor_target():
+    seeker = ActiveSeeker(_config())
+    cluster = _cluster()
+    cluster.articles[0].title = "France and Example Ministry discuss policy"
+    cluster.articles[0].content = "France and Example Ministry discuss policy. " * 8
+    cluster.impact.voice_needs = [
+        VoiceNeed(label="France", country="fr", kind="country"),
+        VoiceNeed(label="Example Ministry", country="fr", kind="ministry"),
+    ]
+    assert seeker._missing_voice_targets(cluster) == [
+        VoiceTarget(region="fr", label="Example Ministry", role="ministry")
+    ]

@@ -1796,6 +1796,73 @@ def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer
     assert "⚠️" in html
     assert "鉴权失败" in html  # bilingual short label from _placeholder_failure_label
 
+    # A normal perspective list must not hide the failed-target marker.
+    footer_sources = renderer._build_footer_sources(summary, preferred_sources=["Reuters"])
+    assert [source["source"] for source in footer_sources] == ["Reuters", "[France视角待补]"]
+
+
+def test_failed_target_remains_visible_with_two_real_perspectives(renderer, tmp_path):
+    renderer.output_dir = tmp_path
+    reuters = Article(
+        url="https://reuters.com/event",
+        title="Event policy angle",
+        source_name="Reuters",
+        published_at=datetime.now(tz=timezone.utc),
+        content="Reuters policy coverage.",
+        origin_region="us",
+    )
+    bbc = Article(
+        url="https://bbc.com/event",
+        title="Event public-impact angle",
+        source_name="BBC",
+        published_at=datetime.now(tz=timezone.utc),
+        content="BBC public-impact coverage.",
+        origin_region="gb",
+    )
+    placeholder = Article(
+        url="placeholder:fr:event-key",
+        title="待补充：France声音",
+        source_name="[France声音待补]",
+        published_at=datetime.now(tz=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="fr",
+        origin_region="fr",
+        searched_provider="tavily_search",
+        is_placeholder=True,
+        search_acceptance_status="failed",
+        search_acceptance_reason="publisher_binding_unverified",
+    )
+    summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[reuters, bbc, placeholder],
+        ),
+        summary="**Event headline**\n\nTwo established perspectives.",
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["Reuters"], perspective="Policy response angle."),
+            PerspectiveGroup(sources=["BBC"], perspective="Public impact angle."),
+        ],
+    )
+
+    html_path = renderer.render([summary], date(2026, 7, 28), update_latest=False)
+    html = html_path.read_text(encoding="utf-8")
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+    card = payload["clusters"][0]
+
+    placeholder_sources = [source for source in card["footer_sources"] if source["is_placeholder"]]
+    assert [source["source"] for source in placeholder_sources] == ["[France声音待补]"]
+    assert all(
+        not source["is_placeholder"]
+        for group in card["grouped_perspectives"]
+        for source in group["sources"]
+    )
+    assert card["distinct_perspective_count"] == 2
+    assert "查看 2 个视角" in html
+    assert "🇫🇷" in html
+    assert "⚠️" in html
+    assert "未确认官方归属" in html
+
 
 def test_render_shared_storyline_tag_for_main_lane_same_key_clusters(renderer, tmp_path):
     """Issue #2 rec #4 fallback: when 2+ main-lane clusters share a

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 
 # ─── COLLECTION ───────────────────────────────────────────────────────────────
@@ -62,6 +63,8 @@ class SearchRequestEvent:
     provider: str
     request_type: str
     target_region: str | None = None
+    target_label: str | None = None
+    target_role: str | None = None
     query: str | None = None
     account_id: str | None = None
     http_status: int | None = None
@@ -86,7 +89,9 @@ class SearchCandidateReview:
     stage: str
     verdict: str
     decision: str               # accepted | pending_review | rejected
+    target_role: str | None = None
     reason: str = ""
+    identity_evidence: dict[str, Any] | None = None
     created_at: datetime | None = None
 
 

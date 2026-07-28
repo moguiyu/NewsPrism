@@ -5,6 +5,9 @@ publisher ownership, source origin, or a candidate's represented country.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from babel import Locale
 from babel.core import get_global
 
@@ -20,6 +23,39 @@ def country_name(region: str) -> str:
     """Return an ISO country name, preserving the code for unknown territories."""
     code = (region or "").strip().upper()
     return Locale("en").territories.get(code, code or "unknown country")
+
+
+def is_recognized_country(region: str) -> bool:
+    """Whether ``region`` is a CLDR-recognized ISO territory code."""
+    code = (region or "").strip().upper()
+    return bool(re.fullmatch(r"[A-Z]{2}", code) and code in Locale("en").territories)
+
+
+def _identity_text(value: str) -> str:
+    """Normalize a territory/entity label for equality comparisons."""
+    return "".join(
+        char for char in unicodedata.normalize("NFKC", value).casefold() if char.isalnum()
+    )
+
+
+def is_territory_name(value: str, languages: tuple[str, ...] = ()) -> bool:
+    """Return whether a label is a CLDR territory name in a relevant locale.
+
+    This is a guard against treating ``France`` (or a localized alias) as a
+    named actor.  It is not publisher provenance data.
+    """
+    normalized = _identity_text(value)
+    if not normalized:
+        return False
+    locale_codes = ("en", *languages)
+    for code in dict.fromkeys(locale_codes):
+        try:
+            territory_names = Locale(code).territories.values()
+        except Exception:
+            continue
+        if normalized in {_identity_text(name) for name in territory_names}:
+            return True
+    return False
 
 
 def query_languages(region: str, override: str | list[str] | None = None) -> tuple[str, ...]:
