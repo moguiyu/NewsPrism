@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.6.0 - 2026-07-29
+
+### Added
+
+- **Identity-first missing-voice search** — Active Search now derives material
+  actors from each event, resolves an actor-bound official website or reviewed
+  social account, and restricts the event search to that identity before
+  falling back to reviewed editorial media from the actor's related country.
+  Country profiles no longer form a closed search allowlist.
+- **Human source-review workflow** — newly discovered country publishers remain
+  unpublished and enter a persistent review queue. Editors can inspect and
+  promote or reject candidates with `newsprism search-review list`, `approve`,
+  and `reject`; approved bindings survive deployment in a data sidecar.
+- **Coverage-aware search targeting** — the seeker distinguishes official
+  coverage, attributed direct quotes, verified related-country reporting,
+  secondary mentions, and genuinely missing voices. Incidental entities,
+  comparison-only mentions, products, and facilities no longer consume search
+  budget.
+- **Search observability and controls** — request telemetry now records the
+  cluster, target role and rationale, prior coverage, and restricted domains.
+  Per-stage query limits, a per-run request budget, and provider-wide failure
+  short-circuiting prevent repeated low-value calls.
+- **Numeric grounding gate** — generated summaries validate important numbers,
+  dates, percentages, money values, and vote counts against source passages.
+  Unsupported values receive one rewrite attempt and are removed or flagged for
+  review if they remain ungrounded.
+
+### Changed
+
+- Search failures now render as `🔍` plus an algorithmic ISO country flag,
+  target, and explicit failure reason. Placeholders never increase article or
+  perspective counts.
+- Perspective groups are canonicalized after summarization and after duplicate
+  merges, removing semantically repeated angles and non-distinct fallback prose.
+- Same-storyline duplicate handling now always merges shared URLs and only
+  merges near-identical multi-source events at a strict confidence threshold,
+  preserving distinct daily incidents.
+- Conflict storyline validation requires a matching conflict family; generic
+  shared actors or a broad war theme can no longer join Iran and Ukraine events.
+- Active Search applies to impact-qualified main-feed stories as well as hot
+  topics, while verified existing coverage suppresses unnecessary calls.
+
+### Fixed
+
+- Prevented unrelated UK, German, and French search results from being presented
+  as useful perspectives on entity-specific stories such as OpenAI and Hugging
+  Face.
+- Prevented duplicate or non-distinct source summaries from inflating the
+  displayed perspective count.
+- Prevented unsupported vote totals such as `75–11` from remaining in a
+  publishable summary when the source evidence reports a different result.
+- Prevented Russia-Ukraine events from contaminating Iran-US-Israel storylines.
+- Hardened article persistence, clustering, and rendering when
+  `published_at` is missing.
+- Corrected ownership-gate treatment of cross-border cyber incidents and other
+  non-domestic-governance events.
+
 ## v0.5.3 - 2026-07-22
 
 ### Added
