@@ -10,7 +10,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 from newsprism.types import (
     Article, Cluster, ClusterQualityReport, ClusterSummary, SearchCandidateReview,
@@ -89,6 +89,11 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 target_region TEXT,
                 target_label TEXT,
                 target_role TEXT,
+                cluster_key TEXT,
+                target_event_role TEXT,
+                target_reason TEXT,
+                coverage_before TEXT,
+                restricted_domains TEXT NOT NULL DEFAULT '[]',
                 query TEXT,
                 account_id TEXT,
                 http_status INTEGER,
@@ -337,6 +342,20 @@ def init_db(db_path: Path = DB_PATH) -> None:
             _add_column("search_request_events", "target_label", "target_label TEXT")
         if "target_role" not in search_event_columns:
             _add_column("search_request_events", "target_role", "target_role TEXT")
+        if "cluster_key" not in search_event_columns:
+            _add_column("search_request_events", "cluster_key", "cluster_key TEXT")
+        if "target_event_role" not in search_event_columns:
+            _add_column("search_request_events", "target_event_role", "target_event_role TEXT")
+        if "target_reason" not in search_event_columns:
+            _add_column("search_request_events", "target_reason", "target_reason TEXT")
+        if "coverage_before" not in search_event_columns:
+            _add_column("search_request_events", "coverage_before", "coverage_before TEXT")
+        if "restricted_domains" not in search_event_columns:
+            _add_column(
+                "search_request_events",
+                "restricted_domains",
+                "restricted_domains TEXT NOT NULL DEFAULT '[]'",
+            )
 
         cursor = conn.execute("PRAGMA table_info(search_candidate_reviews)")
         candidate_columns = {row[1] for row in cursor.fetchall()}
@@ -469,17 +488,24 @@ def insert_search_request_event(event: SearchRequestEvent, db_path: Path = DB_PA
     with get_conn(db_path) as conn:
         cur = conn.execute(
             """INSERT INTO search_request_events (
-                   provider, request_type, target_region, target_label, target_role, query, account_id,
+                   provider, request_type, target_region, target_label, target_role,
+                   cluster_key, target_event_role, target_reason, coverage_before,
+                   restricted_domains, query, account_id,
                    http_status, result_count, accepted_count, rejection_reason, rejection_count,
                    duration_ms, estimated_cost_usd, created_at
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
             (
                 event.provider,
                 event.request_type,
                 event.target_region,
                 event.target_label,
                 event.target_role,
+                event.cluster_key,
+                event.target_event_role,
+                event.target_reason,
+                event.coverage_before,
+                json.dumps(event.restricted_domains, ensure_ascii=False, separators=(",", ":")),
                 event.query,
                 event.account_id,
                 event.http_status,
@@ -518,6 +544,47 @@ def insert_search_candidate_review(
             return cur.lastrowid
         except sqlite3.IntegrityError:
             return None
+
+
+def get_search_candidate_review(
+    review_id: int,
+    db_path: Path = DB_PATH,
+) -> dict[str, Any] | None:
+    with get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM search_candidate_reviews WHERE id = ?", (review_id,)
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_pending_search_candidate_reviews(
+    limit: int = 50,
+    db_path: Path = DB_PATH,
+) -> list[dict[str, Any]]:
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT * FROM search_candidate_reviews
+               WHERE decision = 'pending_review'
+               ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (max(1, min(int(limit), 500)),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_search_candidate_review_decision(
+    review_id: int,
+    decision: str,
+    reason: str,
+    db_path: Path = DB_PATH,
+) -> None:
+    if decision not in {"accepted", "rejected", "pending_review"}:
+        raise ValueError(f"Unsupported search review decision: {decision}")
+    with get_conn(db_path) as conn:
+        conn.execute(
+            """UPDATE search_candidate_reviews
+               SET decision = ?, reason = ? WHERE id = ?""",
+            (decision, reason, review_id),
+        )
 
 
 # ─── CLUSTERS ──────────────────────────────────────────────────────────────────

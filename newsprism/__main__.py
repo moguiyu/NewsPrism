@@ -65,6 +65,24 @@ def main() -> None:
     calibrate_sub.add_parser("show", help="Show current weights and editorial policy")
     calibrate_sub.add_parser("reset", help="Restore all weights to seed values")
 
+    search_review_parser = sub.add_parser(
+        "search-review", help="Review Active Search publisher identity candidates"
+    )
+    search_review_sub = search_review_parser.add_subparsers(dest="search_review_cmd")
+    sr_list = search_review_sub.add_parser("list", help="List pending candidates")
+    sr_list.add_argument("--limit", type=int, default=50)
+    sr_list.add_argument("--db-path", default="data/newsprism.db")
+    sr_approve = search_review_sub.add_parser("approve", help="Approve one domain binding")
+    sr_approve.add_argument("--id", type=int, required=True)
+    sr_approve.add_argument("--db-path", default="data/newsprism.db")
+    sr_approve.add_argument(
+        "--bindings-file", default="data/search-source-bindings.yaml"
+    )
+    sr_reject = search_review_sub.add_parser("reject", help="Reject one candidate")
+    sr_reject.add_argument("--id", type=int, required=True)
+    sr_reject.add_argument("--reason", default="rejected_by_editor")
+    sr_reject.add_argument("--db-path", default="data/newsprism.db")
+
     portal_parser = sub.add_parser("portal", help="Run the local admin quality portal")
     portal_parser.add_argument("--host", default="127.0.0.1")
     portal_parser.add_argument("--port", type=int, default=8081)
@@ -140,6 +158,29 @@ def main() -> None:
                 print(reset_calibration())
             else:
                 calibrate_parser.print_help()
+                sys.exit(1)
+        elif args.cmd == "search-review":
+            from pathlib import Path
+            from newsprism.runtime.search_review import (
+                approve_review_binding,
+                format_pending_reviews,
+                reject_review,
+            )
+
+            if args.search_review_cmd == "list":
+                print(format_pending_reviews(args.limit, Path(args.db_path)))
+            elif args.search_review_cmd == "approve":
+                result = approve_review_binding(
+                    args.id,
+                    db_path=Path(args.db_path),
+                    bindings_path=Path(args.bindings_file),
+                )
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            elif args.search_review_cmd == "reject":
+                reject_review(args.id, args.reason, db_path=Path(args.db_path))
+                print(f"Rejected Active Search candidate #{args.id}")
+            else:
+                search_review_parser.print_help()
                 sys.exit(1)
         elif args.cmd == "portal":
             import uvicorn

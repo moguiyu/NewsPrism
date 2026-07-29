@@ -5,7 +5,7 @@ import litellm
 
 from newsprism.config import Config
 from newsprism.service.summarizer import PerspectiveGroupItem, PerspectiveItem, Summarizer
-from newsprism.types import Article, ArticleCluster
+from newsprism.types import Article, ArticleCluster, ClusterSummary
 
 
 def _config() -> Config:
@@ -243,7 +243,7 @@ def test_normalize_perspective_groups_merges_and_backfills_missing_sources():
     ]
 
 
-def test_normalize_perspective_groups_ignores_invalid_sources_and_falls_back():
+def test_normalize_perspective_groups_drops_non_distinct_fallbacks():
     summarizer = Summarizer(_config())
     cluster = ArticleCluster(
         topic_category="World News",
@@ -276,7 +276,133 @@ def test_normalize_perspective_groups_ignores_invalid_sources_and_falls_back():
         legacy_items=[],
     )
 
-    assert groups[0].sources == ["Reuters"]
-    assert "差异化视角" in groups[0].perspective
-    assert groups[1].sources == ["BBC"]
-    assert "差异化视角" in groups[1].perspective
+    assert groups == []
+
+
+def test_normalize_perspective_groups_merges_semantically_duplicate_angles():
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url=f"https://example.com/{source}",
+                title="Japan earthquake",
+                source_name=source,
+                published_at=datetime.now(tz=timezone.utc),
+                content="Earthquake casualties and rescue updates.",
+            )
+            for source in ("Reuters", "BBC", "NHK")
+        ],
+    )
+
+    groups = summarizer._normalize_perspective_groups(
+        cluster,
+        raw_groups=[
+            PerspectiveGroupItem(
+                sources=["Reuters"],
+                perspective="报道地震灾情及伤亡情况，关注救援进展和余震风险。",
+            ),
+            PerspectiveGroupItem(
+                sources=["BBC"],
+                perspective="报道地震伤亡及救援进展，关注余震风险。",
+            ),
+            PerspectiveGroupItem(
+                sources=["NHK"],
+                perspective="强调地方政府的避难安排与交通中断。",
+            ),
+        ],
+        legacy_items=[],
+    )
+
+    assert len(groups) == 2
+    assert groups[0].sources == ["Reuters", "BBC"]
+    assert groups[1].sources == ["NHK"]
+
+
+def test_numeric_grounding_blocks_unsupported_vote_count(monkeypatch):
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/senate",
+                title="Senate approves measure 86–12",
+                source_name="Reuters",
+                published_at=datetime.now(tz=timezone.utc),
+                content="报道确认参议院以86–12票通过该法案。",
+            )
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**参议院通过制裁法案**\n\n参议院以75–11票通过该法案。",
+        quality_status="publishable",
+    )
+    monkeypatch.setattr(summarizer, "_rewrite_grounded_summary", lambda *_args: None)
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "75–11" not in summary.summary
+    assert summary.quality_status == "needs_review"
+    assert summary.contested_claims == ["75–11票"]
+    assert "unsupported_numeric_claim" in summary.quality_flags
+
+
+def test_numeric_grounding_accepts_source_supported_vote_count():
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/senate",
+                title="Senate approves measure 86–12",
+                source_name="Reuters",
+                published_at=datetime.now(tz=timezone.utc),
+                content="报道确认参议院以86–12票通过该法案。",
+            )
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**参议院通过制裁法案**\n\n参议院以86–12票通过该法案。",
+        quality_status="publishable",
+    )
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "86–12" in summary.summary
+    assert summary.quality_status == "publishable"
+
+
+def test_numeric_grounding_marks_conflicting_source_vote_counts(monkeypatch):
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/a",
+                title="Vote result",
+                source_name="Source A",
+                published_at=datetime.now(tz=timezone.utc),
+                content="参议院以75–11票通过该法案。",
+            ),
+            Article(
+                url="https://example.com/b",
+                title="Updated vote result",
+                source_name="Source B",
+                published_at=datetime.now(tz=timezone.utc),
+                content="参议院最终以86–12票通过该法案。",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**参议院通过法案**\n\n参议院以75–11票通过该法案。",
+        quality_status="publishable",
+    )
+    monkeypatch.setattr(summarizer, "_rewrite_grounded_summary", lambda *_args: None)
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "75–11" not in summary.summary
+    assert summary.quality_status == "needs_review"

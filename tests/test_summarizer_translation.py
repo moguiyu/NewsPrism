@@ -67,7 +67,7 @@ def test_translate_report_content_degrades_to_chinese_on_failure(monkeypatch):
     assert summary.summary_en is None
 
 
-def test_normalize_perspective_groups_backfills_missing_sources():
+def test_normalize_perspective_groups_does_not_invent_missing_source_angles():
     summarizer = Summarizer(_config())
     cluster = ArticleCluster(
         topic_category="evt",
@@ -84,4 +84,5 @@ def test_normalize_perspective_groups_backfills_missing_sources():
         [],
     )
     covered = {source for group in groups for source in group.sources}
-    assert covered == {"Reuters", "BBC News"}
+    assert covered == {"Reuters"}
+    assert all("差异化视角" not in group.perspective for group in groups)

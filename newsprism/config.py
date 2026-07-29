@@ -224,6 +224,18 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
     certifications = load_certifications(
         config_root / "config" / "sources-certification.yaml"
     )
+    active_search = dict(raw.get("active_search", {}) or {})
+    reviewed_bindings = _load_yaml_file(
+        config_root,
+        active_search.get(
+            "reviewed_bindings_file", "data/search-source-bindings.yaml"
+        ),
+        {},
+    )
+    for key in ("source_verdicts", "official_account_bindings"):
+        merged = dict(active_search.get(key, {}) or {})
+        merged.update(dict(reviewed_bindings.get(key, {}) or {}))
+        active_search[key] = merged
 
     return Config(
         raw=raw,
@@ -236,7 +248,7 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         dedup=raw.get("dedup", {}),
         summarizer=raw.get("summarizer", {}),
         output=raw.get("output", {}),
-        active_search=raw.get("active_search", {}),
+        active_search=active_search,
         editorial_values=editorial_values,
         feelgood_keywords=feelgood_keywords,
         evolution=raw.get("evolution", {}),

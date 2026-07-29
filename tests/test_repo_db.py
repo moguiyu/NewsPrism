@@ -54,6 +54,11 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
             target_region="jp",
             target_label="Japan MOFA",
             target_role="ministry",
+            cluster_key="cluster-1",
+            target_event_role="regulator",
+            target_reason="The ministry owns the decision",
+            coverage_before="missing",
+            restricted_domains=["mofa.go.jp"],
             query="chip export",
             account_id="mofa-jp",
             http_status=200,
@@ -69,10 +74,16 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
 
     with sqlite3.connect(db_path) as conn:
         telemetry = conn.execute(
-            "SELECT provider, request_type, target_region, target_label, target_role, accepted_count, rejection_reason, rejection_count, estimated_cost_usd "
+            "SELECT provider, request_type, target_region, target_label, target_role, cluster_key, "
+            "target_event_role, target_reason, coverage_before, restricted_domains, accepted_count, "
+            "rejection_reason, rejection_count, estimated_cost_usd "
             "FROM search_request_events"
         ).fetchone()
-    assert telemetry == ("x", "user_timeline", "jp", "Japan MOFA", "ministry", 1, "generic_page", 2, 0.02)
+    assert telemetry == (
+        "x", "user_timeline", "jp", "Japan MOFA", "ministry", "cluster-1",
+        "regulator", "The ministry owns the decision", "missing", '["mofa.go.jp"]',
+        1, "generic_page", 2, 0.02,
+    )
 
     review_id = insert_search_candidate_review(
         SearchCandidateReview(
@@ -127,5 +138,8 @@ def test_init_db_adds_target_identity_columns_to_existing_search_tables(tmp_path
     with sqlite3.connect(db_path) as conn:
         request_columns = {row[1] for row in conn.execute("PRAGMA table_info(search_request_events)")}
         candidate_columns = {row[1] for row in conn.execute("PRAGMA table_info(search_candidate_reviews)")}
-    assert {"target_label", "target_role"} <= request_columns
+    assert {
+        "target_label", "target_role", "cluster_key", "target_event_role",
+        "target_reason", "coverage_before", "restricted_domains",
+    } <= request_columns
     assert {"target_role", "identity_evidence"} <= candidate_columns

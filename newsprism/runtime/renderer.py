@@ -26,6 +26,7 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.language import looks_like_chinese_text
+from newsprism.service.locales import region_flag, region_flags
 from newsprism.types import ClusterSummary, SourceCertification
 
 logger = logging.getLogger(__name__)
@@ -89,23 +90,7 @@ _CATEGORY_META: list[tuple[str, str, str]] = [
 
 # ── REGION → FLAG EMOJI ───────────────────────────────────────────────────────
 
-_REGION_FLAG: dict[str, str] = {
-    "cn": "🇨🇳",
-    "us": "🇺🇸",
-    "gb": "🇬🇧",
-    "de": "🇩🇪",
-    "nl": "🇳🇱",
-    "pl": "🇵🇱",
-    "jp": "🇯🇵",
-    "kr": "🇰🇷",
-    "ru": "🇷🇺",
-    "in": "🇮🇳",
-    "sg": "🇸🇬",
-    "fr": "🇫🇷",
-    "eu": "🇪🇺",
-    "au": "🇦🇺",
-    "ca": "🇨🇦",
-}
+_REGION_FLAG: dict[str, str] = region_flags()
 
 _HOT_TOPIC_ICON_MAP: dict[str, str] = {
     "globe": "🌍",
@@ -153,6 +138,10 @@ _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "entity_mismatch": ("实体不匹配", "Entity mismatch"),
     "publisher_target_mismatch": ("发布者与目标不匹配", "Publisher does not match target"),
     "publisher_binding_unverified": ("未确认官方归属", "Official ownership unverified"),
+    "official_binding_not_found": ("未找到可信官方渠道", "No verified official channel found"),
+    "request_budget_exhausted": ("本轮搜索额度已用完", "Search budget exhausted"),
+    "coverage_satisfied": ("已有合格来源", "Qualifying coverage already exists"),
+    "identity_binding_resolved": ("已确认官方渠道", "Official channel verified"),
     "country_target_official_forbidden": ("国家目标不可使用官方搜索", "Country target cannot use official search"),
     "unknown": ("未知原因", "Unknown reason"),
 }
@@ -164,7 +153,12 @@ def _placeholder_failure_label(reason: str | None) -> tuple[str, str]:
         return _PLACEHOLDER_FAILURE_LABELS["unknown"]
     # Reasons may be comma-separated (acceptance gate logs combined rejections).
     primary = reason.split(",", 1)[0].strip()
-    return _PLACEHOLDER_FAILURE_LABELS.get(primary, _PLACEHOLDER_FAILURE_LABELS["unknown"])
+    if primary in _PLACEHOLDER_FAILURE_LABELS:
+        return _PLACEHOLDER_FAILURE_LABELS[primary]
+    if primary.startswith("http_"):
+        status = primary.removeprefix("http_") or "error"
+        return (f"搜索服务错误（HTTP {status}）", f"Search service error (HTTP {status})")
+    return _PLACEHOLDER_FAILURE_LABELS["unknown"]
 
 
 # ── TEXT HELPERS ──────────────────────────────────────────────────────────────
@@ -533,9 +527,9 @@ class HtmlRenderer:
         For organic articles, look up region from source_regions mapping.
         """
         if search_region:
-            return _REGION_FLAG.get(search_region, "🌐")
+            return region_flag(search_region) or "🌐"
         region = self.source_regions.get(source_name, "")
-        return _REGION_FLAG.get(region, "")
+        return region_flag(region)
 
     def _provenance_label(
         self,
@@ -635,8 +629,8 @@ class HtmlRenderer:
         # inline "missing perspective" marker with the failure detail on hover.
         placeholder_reason_zh, placeholder_reason_en = _placeholder_failure_label(acceptance_reason)
         if is_placeholder:
-            compact_label = f"⚠️{source_name}"
-            compact_label_en = f"⚠️{source_name}"
+            compact_label = f"🔍{source_name}"
+            compact_label_en = f"🔍{source_name}"
             provenance_label = placeholder_reason_zh
             provenance_label_en = placeholder_reason_en
         return {

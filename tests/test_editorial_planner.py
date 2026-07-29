@@ -8,7 +8,7 @@ from newsprism.service.editorial_planner import (
     select_positive_summaries,
     select_report_clusters,
 )
-from newsprism.types import Article, ArticleCluster, ClusterSummary, ImpactAssessment
+from newsprism.types import Article, ArticleCluster, ClusterSummary, ImpactAssessment, PerspectiveGroup
 
 
 def _config(max_per_category: int = 8, max_clusters: int = 20) -> Config:
@@ -299,6 +299,64 @@ def test_display_dedup_preserves_within_family_members():
     # Both members preserved — the family did not collapse to 1.
     assert hot[0]["member_count"] == 2
     assert regular == []
+
+
+def test_display_dedup_always_merges_shared_url_inside_storyline():
+    shared = "https://wire.example/wildfire"
+    left = _storyline_summary("France wildfire evacuation", 0.9, "wildfires", role="core")
+    right = _storyline_summary("Spain and France wildfire update", 0.8, "wildfires")
+    left.cluster.articles[0].url = shared
+    right.cluster.articles[0].url = shared
+    family = {
+        "macro_topic_key": "wildfires",
+        "storyline_key": "wildfires",
+        "summaries": [left, right],
+    }
+
+    hot, _f, _r, _p = resolve_display_duplicates([family], [], [], [])
+
+    assert hot[0]["member_count"] == 1
+
+
+def test_display_dedup_merges_high_confidence_multisource_event_inside_storyline():
+    left = _storyline_summary("France wildfire evacuation", 0.9, "wildfires", role="core")
+    right = _storyline_summary("France wildfire evacuation update", 0.8, "wildfires")
+    for summary, suffix in ((left, "left"), (right, "right")):
+        summary.cluster.articles.extend([
+            _article(f"BBC {suffix}", url=f"https://bbc.example/{suffix}", embedding=[1.0, 0.0, 0.0]),
+            _article(f"Guardian {suffix}", url=f"https://guardian.example/{suffix}", embedding=[1.0, 0.0, 0.0]),
+        ])
+        summary.cluster.articles[-2].source_name = "BBC"
+        summary.cluster.articles[-1].source_name = "Guardian"
+        summary.cluster.sources = ["Reuters", "BBC", "Guardian"]
+        summary.cluster.articles[0].embedding = [1.0, 0.0, 0.0]
+    family = {
+        "macro_topic_key": "wildfires",
+        "storyline_key": "wildfires",
+        "summaries": [left, right],
+    }
+
+    hot, _f, _r, _p = resolve_display_duplicates([family], [], [], [])
+
+    assert hot[0]["member_count"] == 1
+
+
+def test_perspectives_are_canonicalized_after_duplicate_summary_merge():
+    shared = "https://wire.example/quake"
+    left = _summary("Japan earthquake", 0.9, url=shared, embedding=[1.0, 0.0])
+    right = _summary("Japan quake update", 0.8, url=shared, embedding=[1.0, 0.0])
+    left.grouped_perspectives = [
+        PerspectiveGroup(["Reuters"], "报道地震灾情及伤亡情况，关注救援进展和余震风险。")
+    ]
+    right.grouped_perspectives = [
+        PerspectiveGroup(["BBC"], "报道地震伤亡及救援进展，关注余震风险。")
+    ]
+
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
+
+    assert len(regular) == 1
+    assert len(regular[0].grouped_perspectives) == 1
+    assert regular[0].grouped_perspectives[0].sources == ["Reuters", "BBC"]
 
 
 def test_display_dedup_merges_crosslang_same_event_in_positive_lane():

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from newsprism.config import Config
 from newsprism.service.llm_compat import completion_compat_kwargs
+from newsprism.service.perspectives import canonicalize_perspective_groups
 from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,11 @@ class StructuredSummary(BaseModel):
         default_factory=list,
         description="Deprecated fallback: one perspective per source. Empty if unused."
     )
+
+
+class GroundedSummaryRewrite(BaseModel):
+    headline: str = ""
+    body: str = ""
 
 
 class BatchSummaryItem(BaseModel):
@@ -274,17 +280,17 @@ class Summarizer:
                 for group in grouped_perspectives
                 for source_name in group.sources
             }
-            results.append(
-                ClusterSummary(
-                    cluster=cluster,
-                    summary=summary_text,
-                    perspectives=perspectives,
-                    grouped_perspectives=grouped_perspectives,
-                    short_topic_name=item.short_topic_name,
-                    topic_icon_key=item.topic_icon_key,
-                    **self._cluster_metadata_kwargs(cluster),
-                )
+            summary = ClusterSummary(
+                cluster=cluster,
+                summary=summary_text,
+                perspectives=perspectives,
+                grouped_perspectives=grouped_perspectives,
+                short_topic_name=item.short_topic_name,
+                topic_icon_key=item.topic_icon_key,
+                **self._cluster_metadata_kwargs(cluster),
             )
+            self._enforce_numeric_grounding(summary)
+            results.append(summary)
 
         return results
 
@@ -674,7 +680,7 @@ class Summarizer:
             parsed = StructuredSummary(headline="", body="")
 
         logger.debug("Summarized cluster '%s': %d chars", cluster.topic_category, len(summary_text))
-        return ClusterSummary(
+        summary = ClusterSummary(
             cluster=cluster,
             summary=summary_text,
             perspectives=perspectives,
@@ -683,6 +689,8 @@ class Summarizer:
             topic_icon_key=parsed.topic_icon_key,
             **self._cluster_metadata_kwargs(cluster),
         )
+        self._enforce_numeric_grounding(summary)
+        return summary
 
     def _align_translated_perspective_groups(
         self,
@@ -816,7 +824,7 @@ class Summarizer:
             normalized.append(PerspectiveGroup(sources=[source], perspective=fallback_perspective))
             assigned_sources.add(source)
 
-        return normalized
+        return canonicalize_perspective_groups(normalized)
 
     def _clean_perspective_text(self, text: str) -> str:
         return re.sub(r"\s+", " ", (text or "").strip())
@@ -826,6 +834,147 @@ class Summarizer:
 
     def _fallback_perspective_text_en(self) -> str:
         return "This source reports a similar angle to the main summary."
+
+    _NUMERIC_CLAIM_PATTERN = re.compile(
+        r"(?:[$€£¥￥]\s*)?\d[\d,]*(?:\.\d+)?"
+        r"(?:\s*(?:[-–—:比]\s*)\d[\d,]*(?:\.\d+)?)?"
+        r"(?:\s*(?:%|％|万亿美元|亿美元|亿元|万元|美元|欧元|人民币|"
+        r"票|项|人|名|家|国|枚|架|艘|倍|岁|年|月|日))?"
+    )
+
+    @classmethod
+    def _numeric_claims(cls, text: str) -> list[str]:
+        claims: list[str] = []
+        for match in cls._NUMERIC_CLAIM_PATTERN.finditer(text or ""):
+            value = match.group(0).strip()
+            digits = re.sub(r"\D", "", value)
+            has_context = bool(
+                re.search(
+                    r"[$€£¥￥%％]|[-–—:比]|万亿美元|亿美元|亿元|万元|美元|欧元|人民币|"
+                    r"票|项|人|名|家|国|枚|架|艘|倍|岁|年|月|日",
+                    value,
+                )
+            )
+            if len(digits) >= 2 or has_context:
+                claims.append(value)
+        return list(dict.fromkeys(claims))
+
+    @staticmethod
+    def _normalized_claim_text(text: str) -> str:
+        return (
+            (text or "")
+            .casefold()
+            .replace("–", "-")
+            .replace("—", "-")
+            .replace("％", "%")
+            .replace(",", "")
+            .replace(" ", "")
+        )
+
+    def _unsupported_numeric_claims(
+        self,
+        cluster: ArticleCluster,
+        summary_text: str,
+    ) -> list[str]:
+        evidence = self._normalized_claim_text(
+            "\n".join(
+                f"{article.title}\n{article.content}"
+                for article in cluster.articles
+                if not article.is_placeholder
+            )
+        )
+        unsupported = [
+            claim
+            for claim in self._numeric_claims(summary_text)
+            if self._normalized_claim_text(claim) not in evidence
+        ]
+        vote_pattern = re.compile(r"\d[\d,]*\s*[-–—]\s*\d[\d,]*")
+        source_vote_counts = {
+            self._normalized_claim_text(match.group(0))
+            for article in cluster.articles
+            if not article.is_placeholder
+            for match in vote_pattern.finditer(f"{article.title}\n{article.content}")
+        }
+        if len(source_vote_counts) > 1:
+            for claim in self._numeric_claims(summary_text):
+                if vote_pattern.search(claim) and claim not in unsupported:
+                    unsupported.append(claim)
+        return unsupported
+
+    def _rewrite_grounded_summary(
+        self,
+        summary: ClusterSummary,
+        unsupported: list[str],
+    ) -> str | None:
+        evidence = self._format_articles(summary.cluster)
+        prompt = (
+            "Rewrite this news headline and body once so every number, date, percentage, vote count, "
+            "and money value is directly supported by the supplied source text. Do not add new facts. "
+            "If sources conflict, omit the value or attribute the disagreement. Return JSON only as "
+            "{\"headline\":\"...\",\"body\":\"...\"}.\n\n"
+            f"Unsupported values: {unsupported}\nCurrent summary:\n{summary.summary}\n\nSources:\n{evidence}"
+        )
+        try:
+            response = litellm.completion(
+                model=self.model,
+                api_key=self.api_key,
+                api_base=self.base_url,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=500,
+                response_format={"type": "json_object"},
+                **self.completion_compat_kwargs,
+            )
+            parsed = GroundedSummaryRewrite.model_validate_json(
+                response.choices[0].message.content or ""
+            )
+            if not parsed.headline.strip() or not parsed.body.strip():
+                return None
+            return f"**{parsed.headline.strip().strip('*')}**\n\n{parsed.body.strip()}"
+        except Exception as exc:
+            logger.warning("Numeric grounding rewrite failed for '%s': %s", summary.cluster.topic_category, exc)
+            return None
+
+    def _remove_unsupported_numeric_sentences(
+        self,
+        summary: ClusterSummary,
+        unsupported: list[str],
+    ) -> str:
+        headline = _extract_headline(summary.summary)
+        body = _body_only(summary.summary)
+        if any(value in headline for value in unsupported):
+            headline = (
+                summary.cluster.articles[0].title
+                if summary.cluster.articles
+                else summary.cluster.topic_category
+            )
+        sentences = re.split(r"(?<=[。！？.!?])\s*", body)
+        kept = [
+            sentence
+            for sentence in sentences
+            if sentence and not any(value in sentence for value in unsupported)
+        ]
+        grounded_body = "".join(kept).strip()
+        if not grounded_body:
+            grounded_body = "报道披露了相关进展，具体数字仍待进一步核实。"
+        return f"**{headline.strip().strip('*')}**\n\n{grounded_body}"
+
+    def _enforce_numeric_grounding(self, summary: ClusterSummary) -> None:
+        unsupported = self._unsupported_numeric_claims(summary.cluster, summary.summary)
+        if not unsupported:
+            return
+        rewritten = self._rewrite_grounded_summary(summary, unsupported)
+        if rewritten and not self._unsupported_numeric_claims(summary.cluster, rewritten):
+            summary.summary = rewritten
+            summary.quality_flags.append("numeric_grounding_rewritten")
+            return
+        summary.summary = self._remove_unsupported_numeric_sentences(summary, unsupported)
+        summary.quality_status = "needs_review"
+        if "unsupported_numeric_claim" not in summary.quality_flags:
+            summary.quality_flags.append("unsupported_numeric_claim")
+        summary.contested_claims.extend(
+            claim for claim in unsupported if claim not in summary.contested_claims
+        )
 
     def _format_articles(self, cluster: ArticleCluster) -> str:
         lines: list[str] = []
@@ -923,7 +1072,9 @@ class Summarizer:
             "3. same_conflict_different_event: 两个条目属于同一持续中的多日重大冲突/危机/长期对峙"
             "（例如俄乌战争、美伊对峙、以巴冲突、中美贸易战、朝鲜半岛局势）的不同日常事件。"
             "它们共享一个 storyline 但角色为 spillover；仅适用于这种已被定义为持续事件的多日冲突，"
-            "不适用于普通主题相似或一次性事件。\n"
+            "不适用于普通主题相似或一次性事件。两个条目必须各自明确涉及同一组冲突方；"
+            "仅共享一个国家、领导人、战争、无人机、制裁等泛词时必须判 not_related。"
+            "例如美以伊事件与俄乌事件不是同一冲突，即使都提到美国、俄罗斯或空袭。\n"
             "4. not_related: 仅有宽泛地域、行业、主题相似，或属于更远的二级外溢，不应归为同一 storyline。\n"
             "5. precision-first: 对于 ordinary 主题相似宁可判 not_related，也不要因为大区域相似或泛主题背景就硬合并。"
             "但对于第 3 类（同一持续冲突的不同日常事件），应主动识别并归入 same_conflict_different_event。\n"

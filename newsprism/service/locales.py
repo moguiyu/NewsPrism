@@ -31,6 +31,23 @@ def is_recognized_country(region: str) -> bool:
     return bool(re.fullmatch(r"[A-Z]{2}", code) and code in Locale("en").territories)
 
 
+def region_flag(region: str) -> str:
+    """Return a flag for any recognized ISO alpha-2 territory."""
+    code = (region or "").strip().upper()
+    if not is_recognized_country(code):
+        return ""
+    return "".join(chr(0x1F1E6 + ord(char) - ord("A")) for char in code)
+
+
+def region_flags() -> dict[str, str]:
+    """Compatibility mapping for renderers/tests; generated from CLDR."""
+    return {
+        str(code).lower(): region_flag(str(code))
+        for code in Locale("en").territories
+        if is_recognized_country(str(code))
+    }
+
+
 def _identity_text(value: str) -> str:
     """Normalize a territory/entity label for equality comparisons."""
     return "".join(

@@ -97,6 +97,114 @@ def test_validator_noop_when_hot_topics_disabled():
 
 # ─── StorylineResolver ────────────────────────────────────────────────────────
 
+
+def test_conflict_relation_requires_both_stories_to_name_same_conflict_pair():
+    iran = ArticleCluster(
+        topic_category="US Israel Iran conflict",
+        articles=[_article("US and Israel strike Iran", [1.0, 0.0])],
+    )
+    ukraine = ArticleCluster(
+        topic_category="Russia Ukraine war",
+        articles=[_article("Russia launches drones at Ukraine", [0.9, 0.1])],
+    )
+    resolver = StorylineResolver(
+        _config(),
+        _StubSummarizer([
+            {
+                "left_index": 0,
+                "right_index": 1,
+                "relation": "same_conflict_different_event",
+                "confidence": 0.92,
+            }
+        ]),
+        lambda *_args: 0.0,
+    )
+    candidate = {
+        "left_index": 0,
+        "right_index": 1,
+        "left_cluster": iran,
+        "right_cluster": ukraine,
+        "similarity": 0.7,
+        "title_overlap": 0.1,
+        "signal_overlap": 1,
+    }
+
+    result = resolver._classify_pairs([candidate])[0]
+
+    assert result["relation"] == "not_related"
+
+
+def test_conflict_relation_keeps_distinct_events_in_same_conflict():
+    left = ArticleCluster(
+        topic_category="Russia Ukraine war",
+        articles=[_article("Russia attacks Ukraine port", [1.0, 0.0])],
+    )
+    right = ArticleCluster(
+        topic_category="Russia Ukraine war",
+        articles=[_article("Ukraine strikes Russian depot", [0.8, 0.2])],
+    )
+    resolver = StorylineResolver(
+        _config(),
+        _StubSummarizer([
+            {
+                "left_index": 0,
+                "right_index": 1,
+                "relation": "same_conflict_different_event",
+                "confidence": 0.88,
+            }
+        ]),
+        lambda *_args: 0.0,
+    )
+    candidate = {
+        "left_index": 0,
+        "right_index": 1,
+        "left_cluster": left,
+        "right_cluster": right,
+        "similarity": 0.7,
+        "title_overlap": 0.1,
+        "signal_overlap": 1,
+    }
+
+    result = resolver._classify_pairs([candidate])[0]
+
+    assert result["relation"] == "same_conflict_different_event"
+
+
+def test_conflict_relation_treats_iran_us_and_iran_israel_as_same_crisis():
+    left = ArticleCluster(
+        topic_category="美伊局势",
+        articles=[_article("美国宣布对伊朗采取行动", [1.0, 0.0])],
+    )
+    right = ArticleCluster(
+        topic_category="以伊冲突",
+        articles=[_article("以色列与伊朗交换空袭", [0.8, 0.2])],
+    )
+    resolver = StorylineResolver(
+        _config(),
+        _StubSummarizer([
+            {
+                "left_index": 0,
+                "right_index": 1,
+                "relation": "same_conflict_different_event",
+                "confidence": 0.88,
+            }
+        ]),
+        lambda *_args: 0.0,
+    )
+    candidate = {
+        "left_index": 0,
+        "right_index": 1,
+        "left_cluster": left,
+        "right_cluster": right,
+        "similarity": 0.7,
+        "title_overlap": 0.1,
+        "signal_overlap": 1,
+    }
+
+    result = resolver._classify_pairs([candidate])[0]
+
+    assert result["relation"] == "same_conflict_different_event"
+
 def test_resolver_unions_core_and_spillover_from_edges():
     resolver = StorylineResolver(
         _config(),

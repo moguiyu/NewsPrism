@@ -862,6 +862,11 @@ class TestRegionFlagMapping:
         assert _REGION_FLAG["de"] == "🇩🇪"
         assert _REGION_FLAG["gb"] == "🇬🇧"
 
+    def test_iso_regions_outside_old_static_table_have_flags(self, renderer):
+        assert renderer._source_flag("Unknown", search_region="af") == "🇦🇫"
+        assert renderer._source_flag("Unknown", search_region="ir") == "🇮🇷"
+        assert renderer._source_flag("Unknown", search_region="ua") == "🇺🇦"
+
 
 class TestHotTopics:
     def test_template_renders_macro_topic_family_tabs_and_keeps_json_main_only(self, renderer, tmp_path):
@@ -1745,7 +1750,7 @@ def test_render_copies_fonts_to_output(tmp_path):
 
 def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer, tmp_path):
     """Issue #1: when a regional perspective search fails, the reader sees a
-    flat inline ⚠️ placeholder with the country flag + failure reason tooltip
+    flat inline search placeholder with the country flag + failure reason tooltip
     instead of silent absence.
     """
     renderer.output_dir = tmp_path
@@ -1790,10 +1795,10 @@ def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer
     assert placeholder_rows[0]["search_acceptance_reason"] == "http_401"
 
     # Rendered HTML includes the placeholder source name + the 🇫🇷 flag +
-    # the ⚠️ marker + the failure-detail label, flat (no card/lift).
+    # the search marker + the failure-detail label, flat (no card/lift).
     assert "[France视角待补]" in html
     assert "🇫🇷" in html
-    assert "⚠️" in html
+    assert "🔍" in html
     assert "鉴权失败" in html  # bilingual short label from _placeholder_failure_label
 
     # A normal perspective list must not hide the failed-target marker.
@@ -1860,7 +1865,7 @@ def test_failed_target_remains_visible_with_two_real_perspectives(renderer, tmp_
     assert card["distinct_perspective_count"] == 2
     assert "查看 2 个视角" in html
     assert "🇫🇷" in html
-    assert "⚠️" in html
+    assert "🔍" in html
     assert "未确认官方归属" in html
 
 
