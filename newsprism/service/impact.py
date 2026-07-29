@@ -122,6 +122,14 @@ def _norm_voice_needs(values: list[dict[str, str]] | None) -> list[VoiceNeed]:
         label = re.sub(r"\s+", " ", str(value.get("label") or "").strip())[:100]
         country = str(value.get("country") or "").strip().lower()
         kind = str(value.get("kind") or "organization").strip().lower()[:40]
+        event_role = str(value.get("event_role") or "principal").strip().lower()[:40]
+        evidence_text = re.sub(
+            r"\s+", " ", str(value.get("evidence_text") or label).strip()
+        )[:200]
+        materiality = str(value.get("materiality") or "required").strip().lower()[:20]
+        why_voice_needed = re.sub(
+            r"\s+", " ", str(value.get("why_voice_needed") or "").strip()
+        )[:200]
         if (
             not label
             or not is_recognized_country(country)
@@ -131,7 +139,17 @@ def _norm_voice_needs(values: list[dict[str, str]] | None) -> list[VoiceNeed]:
             continue
         if label.casefold() in {need.label.casefold() for need in needs}:
             continue
-        needs.append(VoiceNeed(label=label, country=country, kind=kind))
+        needs.append(
+            VoiceNeed(
+                label=label,
+                country=country,
+                kind=kind,
+                event_role=event_role,
+                evidence_text=evidence_text,
+                materiality=materiality,
+                why_voice_needed=why_voice_needed,
+            )
+        )
         if len(needs) == 3:
             break
     return needs
@@ -382,7 +400,7 @@ class ImpactAssessor:
             f"- topic_icon_key：只能从这些键中选一个：{icons}\n"
             "- rationale：不超过 30 个中文字符，说明影响判断的核心依据\n"
             "- subject_regions：该事件主要涉及的国家/地区，用小写 ISO 代码数组（最多 3 个），如 [\"il\",\"ir\"]；与新闻来源国不同，指事件本身发生/影响的国家\n"
-            "- voice_needs：最多 3 个需要补充直接回应的具名公司、政府、部委、政党或组织。仅当其本人的声明能实质澄清本事件时才列出；不要列媒体、个人、产品、泛技术词、仅被提到的国家，或新闻中已作为官方来源出现的主体。每项为 {label,country,kind}，country 是该主体主要所在国的小写 ISO 代码；不确定则不要列\n"
+            "- voice_needs：最多 3 个需要补充直接回应的具名公司、政府、部委、政党或组织。仅当其本人的声明能实质澄清本事件时才列出；不要列媒体、个人、产品、设施、地点、比较对象、仅受损的企业、泛技术词、仅被提到的国家，或新闻中已作为官方来源/明确直接回应出现的主体。每项为 {label,country,kind,event_role,evidence_text,materiality,why_voice_needed}。event_role 只能是 decision_maker、regulator、claimant、respondent、accused_party、directly_affected_principal、contracting_party；materiality 只能是 required 或 incidental，只有 required 才表示确有补充价值；evidence_text 必须逐字来自输入标题或摘要；country 是主体主要所在国的小写 ISO 代码。不确定则不要列\n"
             "- target_region：如果事件主要涉及一个国家的内政（国内治理），填写该国的小写 ISO 代码；如果是外交、贸易、战争、国际组织、科技/文化事件，或自然灾害/事故及其纯伤亡报道，填 null\n"
             "- is_home_affairs：布尔值。true 仅指某国的国内治理（选举、国内政策、法律、人权国内实施、社会保障、国内治安、抗议）；false 表示外交、战争、贸易、国际组织、科技、文化、体育、娱乐，或自然灾害/事故及其伤亡人数，或无法确定。关键：地震、洪水、矿难、爆炸等灾难的死亡/受伤人数本身不是内政，应填 false 与 target_region=null；网络攻击/黑客入侵、数据泄露等安全事件同样不是内政（即便受害方是政府机构），应填 false 与 target_region=null；只有当报道核心是该国政府的应急治理、问责或政策回应时才算内政\n"
             "要求：\n"
@@ -716,7 +734,18 @@ class ImpactAssessor:
             short_topic_name=assessment.short_topic_name,
             topic_icon_key=assessment.topic_icon_key,
             subject_regions=assessment.subject_regions,
-            voice_needs=[{"label": need.label, "country": need.country, "kind": need.kind} for need in assessment.voice_needs],
+            voice_needs=[
+                {
+                    "label": need.label,
+                    "country": need.country,
+                    "kind": need.kind,
+                    "event_role": need.event_role,
+                    "evidence_text": need.evidence_text,
+                    "materiality": need.materiality,
+                    "why_voice_needed": need.why_voice_needed,
+                }
+                for need in assessment.voice_needs
+            ],
             target_region=assessment.target_region,
             is_home_affairs=assessment.is_home_affairs,
         )

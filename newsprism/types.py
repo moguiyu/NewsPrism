@@ -65,6 +65,11 @@ class SearchRequestEvent:
     target_region: str | None = None
     target_label: str | None = None
     target_role: str | None = None
+    cluster_key: str | None = None
+    target_event_role: str | None = None
+    target_reason: str | None = None
+    coverage_before: str | None = None
+    restricted_domains: list[str] = field(default_factory=list)
     query: str | None = None
     account_id: str | None = None
     http_status: int | None = None
@@ -124,6 +129,10 @@ class VoiceNeed:
     label: str
     country: str
     kind: str = "organization"
+    event_role: str = "principal"
+    evidence_text: str = ""
+    materiality: str = "required"
+    why_voice_needed: str = ""
 
 
 @dataclass

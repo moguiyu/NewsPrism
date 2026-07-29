@@ -610,6 +610,18 @@ class StorylineResolver:
             result = by_pair.get(pair_key)
             if result is None:
                 result = self._heuristic_relation(candidate)
+            elif (
+                result.get("relation") == "same_conflict_different_event"
+                and not self._shares_conflict_keyword(candidate)
+            ):
+                # The LLM may connect two generic war stories through one broad
+                # actor. Require both clusters to independently identify the
+                # same conflict pair before using the relaxed conflict path.
+                result = {
+                    **result,
+                    "relation": "not_related",
+                    "confidence": min(float(result.get("confidence", 0.0)), 0.49),
+                }
             normalized.append(result)
         return normalized
 
@@ -646,26 +658,41 @@ class StorylineResolver:
     # does the real work; this is a safety net when the LLM is unavailable).
     # Narrow whitelist — adding broad themes here would re-introduce the
     # over-merging bug that motivated the "precision-first" instruction.
-    _CONFLICT_KEYWORD_PAIRS: tuple[tuple[str, str], ...] = (
-        ("russia", "ukraine"), ("ru", "ua"), ("ukraine", "ru"),
-        ("iran", "us"), ("us", "iran"), ("iran", "israel"),
-        ("israel", "palest"), ("israel", "gaza"), ("israel", "hamas"),
-        ("houthi",), ("netanyahu",),
-    )
+    _CONFLICT_SIGNATURES: dict[str, tuple[tuple[str, ...], ...]] = {
+        "russia_ukraine": (
+            ("russia", "ukraine"), ("ru", "ua"), ("俄罗斯", "乌克兰"),
+            ("俄军", "乌军"), ("俄乌",),
+        ),
+        "iran_us_israel": (
+            ("iran", "us"), ("iran", "israel"), ("伊朗", "美国"),
+            ("伊朗", "以色列"), ("美以伊",),
+        ),
+        "israel_palestine": (
+            ("israel", "palest"), ("israel", "gaza"), ("israel", "hamas"),
+            ("以色列", "巴勒斯坦"), ("以军", "哈马斯"), ("加沙", "以色列"),
+        ),
+        "saudi_houthi": (("saudi", "houthi"), ("沙特", "胡塞")),
+        "israel_lebanon": (("israel", "lebanon"), ("以色列", "黎巴嫩")),
+    }
 
     def _shares_conflict_keyword(self, candidate: dict[str, object]) -> bool:
-        """True if either cluster's text mentions a known ongoing-conflict keyword."""
-        text = ""
+        """True only when both clusters identify the same conflict pair."""
+        signatures: list[set[str]] = []
         for side in ("left_cluster", "right_cluster"):
             cluster = candidate.get(side)
-            if cluster is not None:
-                # _cluster_text is the module-level helper used by StorylineResolver.
-                text += " " + str(getattr(cluster, "topic_category", "") or "")
-                articles = getattr(cluster, "articles", []) or []
-                for article in articles[:3]:
-                    text += " " + (getattr(article, "title", "") or "")
-        text_lower = text.lower()
-        return any(all(part in text_lower for part in pair) for pair in self._CONFLICT_KEYWORD_PAIRS)
+            text = str(getattr(cluster, "topic_category", "") or "")
+            for article in (getattr(cluster, "articles", []) or [])[:3]:
+                text += " " + (getattr(article, "title", "") or "")
+                text += " " + (getattr(article, "content", "") or "")[:300]
+            text_lower = text.lower()
+            signatures.append(
+                {
+                    conflict_id
+                    for conflict_id, aliases in self._CONFLICT_SIGNATURES.items()
+                    if any(all(part in text_lower for part in alias) for alias in aliases)
+                }
+            )
+        return len(signatures) == 2 and bool(signatures[0] & signatures[1])
 
     def _build_components(self, node_count: int, edges: list[dict[str, object]]) -> dict[int, list[int]]:
         parents = list(range(node_count))

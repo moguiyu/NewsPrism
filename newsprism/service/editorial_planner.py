@@ -18,6 +18,7 @@ import numpy as np
 
 from newsprism.config import Config
 from newsprism.service.categories import normalize_display_category
+from newsprism.service.perspectives import canonicalize_perspective_groups
 from newsprism.types import ArticleCluster, ClusterSummary, EditorialReportPlan
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,8 @@ def _normalize_storyline_name(name: str | None, summary: ClusterSummary | None, 
     candidate = re.sub(r"\s+", "", (name or "").strip())
     candidate = re.sub(r"^(热点专题[-:：]?|专题[-:：]?)", "", candidate).strip()
     candidate = candidate[:max_chars].strip(" -:：，,、。.；;")
+    if re.match(r"^\d[\d,.]*[A-Za-z]", candidate):
+        candidate = ""
     if candidate:
         return candidate
     if summary is not None:
@@ -520,6 +523,15 @@ def _merge_duplicate_summary(target: ClusterSummary, duplicate: ClusterSummary, 
             if source not in existing.sources:
                 existing.sources.append(source)
 
+    target.grouped_perspectives = canonicalize_perspective_groups(
+        target.grouped_perspectives
+    )
+    target.perspectives = {
+        source: group.perspective
+        for group in target.grouped_perspectives
+        for source in group.sources
+    }
+
     target.duplicate_action = "merged"  # type: ignore[attr-defined]
     target.duplicate_reason = reason  # type: ignore[attr-defined]
     target.duplicate_confidence = round(confidence, 4)  # type: ignore[attr-defined]
@@ -615,15 +627,23 @@ def resolve_display_duplicates(
         for right in displayed[left_index + 1 :]:
             if id(right) in suppressed_ids:
                 continue
-            # Additional fix #2: never dedupe two members of the same storyline
-            # family. The resolver grouped them intentionally (different daily
-            # incidents of the same conflict, different angles of one event);
-            # collapsing them defeats the purpose of the tab.
             left_fam = family_id_by_summary.get(id(left))
             right_fam = family_id_by_summary.get(id(right))
-            if left_fam and right_fam and left_fam == right_fam:
-                continue
             duplicate, reason, confidence = _display_duplicate(left, right, centroids)
+            if left_fam and right_fam and left_fam == right_fam:
+                # Within one storyline, preserve distinct daily incidents. But
+                # shared URLs are always duplicates, and multi-source cards
+                # with near-identical event centroids are the same event split
+                # into two clusters rather than legitimate storyline members.
+                same_event_inside_family = bool(
+                    duplicate
+                    and (
+                        reason == "shared_article_url"
+                        or (confidence >= 0.90 and _source_overlap(left, right) >= 2)
+                    )
+                )
+                if not same_event_inside_family:
+                    continue
             if not duplicate:
                 continue
             # A cluster already claimed for the 正能量 lane keeps its slot; its

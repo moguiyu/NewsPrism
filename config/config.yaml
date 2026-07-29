@@ -117,12 +117,15 @@ output:
 
 # ─── ACTIVE SEARCH ────────────────────────────────────────────────────────────
 active_search:
+  reviewed_bindings_file: data/search-source-bindings.yaml
   telemetry_enabled: true
   result_max_age_hours: 72
   min_content_chars: 150
   max_results_per_region: 1
   max_regions_per_cluster: 3        # cap identified missing voices searched per cluster
   max_localized_query_variants: 2
+  max_queries_per_stage: 2          # bounded official/country event queries per target
+  max_requests_per_run: 40          # provider-wide safety budget; failures stay visible
   max_existing_title_overlap: 0.82
   min_semantic_event_match: 0.58
   # The impact evaluator extracts each named party from the event, so active

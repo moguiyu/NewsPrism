@@ -15,7 +15,7 @@ import logging
 import re
 import urllib.parse
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import Any
@@ -55,6 +55,12 @@ class VoiceTarget:
     region: str
     label: str
     role: str = "organization"
+    event_role: str = field(default="principal", compare=False)
+    evidence_text: str = field(default="", compare=False)
+    materiality: str = field(default="required", compare=False)
+    why_voice_needed: str = field(default="", compare=False)
+    cluster_key: str = field(default="", compare=False)
+    coverage_before: str = field(default="missing", compare=False)
 
 
 @dataclass(frozen=True)
@@ -63,6 +69,7 @@ class CandidateIdentity:
 
     source_type: str = "reject"
     publisher_entity: str = ""
+    publisher_region: str = ""
     relationship: str = "uncertain"
     ownership_evidence: str = ""
     confidence: float | None = None
@@ -71,6 +78,7 @@ class CandidateIdentity:
         return {
             "source_type": self.source_type,
             "publisher_entity": self.publisher_entity,
+            "publisher_region": self.publisher_region,
             "relationship": self.relationship,
             "ownership_evidence": self.ownership_evidence,
             "confidence": self.confidence,
@@ -80,6 +88,21 @@ class CandidateIdentity:
 _ACTOR_ROLES = {
     "company", "government", "government_agency", "ministry", "party", "organization",
 }
+_MATERIAL_EVENT_ROLES = {
+    "principal",
+    "decision_maker",
+    "regulator",
+    "claimant",
+    "respondent",
+    "accused_party",
+    "directly_affected_principal",
+    "contracting_party",
+}
+_NON_VOICE_LABEL_PATTERN = re.compile(
+    r"(?:facility|factory|plant|mall|site|model|product|platform|store|"
+    r"设施|核设施|工厂|商场|门店|产品|模型|平台)$",
+    re.IGNORECASE,
+)
 _SOURCE_TYPES = {"official_web", "official_social", "country_editorial", "reject"}
 _RELATIONSHIPS = {
     "same_entity", "quoted_by_third_party", "covered_by_third_party", "uncertain", "unrelated",
@@ -120,6 +143,8 @@ class ActiveSeeker:
         self.max_existing_title_overlap = float(search_cfg.get("max_existing_title_overlap", 0.82))
         self.min_semantic_event_match = float(search_cfg.get("min_semantic_event_match", 0.58))
         self.hot_composite_trigger = float(search_cfg.get("hot_composite_trigger", 0.55))
+        self.max_queries_per_stage = max(1, int(search_cfg.get("max_queries_per_stage", 2)))
+        self.max_requests_per_run = max(1, int(search_cfg.get("max_requests_per_run", 40)))
 
         profiles = search_cfg.get("search_profiles", {}) if isinstance(search_cfg, dict) else {}
         self.region_config = self._build_region_config(profiles)
@@ -140,7 +165,12 @@ class ActiveSeeker:
             if isinstance(accounts, dict)
         }
         self.source_regions = {source.name: source.region for source in cfg.sources}
-        self._search_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._search_cache: dict[tuple[str, str, tuple[str, ...]], list[dict[str, Any]]] = {}
+        self._resolved_official_bindings: dict[
+            tuple[str, str], dict[str, CandidateIdentity]
+        ] = {}
+        self._request_count = 0
+        self._provider_failure_reason: str | None = None
 
     # ─── PUBLIC API ──────────────────────────────────────────────────────────
 
@@ -151,6 +181,9 @@ class ActiveSeeker:
         # Reset per-run state: keys that auth-failed earlier may have been reset by the provider.
         self._exhausted_keys = set()
         self._search_cache.clear()
+        self._resolved_official_bindings.clear()
+        self._request_count = 0
+        self._provider_failure_reason = None
         enriched = 0
         for cluster in clusters:
             if not self._should_enrich(cluster):
@@ -198,26 +231,52 @@ class ActiveSeeker:
             return []
         impact_targets = self._validated_actor_targets(
             cluster,
-            ((need.label, need.country, need.kind, need.label) for need in impact.voice_needs),
+            (
+                (
+                    need.label,
+                    need.country,
+                    need.kind,
+                    need.evidence_text or need.label,
+                    need.event_role,
+                    need.materiality,
+                    need.why_voice_needed,
+                )
+                for need in impact.voice_needs
+            ),
         )
         if impact_targets:
+            covered = [
+                replace(target, coverage_before=self._voice_coverage(cluster, target))
+                for target in impact_targets
+            ]
             return [
-                target for target in impact_targets if not self._has_official_voice(cluster, target)
+                target for target in covered if not self._coverage_satisfies(cluster, target)
             ][: self.max_regions_per_cluster]
 
         recovered_targets = self._recover_actor_targets(cluster)
         if recovered_targets:
+            covered = [
+                replace(target, coverage_before=self._voice_coverage(cluster, target))
+                for target in recovered_targets
+            ]
             return [
-                target for target in recovered_targets if not self._has_official_voice(cluster, target)
+                target for target in covered if not self._coverage_satisfies(cluster, target)
             ][: self.max_regions_per_cluster]
 
         targets: list[VoiceTarget] = []
         for region in impact.subject_regions:
             if not is_recognized_country(region):
                 continue
-            target = VoiceTarget(region=region, label=country_name(region), role="country")
+            target = VoiceTarget(
+                region=region,
+                label=country_name(region),
+                role="country",
+                cluster_key=impact.cluster_key,
+            )
             if not self._has_country_voice(cluster, target):
-                targets.append(target)
+                targets.append(
+                    replace(target, coverage_before=self._voice_coverage(cluster, target))
+                )
         return targets[: self.max_regions_per_cluster]
 
     def _validated_actor_targets(
@@ -227,8 +286,18 @@ class ActiveSeeker:
     ) -> list[VoiceTarget]:
         targets: list[VoiceTarget] = []
         seen: set[tuple[str, str]] = set()
-        for label, region, role, evidence_text in values:
-            target = self._validate_actor_target(cluster, label, region, role, evidence_text)
+        for value in values:
+            parts = list(value) if not isinstance(value, dict) else [
+                value.get("label"),
+                value.get("country"),
+                value.get("kind"),
+                value.get("evidence_text"),
+                value.get("event_role"),
+                value.get("materiality"),
+                value.get("why_voice_needed"),
+            ]
+            parts.extend([None] * (7 - len(parts)))
+            target = self._validate_actor_target(cluster, *parts[:7])
             if target is None:
                 continue
             key = (self._identity_text(target.label), target.region)
@@ -244,11 +313,19 @@ class ActiveSeeker:
         region: Any,
         role: Any,
         evidence_text: Any,
+        event_role: Any = None,
+        materiality: Any = None,
+        why_voice_needed: Any = None,
     ) -> VoiceTarget | None:
         normalized_label = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(label or "")).strip())[:100]
         normalized_region = str(region or "").strip().lower()
         normalized_role = str(role or "organization").strip().lower()
         normalized_evidence = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(evidence_text or "")).strip())[:200]
+        normalized_event_role = str(event_role or "principal").strip().lower()
+        normalized_materiality = str(materiality or "required").strip().lower()
+        normalized_reason = re.sub(
+            r"\s+", " ", unicodedata.normalize("NFKC", str(why_voice_needed or "")).strip()
+        )[:200]
         if not is_recognized_country(normalized_region) or not normalized_label:
             return None
         config = self.region_config.get(normalized_region)
@@ -259,6 +336,10 @@ class ActiveSeeker:
             return None
         if normalized_role not in _ACTOR_ROLES:
             normalized_role = "organization"
+        if normalized_materiality != "required" or normalized_event_role not in _MATERIAL_EVENT_ROLES:
+            return None
+        if _NON_VOICE_LABEL_PATTERN.search(normalized_label):
+            return None
         event_text = self._event_text(cluster)
         normalized_event_text = self._identity_text(event_text)
         label_present = self._identity_text(normalized_label) in normalized_event_text
@@ -268,7 +349,16 @@ class ActiveSeeker:
         )
         if not label_present and not evidence_present:
             return None
-        return VoiceTarget(region=normalized_region, label=normalized_label, role=normalized_role)
+        return VoiceTarget(
+            region=normalized_region,
+            label=normalized_label,
+            role=normalized_role,
+            event_role=normalized_event_role,
+            evidence_text=normalized_evidence or normalized_label,
+            materiality=normalized_materiality,
+            why_voice_needed=normalized_reason,
+            cluster_key=cluster.impact.cluster_key if cluster.impact is not None else "",
+        )
 
     def _recover_actor_targets(self, cluster: ArticleCluster) -> list[VoiceTarget]:
         """Recover explicit event actors only when impact supplied none."""
@@ -281,9 +371,12 @@ class ActiveSeeker:
         official_sources = [article.source_name for article in cluster.articles if article.is_official_source]
         prompt = (
             "Extract only named organizations whose direct response would clarify this exact news event. "
-            "Do not return countries, people, products, media, or inferred formal names. "
+            "Do not return countries, people, products, facilities, locations, comparison-only entities, "
+            "merely damaged businesses, media, or inferred formal names. "
             "Return JSON only: {\"targets\":[{\"label\":\"Microsoft\",\"country\":\"us\","
-            "\"kind\":\"company\",\"evidence_text\":\"Microsoft\"}]}.\n\n"
+            "\"kind\":\"company\",\"event_role\":\"decision_maker\","
+            "\"evidence_text\":\"Microsoft\",\"materiality\":\"required\","
+            "\"why_voice_needed\":\"It made the decision being reported\"}]}.\n\n"
             f"Event material:\n{evidence}\n\nExisting official sources: {official_sources}\n"
             f"Related countries: {impact.subject_regions}"
         )
@@ -300,11 +393,10 @@ class ActiveSeeker:
             )
             content = (response.choices[0].message.content or "").strip()
             parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
-            values = (
-                (item.get("label"), item.get("country"), item.get("kind"), item.get("evidence_text"))
-                for item in parsed.get("targets", []) if isinstance(item, dict)
+            return self._validated_actor_targets(
+                cluster,
+                (item for item in parsed.get("targets", []) if isinstance(item, dict)),
             )
-            return self._validated_actor_targets(cluster, values)
         except Exception as exc:
             logger.debug("Actor recovery failed for '%s': %s", cluster.topic_category, exc)
             return []
@@ -318,11 +410,7 @@ class ActiveSeeker:
         return "".join(char for char in unicodedata.normalize("NFKC", value).casefold() if char.isalnum())
 
     def _has_country_voice(self, cluster: ArticleCluster, target: VoiceTarget) -> bool:
-        return any(
-            not article.is_searched
-            and (article.origin_region or self.source_regions.get(article.source_name)) == target.region
-            for article in cluster.articles
-        )
+        return self._voice_coverage(cluster, target) == "verified_related_country_editorial"
 
     def _has_official_voice(self, cluster: ArticleCluster, target: VoiceTarget) -> bool:
         return any(
@@ -331,6 +419,63 @@ class ActiveSeeker:
             and self._article_mentions_target(article, target)
             for article in cluster.articles
         )
+
+    def _voice_coverage(self, cluster: ArticleCluster, target: VoiceTarget) -> str:
+        """Classify whether the requested voice is already represented."""
+        if target.role != "country" and self._has_official_voice(cluster, target):
+            return "official_direct"
+        if target.role != "country" and any(
+            self._has_attributed_direct_quote(article, target)
+            for article in cluster.articles
+            if not article.is_placeholder
+        ):
+            return "direct_quote"
+        for article in cluster.articles:
+            if article.is_placeholder:
+                continue
+            region = article.origin_region or self.source_regions.get(article.source_name)
+            if region != target.region:
+                continue
+            if not article.is_searched and article.source_name in self.source_regions:
+                return "verified_related_country_editorial"
+            if (
+                article.is_searched
+                and article.search_acceptance_status == "accepted"
+                and str(article.searched_provider or "").endswith("_country")
+            ):
+                return "verified_related_country_editorial"
+        if target.role != "country" and any(
+            self._article_mentions_target(article, target)
+            for article in cluster.articles
+            if not article.is_placeholder
+        ):
+            return "secondary_only"
+        return "missing"
+
+    def _coverage_satisfies(self, cluster: ArticleCluster, target: VoiceTarget) -> bool:
+        coverage = self._voice_coverage(cluster, target)
+        if target.role == "country":
+            return coverage == "verified_related_country_editorial"
+        return coverage in {
+            "official_direct", "direct_quote", "verified_related_country_editorial"
+        }
+
+    @staticmethod
+    def _has_attributed_direct_quote(article: Article, target: VoiceTarget) -> bool:
+        text = f"{article.title}\n{article.content[:1800]}"
+        label_index = text.casefold().find(target.label.casefold())
+        if label_index < 0:
+            return False
+        nearby = text[max(0, label_index - 80): label_index + len(target.label) + 160]
+        has_quote = bool(re.search(r"[\"'“”‘’][^\"'“”‘’]{4,}[\"'“”‘’]", nearby))
+        has_attribution = bool(
+            re.search(
+                r"(?:said|stated|told|responded|announced|表示|回应|称|声明|指出)[：,:]?",
+                nearby,
+                re.IGNORECASE,
+            )
+        )
+        return has_quote and has_attribution
 
     def _analyze_search_keyword(self, cluster: ArticleCluster, targets: list[VoiceTarget]) -> str:
         """Formulate an exact event query; the impact layer supplies the targets."""
@@ -385,6 +530,13 @@ class ActiveSeeker:
                 )
                 added = True
                 continue
+            if fail_reason == "coverage_satisfied":
+                logger.info(
+                    "Seeker stopped for %s on '%s': qualifying coverage already exists",
+                    target.label,
+                    cluster.topic_category,
+                )
+                continue
             # Synthesize a flat inline placeholder so the reader sees that this
             # region's perspective was targeted but unavailable — never silent.
             placeholder = self._placeholder_article(cluster, target, fail_reason or "unknown")
@@ -414,8 +566,46 @@ class ActiveSeeker:
         stages = ("country",) if target.role == "country" else ("official", "country")
         last_reason: str | None = None
         for stage in stages:
-            for query in self._build_search_queries(cluster, target, keyword, stage):
-                results, search_fail = self._search_tavily(target, query)
+            include_domains: list[str] = []
+            stage_queries = self._build_search_queries(cluster, target, keyword, stage)[
+                : self.max_queries_per_stage
+            ]
+            if stage == "official":
+                include_domains, resolve_reason = self._resolve_official_domains(target)
+                if resolve_reason in {
+                    "http_401", "http_402", "http_403", "http_429", "network",
+                    "request_budget_exhausted",
+                }:
+                    return None, resolve_reason
+                if not include_domains and not self._reviewed_social_searches(target, keyword):
+                    last_reason = resolve_reason or "official_not_found"
+                    continue
+            elif stage == "country":
+                include_domains = self._reviewed_country_domains(target.region)
+
+            searches: list[tuple[str, list[str]]] = []
+            if stage != "official" or include_domains:
+                searches.extend(
+                    (query, include_domains) for query in stage_queries
+                )
+            if stage == "official":
+                searches.extend(self._reviewed_social_searches(target, keyword))
+            if stage == "country":
+                # A broad result set is discovery-only. Unknown publishers stay
+                # pending; only reviewed country bindings can be published.
+                discovery_query = stage_queries[0] if stage_queries else keyword
+                if include_domains:
+                    searches.append((discovery_query, []))
+                else:
+                    searches = [(discovery_query, [])]
+
+            for query, restricted_domains in searches:
+                results, search_fail = self._search_tavily(
+                    target,
+                    query,
+                    include_domains=restricted_domains,
+                    request_type=f"search_{stage}",
+                )
                 if search_fail:
                     # Provider-level failure means no reliable conclusion about
                     # this missing voice; do not disguise it as no result.
@@ -428,6 +618,7 @@ class ActiveSeeker:
                     request_type=f"acceptance_{stage}",
                     target=target,
                     query=query,
+                    restricted_domains=restricted_domains,
                     result_count=len(results),
                     accepted_count=len(accepted),
                     rejection_reason=",".join(sorted({reason for reason, _ in rejections})) or None,
@@ -436,12 +627,31 @@ class ActiveSeeker:
                 if accepted:
                     return accepted[0], None
                 if rejections:
-                    last_reason = ",".join(sorted({reason for reason, _ in rejections}))
+                    reasons = {reason for reason, _ in rejections}
+                    if "coverage_satisfied" in reasons:
+                        return None, "coverage_satisfied"
+                    last_reason = self._primary_failure_reason(reasons)
                 elif not results:
                     last_reason = "official_not_found" if stage == "official" else "country_fallback_not_found"
                 else:
                     last_reason = "candidate_unverified"
         return None, last_reason
+
+    @staticmethod
+    def _primary_failure_reason(reasons: set[str]) -> str:
+        priority = (
+            "publisher_binding_unverified",
+            "candidate_pending_review",
+            "not_related_country_source",
+            "publisher_target_mismatch",
+            "not_official_source",
+            "event_mismatch",
+            "entity_mismatch",
+            "stale_result",
+            "duplicate_of_existing",
+            "thin_result",
+        )
+        return next((reason for reason in priority if reason in reasons), sorted(reasons)[0])
 
     def _placeholder_article(
         self,
@@ -485,21 +695,38 @@ class ActiveSeeker:
     ) -> tuple[list[Article], list[tuple[str, str]]]:
         accepted: list[Article] = []
         rejections: list[tuple[str, str]] = []
-        existing_urls = {article.url for article in cluster.articles}
+        existing_by_url = {article.url: article for article in cluster.articles}
         existing_titles = [article.title for article in cluster.articles]
         for result in results:
-            article = self._result_to_article(result, target.region)
+            article = self._result_to_article(
+                result,
+                target.region,
+                allow_thin=stage == "official",
+            )
             if article is None:
                 rejections.append(("thin_result", str(result.get("url"))))
                 continue
-            if article.url in existing_urls:
-                rejections.append(("already_present", article.url))
+            if article.url in existing_by_url:
+                existing = existing_by_url[article.url]
+                if self._existing_article_satisfies_target(existing, target, stage):
+                    rejections.append(("coverage_satisfied", article.url))
+                else:
+                    rejections.append(("duplicate_of_existing", article.url))
                 continue
-            reason = self._rejection_reason(article, target, existing_titles, centroid)
+            reason = self._rejection_reason(
+                article,
+                target,
+                existing_titles,
+                centroid,
+                stage=stage,
+            )
             if reason:
                 rejections.append((reason, article.url))
                 continue
-            identity = self._candidate_identity(self._verify_candidate(article, target, stage))
+            dynamic_identity = self._dynamic_official_identity(article.url, target)
+            identity = dynamic_identity or self._candidate_identity(
+                self._verify_candidate(article, target, stage)
+            )
             registry_identity, registry_reason = self._registry_identity(article.url, target, stage)
             if registry_reason:
                 decision = (
@@ -528,7 +755,12 @@ class ActiveSeeker:
                 rejections.append(("country_target_official_forbidden", article.url))
                 continue
             if stage == "official":
-                official_reason = self._official_identity_reason(article, target, identity, registry_identity)
+                official_reason = self._official_identity_reason(
+                    article,
+                    target,
+                    identity,
+                    registry_identity or dynamic_identity,
+                )
                 if official_reason:
                     decision = (
                         "pending_review"
@@ -541,6 +773,16 @@ class ActiveSeeker:
                     rejections.append((official_reason, article.url))
                     continue
             elif identity.source_type != "country_editorial":
+                self._record_candidate_review(
+                    article, target, stage, identity, "rejected", "not_related_country_source"
+                )
+                rejections.append(("not_related_country_source", article.url))
+                continue
+            if (
+                stage == "country"
+                and identity.publisher_region
+                and identity.publisher_region != target.region
+            ):
                 self._record_candidate_review(
                     article, target, stage, identity, "rejected", "not_related_country_source"
                 )
@@ -560,11 +802,38 @@ class ActiveSeeker:
             article.is_official_source = identity.source_type.startswith("official_")
             article.source_kind = identity.source_type if article.is_official_source else "news"
             article.searched_provider = f"tavily_search_{stage}"
+            article.search_acceptance_status = "accepted"
+            article.search_acceptance_reason = ""
             self._record_candidate_review(article, target, stage, identity, "accepted", "")
             accepted.append(article)
             if len(accepted) >= self.max_results_per_region:
                 break
         return accepted, rejections
+
+    def _existing_article_satisfies_target(
+        self,
+        article: Article,
+        target: VoiceTarget,
+        stage: str,
+    ) -> bool:
+        if article.is_placeholder:
+            return False
+        if stage == "official":
+            return bool(
+                article.is_official_source and self._article_mentions_target(article, target)
+            )
+        region = article.origin_region or self.source_regions.get(article.source_name)
+        return bool(
+            region == target.region
+            and (
+                (not article.is_searched and article.source_name in self.source_regions)
+                or (
+                    article.is_searched
+                    and article.search_acceptance_status == "accepted"
+                    and str(article.searched_provider or "").endswith("_country")
+                )
+            )
+        )
 
     def _rejection_reason(
         self,
@@ -572,8 +841,14 @@ class ActiveSeeker:
         target: VoiceTarget,
         existing_titles: list[str],
         centroid: np.ndarray | None,
+        stage: str | None = None,
     ) -> str:
-        if target.role != "country" and not self._article_mentions_target(article, target):
+        dynamic_identity = self._dynamic_official_identity(article.url, target)
+        if (
+            target.role != "country"
+            and not self._article_mentions_target(article, target)
+            and not (stage == "official" and dynamic_identity is not None)
+        ):
             return "entity_mismatch"
         if not self._is_fresh(article.published_at):
             return "stale_result"
@@ -588,7 +863,12 @@ class ActiveSeeker:
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )[0]
-            if float(np.dot(embedding, centroid)) < self.min_semantic_event_match:
+            threshold = (
+                self.min_semantic_event_match * 0.8
+                if stage == "official" and dynamic_identity is not None
+                else self.min_semantic_event_match
+            )
+            if float(np.dot(embedding, centroid)) < threshold:
                 return "event_mismatch"
         return ""
 
@@ -618,6 +898,7 @@ class ActiveSeeker:
             f"Candidate host: {host}\nTitle: {article.title}\nContent: {article.content[:1800]}\n\n"
             "Return {\"source_type\":\"official_web|official_social|country_editorial|reject\","
             "\"publisher_entity\":\"publisher name\","
+            "\"publisher_region\":\"lowercase ISO alpha-2 country where the publisher is based, or empty\","
             "\"relationship\":\"same_entity|quoted_by_third_party|covered_by_third_party|uncertain|unrelated\","
             "\"ownership_evidence\":\"short evidence\",\"confidence\":0.0}."
         )
@@ -654,6 +935,7 @@ class ActiveSeeker:
         return CandidateIdentity(
             source_type=source_type if source_type in _SOURCE_TYPES else "reject",
             publisher_entity=str(value.get("publisher_entity") or "").strip()[:120],
+            publisher_region=str(value.get("publisher_region") or "").strip().lower()[:2],
             relationship=relationship if relationship in _RELATIONSHIPS else "uncertain",
             ownership_evidence=str(value.get("ownership_evidence") or "").strip()[:300],
             confidence=confidence,
@@ -684,6 +966,7 @@ class ActiveSeeker:
                 return CandidateIdentity(
                     source_type=verdict,
                     publisher_entity=approved_entity,
+                    publisher_region=target.region,
                     relationship="same_entity",
                     ownership_evidence="reviewed exact entity binding",
                 ), None
@@ -691,6 +974,7 @@ class ActiveSeeker:
                 return None, "not_related_country_source"
             return CandidateIdentity(
                 source_type="country_editorial",
+                publisher_region=approved_region,
                 ownership_evidence="reviewed country editorial binding",
             ), None
         return None, None
@@ -805,6 +1089,158 @@ class ActiveSeeker:
 
     # ─── QUERIES ─────────────────────────────────────────────────────────────
 
+    def _resolve_official_domains(
+        self,
+        target: VoiceTarget,
+    ) -> tuple[list[str], str | None]:
+        """Resolve entity-bound web domains before searching for event content."""
+        key = (self._identity_text(target.label), target.region)
+        cached = self._resolved_official_bindings.get(key)
+        if cached is not None:
+            return sorted(cached), None if cached else "official_binding_not_found"
+
+        bindings: dict[str, CandidateIdentity] = {}
+        for domain, spec in self.source_verdicts.items():
+            if str(spec.get("verdict") or "") != "official_web":
+                continue
+            if self._identity_text(str(spec.get("entity") or "")) != key[0]:
+                continue
+            region = str(spec.get("region") or "").strip().lower()
+            if region and region != target.region:
+                continue
+            bindings[domain] = CandidateIdentity(
+                source_type="official_web",
+                publisher_entity=target.label,
+                relationship="same_entity",
+                ownership_evidence="reviewed exact entity binding",
+            )
+        if bindings:
+            self._resolved_official_bindings[key] = bindings
+            return sorted(bindings), None
+
+        query = f"{target.label} official website"
+        results, failure = self._search_tavily(
+            target,
+            query,
+            request_type="identity_resolution",
+        )
+        if failure:
+            return [], failure
+
+        rejection_reasons: set[str] = set()
+        for result in results:
+            article = self._result_to_article(result, target.region, allow_thin=True)
+            if article is None:
+                rejection_reasons.add("thin_result")
+                continue
+            identity = self._candidate_identity(
+                self._verify_candidate(article, target, "official")
+            )
+            registry_identity, registry_reason = self._registry_identity(
+                article.url, target, "official"
+            )
+            if registry_reason:
+                rejection_reasons.add(registry_reason)
+                self._record_candidate_review(
+                    article,
+                    target,
+                    "identity",
+                    identity,
+                    "pending_review" if registry_reason == "publisher_binding_unverified" else "rejected",
+                    registry_reason,
+                )
+                continue
+            if registry_identity is not None:
+                identity = registry_identity
+            if identity.source_type == "official_social":
+                # Social bindings are account-scoped and handled by
+                # _reviewed_social_searches; never cache the whole host.
+                reason = (
+                    None if self._social_account_binding(article.url, target)
+                    else "publisher_binding_unverified"
+                )
+            else:
+                reason = self._official_identity_reason(
+                    article, target, identity, registry_identity
+                )
+            if reason:
+                rejection_reasons.add(reason)
+                self._record_candidate_review(
+                    article,
+                    target,
+                    "identity",
+                    identity,
+                    "pending_review" if reason == "publisher_binding_unverified" else "rejected",
+                    reason,
+                )
+                continue
+            if identity.source_type != "official_web":
+                continue
+            domain = self._registrable_domain(article.url)
+            if not domain:
+                rejection_reasons.add("publisher_binding_unverified")
+                continue
+            bindings[domain] = identity
+            self._record_candidate_review(
+                article,
+                target,
+                "identity",
+                identity,
+                "accepted",
+                "identity_binding_resolved",
+            )
+
+        self._resolved_official_bindings[key] = bindings
+        if bindings:
+            return sorted(bindings), None
+        if rejection_reasons:
+            return [], self._primary_failure_reason(rejection_reasons)
+        return [], "official_binding_not_found"
+
+    def _reviewed_country_domains(self, region: str) -> list[str]:
+        return sorted(
+            domain
+            for domain, spec in self.source_verdicts.items()
+            if str(spec.get("verdict") or "") == "country_editorial"
+            and str(spec.get("region") or "").strip().lower() == region
+        )
+
+    def _reviewed_social_searches(
+        self,
+        target: VoiceTarget,
+        keyword: str,
+    ) -> list[tuple[str, list[str]]]:
+        searches: list[tuple[str, list[str]]] = []
+        for platform, accounts in self.official_account_bindings.items():
+            for account, spec in accounts.items():
+                if self._identity_text(str(spec.get("entity") or "")) != self._identity_text(target.label):
+                    continue
+                if str(spec.get("region") or "").strip().lower() != target.region:
+                    continue
+                if platform == "x":
+                    searches.append((f"site:x.com/{account} {keyword}", ["x.com"]))
+                elif platform == "youtube":
+                    path = f"@{account}" if not account.startswith("uc") else f"channel/{account}"
+                    searches.append((f"site:youtube.com/{path} {keyword}", ["youtube.com"]))
+        return searches
+
+    @staticmethod
+    def _registrable_domain(url: str) -> str:
+        host = urllib.parse.urlparse(url).netloc.lower().removeprefix("www.")
+        extracted = _TLD_EXTRACT(host)
+        return str(getattr(extracted, "top_domain_under_public_suffix", "") or "")
+
+    def _dynamic_official_identity(
+        self,
+        url: str,
+        target: VoiceTarget,
+    ) -> CandidateIdentity | None:
+        key = (self._identity_text(target.label), target.region)
+        domain = self._registrable_domain(url)
+        if not domain:
+            return None
+        return self._resolved_official_bindings.get(key, {}).get(domain)
+
     def _build_search_queries(
         self,
         cluster: ArticleCluster,
@@ -871,6 +1307,8 @@ class ActiveSeeker:
         self,
         target: VoiceTarget | str,
         query: str,
+        include_domains: list[str] | None = None,
+        request_type: str = "search",
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Return (results, failure_reason).
 
@@ -885,9 +1323,14 @@ class ActiveSeeker:
             else VoiceTarget(region=str(target), label=country_name(str(target)), role="country")
         )
         region = target_obj.region
-        cache_key = (region, query)
+        normalized_domains = tuple(sorted(set(include_domains or [])))
+        cache_key = (region, query, normalized_domains)
         if cache_key in self._search_cache:
             return self._search_cache[cache_key], None
+        if self._provider_failure_reason:
+            return [], self._provider_failure_reason
+        if self._request_count >= self.max_requests_per_run:
+            return [], "request_budget_exhausted"
 
         base_payload: dict[str, Any] = {
             "query": query,
@@ -896,6 +1339,8 @@ class ActiveSeeker:
             "max_results": max(self.max_results_per_region + 2, 4),
             "days": 3,
         }
+        if normalized_domains:
+            base_payload["include_domains"] = list(normalized_domains)
         # Build the key try-order: start from the last known-good key, then any
         # remaining keys that aren't yet exhausted this run.
         try_order: list[int] = []
@@ -911,9 +1356,10 @@ class ActiveSeeker:
             # spam Tavily with known-bad credentials.
             self._record_search_event(
                 provider="tavily_search",
-                request_type="search",
+                request_type=request_type,
                 target=target_obj,
                 query=query,
+                restricted_domains=list(normalized_domains),
                 http_status=401,
                 result_count=0,
             )
@@ -921,6 +1367,7 @@ class ActiveSeeker:
 
         last_failure_reason: str | None = None
         last_status: int | None = None
+        self._request_count += 1
         for key_idx in try_order:
             payload = {**base_payload, "api_key": self.tavily_api_keys[key_idx]}
             try:
@@ -935,9 +1382,10 @@ class ActiveSeeker:
                         last_status = resp.status_code
                         self._record_search_event(
                             provider="tavily_search",
-                            request_type="search",
+                            request_type=request_type,
                             target=target_obj,
                             query=query,
+                            restricted_domains=list(normalized_domains),
                             http_status=resp.status_code,
                             result_count=0,
                             duration_ms=duration_ms,
@@ -959,9 +1407,10 @@ class ActiveSeeker:
                     last_status = status
                     self._record_search_event(
                         provider="tavily_search",
-                        request_type="search",
+                        request_type=request_type,
                         target=target_obj,
                         query=query,
+                        restricted_domains=list(normalized_domains),
                         http_status=status,
                         result_count=0,
                     )
@@ -970,14 +1419,18 @@ class ActiveSeeker:
                 # don't rotate; just report the failure for this query.
                 self._record_search_event(
                     provider="tavily_search",
-                    request_type="search",
+                    request_type=request_type,
                     target=target_obj,
                     query=query,
+                    restricted_domains=list(normalized_domains),
                     http_status=status,
                     result_count=0,
                 )
                 logger.warning("Tavily search failed: %s", exc)
-                return [], f"http_{status}" if status else "network"
+                failure_reason = f"http_{status}" if status else "network"
+                if failure_reason == "network" or (status is not None and status >= 500):
+                    self._provider_failure_reason = failure_reason
+                return [], failure_reason
             else:
                 # Success — pin this key as the active one for subsequent calls.
                 self._active_key_idx = key_idx
@@ -997,9 +1450,10 @@ class ActiveSeeker:
                     )
                 self._record_search_event(
                     provider="tavily_search",
-                    request_type="search",
+                    request_type=request_type,
                     target=target_obj,
                     query=query,
+                    restricted_domains=list(normalized_domains),
                     http_status=resp.status_code,
                     result_count=len(results),
                     duration_ms=duration_ms,
@@ -1010,19 +1464,25 @@ class ActiveSeeker:
         # All candidate keys returned auth failure.
         self._record_search_event(
             provider="tavily_search",
-            request_type="search",
+            request_type=request_type,
             target=target_obj,
             query=query,
+            restricted_domains=list(normalized_domains),
             http_status=last_status,
             result_count=0,
         )
         return [], last_failure_reason or "http_401"
 
-    def _result_to_article(self, result: dict[str, Any], region: str) -> Article | None:
+    def _result_to_article(
+        self,
+        result: dict[str, Any],
+        region: str,
+        allow_thin: bool = False,
+    ) -> Article | None:
         url = result.get("url")
         title = (result.get("title") or "").strip()
         content = (result.get("content") or "").strip()
-        if not url or not title or len(content) < self.min_content_chars:
+        if not url or not title or (not allow_thin and len(content) < self.min_content_chars):
             return None
         domain = urllib.parse.urlparse(url).netloc.replace("www.", "")
         source_name = result.get("source_name") or domain
@@ -1110,6 +1570,7 @@ class ActiveSeeker:
         rejection_reason: str | None = None,
         rejection_count: int | None = None,
         duration_ms: int | None = None,
+        restricted_domains: list[str] | None = None,
     ) -> None:
         if not self.telemetry_enabled:
             return
@@ -1121,6 +1582,11 @@ class ActiveSeeker:
                     target_region=target.region if target is not None else target_region,
                     target_label=target.label if target is not None else None,
                     target_role=target.role if target is not None else None,
+                    cluster_key=target.cluster_key if target is not None else None,
+                    target_event_role=target.event_role if target is not None else None,
+                    target_reason=target.why_voice_needed if target is not None else None,
+                    coverage_before=target.coverage_before if target is not None else None,
+                    restricted_domains=list(restricted_domains or []),
                     query=query,
                     http_status=http_status,
                     result_count=result_count,
