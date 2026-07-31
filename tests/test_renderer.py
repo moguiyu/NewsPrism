@@ -2004,6 +2004,156 @@ def test_render_does_not_add_shared_tag_when_only_one_cluster_per_key(renderer, 
     assert 'class="shared-storyline-tag"' not in html
 
 
+def test_shared_storyline_tag_uses_repaired_hot_topic_name(renderer, tmp_path):
+    """Regression for 2026-07-31: main-feed cards sharing a hot-topic family's
+    storyline_key showed the stale resolver-assigned name (e.g. "美以伊局势")
+    instead of the repaired tab label ("俄乌军事升级"). The renderer now
+    propagates the repaired hot-topic name to main-feed shared labels.
+    """
+    renderer.output_dir = tmp_path
+
+    # Main-feed cards with the SAME storyline_key as the hot-topic family,
+    # carrying the stale name that the resolver assigned. Two cards needed
+    # because shared_storyline_label only renders for 2+ same-key cards.
+    main_cluster_a = ArticleCluster(
+        topic_category="World News",
+        articles=[Article(
+            url="https://reuters.com/main-ru-ua-a",
+            title="Russian strikes across Ukraine kill 9",
+            source_name="Reuters",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Russia Ukraine military strikes body.",
+        )],
+    )
+    main_cluster_a.storyline_key = "storyline-8aa4fcb4"
+    main_cluster_a.storyline_name = "美以伊局势"
+    main_cluster_a.macro_topic_key = "storyline-8aa4fcb4"
+    main_cluster_a.macro_topic_name = "美以伊局势"
+
+    main_cluster_b = ArticleCluster(
+        topic_category="World News",
+        articles=[Article(
+            url="https://reuters.com/main-ru-ua-b",
+            title="乌克兰无人机袭击仓库",
+            source_name="Reuters",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Ukraine drone strike body.",
+        )],
+    )
+    main_cluster_b.storyline_key = "storyline-8aa4fcb4"
+    main_cluster_b.storyline_name = "美以伊局势"
+    main_cluster_b.macro_topic_key = "storyline-8aa4fcb4"
+    main_cluster_b.macro_topic_name = "美以伊局势"
+
+    main_summaries = []
+    for cl in [main_cluster_a, main_cluster_b]:
+        s = ClusterSummary(cluster=cl, summary="**俄军空袭**\n\nBody.", perspectives={})
+        s.storyline_key = cl.storyline_key
+        s.storyline_name = cl.storyline_name
+        s.macro_topic_key = cl.macro_topic_key
+        s.macro_topic_name = cl.macro_topic_name
+        main_summaries.append(s)
+
+    # Hot-topic family with Russia-Ukraine content that triggers the repair.
+    hot_cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[Article(
+            url="https://bbc.com/hot-ru-ua",
+            title="Russian missile crashes in Poland",
+            source_name="BBC",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Russia Ukraine military escalation body.",
+        )],
+    )
+    hot_cluster.storyline_key = "storyline-8aa4fcb4"
+    hot_cluster.storyline_name = "美以伊局势"
+    hot_summary = ClusterSummary(
+        cluster=hot_cluster,
+        summary="**俄导弹落入波兰**\n\n俄乌军事升级。",
+        perspectives={},
+    )
+    hot_summary.storyline_key = "storyline-8aa4fcb4"
+    hot_summary.storyline_name = "美以伊局势"
+
+    html_path = renderer.render(
+        main_summaries,
+        date(2026, 7, 31),
+        hot_topics=[{
+            "dom_id": "hot-topic-1",
+            "macro_topic_key": "storyline-8aa4fcb4",
+            "macro_topic_name": "美以伊局势",
+            "macro_topic_name_en": "US-Israel-Iran",
+            "storyline_key": "storyline-8aa4fcb4",
+            "storyline_name": "美以伊局势",
+            "topic_icon_key": "war",
+            "summaries": [hot_summary],
+        }],
+        update_latest=False,
+    )
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+    # The main-feed card should show the repaired name, not the stale one.
+    assert payload["clusters"][0]["shared_storyline_label"] == "俄乌军事升级"
+    assert "美以伊局势" not in payload["clusters"][0].get("shared_storyline_label", "")
+
+
+def test_shared_storyline_tag_suppressed_when_name_mismatches_content(renderer, tmp_path):
+    """Regression for 2026-07-31: a non-hot-topic storyline family carried the
+    stale name "美限制机器人进口" (US restricts robot imports) on Tesla/Amazon
+    robotaxi cards whose content has zero CJK overlap with that name. The
+    stale-name guard now suppresses the tag when the label shares no CJK chars
+    with the card's headline.
+    """
+    renderer.output_dir = tmp_path
+
+    cluster_a = ArticleCluster(
+        topic_category="Technology",
+        articles=[Article(
+            url="https://reuters.com/tesla",
+            title="特斯拉否认剥离中国业务",
+            source_name="Reuters",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Tesla denies China spin-off.",
+        )],
+    )
+    cluster_a.storyline_key = "storyline-cf6578e8"
+    cluster_a.storyline_name = "美限制机器人进口"  # stale, zero overlap with 特斯拉
+    cluster_a.macro_topic_key = "storyline-cf6578e8"
+    cluster_a.macro_topic_name = "美限制机器人进口"
+
+    cluster_b = ArticleCluster(
+        topic_category="Technology",
+        articles=[Article(
+            url="https://bbc.com/zoox",
+            title="亚马逊Zoox获得Robotaxi许可",
+            source_name="BBC",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Amazon Zoox robotaxi permit.",
+        )],
+    )
+    cluster_b.storyline_key = "storyline-cf6578e8"
+    cluster_b.storyline_name = "美限制机器人进口"
+    cluster_b.macro_topic_key = "storyline-cf6578e8"
+    cluster_b.macro_topic_name = "美限制机器人进口"
+
+    summaries = [
+        ClusterSummary(cluster=cluster_a, summary="**特斯拉回应**\n\nBody.", perspectives={}),
+        ClusterSummary(cluster=cluster_b, summary="**Zoox获批**\n\nBody.", perspectives={}),
+    ]
+    for s in summaries:
+        s.storyline_key = s.cluster.storyline_key
+        s.storyline_name = s.cluster.storyline_name
+        s.macro_topic_key = s.cluster.macro_topic_key
+        s.macro_topic_name = s.cluster.macro_topic_name
+
+    html_path = renderer.render(summaries, date(2026, 7, 31), update_latest=False)
+    html = html_path.read_text(encoding="utf-8")
+
+    # Stale label suppressed — no tag rendered.
+    assert 'class="shared-storyline-tag"' not in html
+    assert "美限制机器人进口" not in html
+
+
 def test_placeholder_sources_never_render_as_broken_links(renderer, tmp_path):
     """Regression test: placeholder sources must never have truthy URLs that
     render as broken links in the template. After fix: placeholder URL is set
