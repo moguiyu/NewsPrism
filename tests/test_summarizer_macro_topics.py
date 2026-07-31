@@ -448,6 +448,39 @@ def test_numeric_grounding_accepts_source_supported_vote_count():
     assert summary.quality_status == "publishable"
 
 
+def test_numeric_grounding_accepts_cjk_unit_suffix_cross_language():
+    """Regression for the 2026-07-31 Kumamoto earthquake: a Chinese claim like
+    '28人' (28 people) was flagged as unsupported because the CJK suffix '人'
+    prevented a substring match against English sources saying '28 dead'.
+    The bare-digits fallback now checks '28' against the evidence directly.
+    """
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/ap",
+                title="Magnitude 6.8 earthquake hits Kumamoto",
+                source_name="AP",
+                published_at=datetime.now(tz=timezone.utc),
+                content="At least 28 people are dead after a 6.8 magnitude earthquake struck Kumamoto.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**日本熊本县发生6.8级地震，至少28人死亡**\n\n灾区展开搜救。",
+        quality_status="publishable",
+    )
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "28人" in summary.summary
+    assert "有关数字" not in summary.summary
+    assert summary.quality_status == "publishable"
+    assert "unsupported_numeric_claim" not in summary.quality_flags
+
+
 def test_numeric_grounding_marks_conflicting_source_vote_counts(monkeypatch):
     summarizer = Summarizer(_config())
     cluster = ArticleCluster(
