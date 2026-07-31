@@ -871,22 +871,133 @@ class Summarizer:
             .replace(" ", "")
         )
 
+    # Currency/scale equivalence for the numeric-grounding check. This lets a
+    # Chinese claim like "114亿美元" match an English source that says
+    # "$11.4 billion" — same magnitude, different currency notation — instead
+    # of failing a literal substring comparison.
+    _CURRENCY_SYMBOL_MAP = {
+        "$": "USD",
+        "€": "EUR",
+        "£": "GBP",
+        "¥": "CNY",
+        "￥": "CNY",
+    }
+
+    _CURRENCY_WORD_MAP = {
+        "usd": "USD",
+        "dollar": "USD",
+        "dollars": "USD",
+        "eur": "EUR",
+        "euro": "EUR",
+        "euros": "EUR",
+        "cny": "CNY",
+        "rmb": "CNY",
+        "yuan": "CNY",
+        "gbp": "GBP",
+        "pound": "GBP",
+        "pounds": "GBP",
+        "美元": "USD",
+        "美金": "USD",
+        "欧元": "EUR",
+        "人民币": "CNY",
+        "元": "CNY",
+        "英镑": "GBP",
+    }
+
+    _SCALE_WORD_MAP = {
+        "trillion": 1e12,
+        "billion": 1e9,
+        "million": 1e6,
+        "thousand": 1e3,
+        "bn": 1e9,
+        "mn": 1e6,
+        "万亿": 1e12,
+        "亿": 1e8,
+        "万": 1e4,
+    }
+
+    # Relative tolerance for treating two currency magnitudes from independent
+    # sources as "the same fact" (e.g. AP says $11.4B, another outlet rounds
+    # to $11.5B for the same underlying figure).
+    _CURRENCY_MAGNITUDE_TOLERANCE = 0.08
+
+    _MONEY_AMOUNT_PATTERN = re.compile(
+        r"(?P<sym>[$€£¥￥])?\s*"
+        r"(?P<num>\d[\d,]*(?:\.\d+)?)\s*"
+        r"(?P<scale>trillion|billion|million|thousand|bn|mn|万亿|亿|万)?\s*"
+        r"(?P<cur>USD|usd|dollars?|EUR|eur|euros?|CNY|cny|RMB|rmb|yuan|GBP|gbp|"
+        r"pounds?|美元|美金|欧元|人民币|英镑|元)?",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _money_amounts(cls, text: str) -> list[tuple[float, str]]:
+        """Extract (magnitude, currency-class) pairs from arbitrary text.
+
+        Only substrings with an explicit currency signal (a symbol like `$`
+        or a currency word like "美元"/"dollars") count — a bare number with
+        just a scale word (e.g. "5亿人") is not treated as a currency amount.
+        """
+        amounts: list[tuple[float, str]] = []
+        for match in cls._MONEY_AMOUNT_PATTERN.finditer(text or ""):
+            sym = match.group("sym")
+            cur = match.group("cur")
+            currency = None
+            if sym:
+                currency = cls._CURRENCY_SYMBOL_MAP.get(sym)
+            elif cur:
+                currency = cls._CURRENCY_WORD_MAP.get(cur.lower()) or cls._CURRENCY_WORD_MAP.get(cur)
+            if not currency:
+                continue
+            try:
+                value = float(match.group("num").replace(",", ""))
+            except ValueError:
+                continue
+            scale = match.group("scale")
+            if scale:
+                factor = cls._SCALE_WORD_MAP.get(scale.lower()) or cls._SCALE_WORD_MAP.get(scale)
+                if factor:
+                    value *= factor
+            amounts.append((value, currency))
+        return amounts
+
+    @classmethod
+    def _claim_supported_by_money_amounts(
+        cls,
+        claim: str,
+        evidence_amounts: list[tuple[float, str]],
+    ) -> bool:
+        if not evidence_amounts:
+            return False
+        claim_amounts = cls._money_amounts(claim)
+        if not claim_amounts:
+            return False
+        for value, currency in claim_amounts:
+            for evidence_value, evidence_currency in evidence_amounts:
+                if evidence_currency != currency:
+                    continue
+                denom = max(abs(evidence_value), abs(value)) or 1.0
+                if abs(evidence_value - value) / denom <= cls._CURRENCY_MAGNITUDE_TOLERANCE:
+                    return True
+        return False
+
     def _unsupported_numeric_claims(
         self,
         cluster: ArticleCluster,
         summary_text: str,
     ) -> list[str]:
-        evidence = self._normalized_claim_text(
-            "\n".join(
-                f"{article.title}\n{article.content}"
-                for article in cluster.articles
-                if not article.is_placeholder
-            )
+        raw_evidence_text = "\n".join(
+            f"{article.title}\n{article.content}"
+            for article in cluster.articles
+            if not article.is_placeholder
         )
+        evidence = self._normalized_claim_text(raw_evidence_text)
+        evidence_money = self._money_amounts(raw_evidence_text)
         unsupported = [
             claim
             for claim in self._numeric_claims(summary_text)
             if self._normalized_claim_text(claim) not in evidence
+            and not self._claim_supported_by_money_amounts(claim, evidence_money)
         ]
         vote_pattern = re.compile(r"\d[\d,]*\s*[-–—]\s*\d[\d,]*")
         source_vote_counts = {
@@ -935,6 +1046,26 @@ class Summarizer:
             logger.warning("Numeric grounding rewrite failed for '%s': %s", summary.cluster.topic_category, exc)
             return None
 
+    # Placeholder text swapped in for a flagged numeric value inside a headline
+    # that must otherwise stay intact. Never a raw source title: `topic_category`
+    # and `cluster.articles[0].title` are both potentially non-Chinese (they can
+    # be the raw first-article title — see clusterer.py/llm_clusterer.py — which
+    # would violate the Chinese-output style guide).
+    _UNSUPPORTED_VALUE_PLACEHOLDER = "有关数字"
+    _SAFE_HEADLINE_FALLBACK = "相关报道：具体数字有待进一步核实"
+
+    @classmethod
+    def _strip_unsupported_values(cls, text: str, unsupported: list[str]) -> str:
+        result = text
+        for value in unsupported:
+            if value and value in result:
+                result = result.replace(value, cls._UNSUPPORTED_VALUE_PLACEHOLDER)
+        # Collapse runs of the placeholder (e.g. two adjacent flagged values)
+        # into a single mention.
+        placeholder = re.escape(cls._UNSUPPORTED_VALUE_PLACEHOLDER)
+        result = re.sub(rf"(?:{placeholder}[，,、\s]*){{2,}}", cls._UNSUPPORTED_VALUE_PLACEHOLDER, result)
+        return re.sub(r"\s+", " ", result).strip()
+
     def _remove_unsupported_numeric_sentences(
         self,
         summary: ClusterSummary,
@@ -943,11 +1074,14 @@ class Summarizer:
         headline = _extract_headline(summary.summary)
         body = _body_only(summary.summary)
         if any(value in headline for value in unsupported):
-            headline = (
-                summary.cluster.articles[0].title
-                if summary.cluster.articles
-                else summary.cluster.topic_category
-            )
+            stripped_headline = self._strip_unsupported_values(headline, unsupported)
+            placeholder = re.escape(self._UNSUPPORTED_VALUE_PLACEHOLDER)
+            residual = re.sub(rf"[\s，,。.!！？?、]+|{placeholder}", "", stripped_headline)
+            # Only keep the stripped headline if meaningful Chinese-authored
+            # content survives beyond the placeholder itself; otherwise fall
+            # back to a safe generic phrase — never to a raw, possibly
+            # non-Chinese source title.
+            headline = stripped_headline if residual else self._SAFE_HEADLINE_FALLBACK
         sentences = re.split(r"(?<=[。！？.!?])\s*", body)
         kept = [
             sentence

@@ -136,7 +136,69 @@ active_search:
   # official entries require verdict + entity (+ optional region); local
   # editorial entries require verdict: country_editorial + region. Unknown
   # publishers enter pending review instead of becoming a voice.
-  source_verdicts: {}
+  # entity_aliases lets one domain binding match a target under any accepted
+  # name form (translation, acronym, full name) instead of requiring exact
+  # normalized text equality against a single stored entity string. Seeded
+  # 2026-07-31 with commonly-targeted official government domains observed
+  # in production seeker runs (see the identity-matching fix in seeker.py).
+  source_verdicts:
+    # Note: aliases are intentionally country-qualified (e.g. "美国财政部",
+    # not bare "财政部") — a bare generic-ministry name in Chinese is
+    # ambiguous across countries (财政部/国务院/国防部/商务部/司法部 all also
+    # name a Chinese ministry) and an alias *match* here is an instant
+    # verifier-bypassing accept, so an ambiguous bare form is a false-accept
+    # risk, not just a miss. Acronyms (CENTCOM, DOJ, SEC, Fed, USTR) are kept
+    # since they are unambiguous in English-language usage.
+    whitehouse.gov:
+      verdict: official_web
+      region: us
+      entity: "The White House"
+      entity_aliases: ["美国白宫", "白宫", "White House"]
+    treasury.gov:
+      verdict: official_web
+      region: us
+      entity: "U.S. Department of the Treasury"
+      entity_aliases: ["美国财政部", "U.S. Treasury", "Treasury Department"]
+    state.gov:
+      verdict: official_web
+      region: us
+      entity: "U.S. Department of State"
+      entity_aliases: ["美国国务院", "State Department", "U.S. State Department"]
+    centcom.mil:
+      verdict: official_web
+      region: us
+      entity: "U.S. Central Command"
+      entity_aliases: ["CENTCOM", "美国中央司令部", "U.S. Central Command (CENTCOM)"]
+    defense.gov:
+      verdict: official_web
+      region: us
+      entity: "U.S. Department of Defense"
+      entity_aliases: ["美国国防部", "Pentagon", "DoD", "Department of Defense"]
+    justice.gov:
+      verdict: official_web
+      region: us
+      entity: "U.S. Department of Justice"
+      entity_aliases: ["美国司法部", "DOJ", "Department of Justice"]
+    sec.gov:
+      verdict: official_web
+      region: us
+      entity: "U.S. Securities and Exchange Commission"
+      entity_aliases: ["美国证券交易委员会", "SEC"]
+    federalreserve.gov:
+      verdict: official_web
+      region: us
+      entity: "Federal Reserve"
+      entity_aliases: ["美联储", "美国联邦储备委员会", "Fed", "Federal Reserve Board"]
+    commerce.gov:
+      verdict: official_web
+      region: us
+      entity: "U.S. Department of Commerce"
+      entity_aliases: ["美国商务部", "Commerce Department"]
+    ustr.gov:
+      verdict: official_web
+      region: us
+      entity: "Office of the U.S. Trade Representative"
+      entity_aliases: ["美国贸易代表办公室", "美国贸易代表署", "USTR"]
   # Reviewed social ownership is account-scoped, never host-scoped:
   # official_account_bindings:
   #   x:

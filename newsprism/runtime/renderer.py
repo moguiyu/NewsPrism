@@ -633,6 +633,7 @@ class HtmlRenderer:
             compact_label_en = f"🔍{source_name}"
             provenance_label = placeholder_reason_zh
             provenance_label_en = placeholder_reason_en
+            url = None  # Nullify synthetic placeholder URL to prevent broken links in template
         return {
             "source": source_name,
             "flag": self._source_flag(source_name, search_region),

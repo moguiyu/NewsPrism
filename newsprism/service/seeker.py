@@ -108,6 +108,11 @@ _RELATIONSHIPS = {
     "same_entity", "quoted_by_third_party", "covered_by_third_party", "uncertain", "unrelated",
 }
 _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+# Public-suffix labels that mark a domain as clearly governmental. Checked
+# against every dot-separated component of the registered suffix so both a
+# bare TLD (centcom.mil -> "mil") and a ccTLD second-level suffix
+# (gov.uk/gov.cn/gouv.fr) match.
+_GOVERNMENTAL_SUFFIX_MARKERS = {"gov", "mil", "govt", "gouv"}
 
 
 class ActiveSeeker:
@@ -142,6 +147,18 @@ class ActiveSeeker:
         self.max_localized_query_variants = int(search_cfg.get("max_localized_query_variants", 2))
         self.max_existing_title_overlap = float(search_cfg.get("max_existing_title_overlap", 0.82))
         self.min_semantic_event_match = float(search_cfg.get("min_semantic_event_match", 0.58))
+        # Above this verifier confidence, a same_entity official_web candidate
+        # on a clearly governmental domain is trusted without also requiring
+        # target.label and publisher_entity to normalize to identical text —
+        # the verifier LLM already did that semantic judgment, and free-text
+        # equality can't survive translation (中文 target label vs an English
+        # publisher_entity) or acronym/full-name variance (CENTCOM vs "U.S.
+        # Central Command (CENTCOM)"). See commit 0ffca0f for why this check
+        # exists at all, and the 2026-07-31 false-rejection fix for why it was
+        # loosened for this specific high-confidence + governmental-domain case.
+        self.official_identity_confidence_floor = float(
+            search_cfg.get("official_identity_confidence_floor", 0.85)
+        )
         self.hot_composite_trigger = float(search_cfg.get("hot_composite_trigger", 0.55))
         self.max_queries_per_stage = max(1, int(search_cfg.get("max_queries_per_stage", 2)))
         self.max_requests_per_run = max(1, int(search_cfg.get("max_requests_per_run", 40)))
@@ -952,6 +969,11 @@ class ActiveSeeker:
             verdict = str(spec.get("verdict") or "").strip()
             approved_region = str(spec.get("region") or "").strip().lower()
             approved_entity = str(spec.get("entity") or "").strip()
+            # entity_aliases lets one reviewed domain binding match the target
+            # under any accepted name form (translation, acronym, full name)
+            # instead of requiring a single exact normalized string.
+            alias_names = [approved_entity, *(spec.get("entity_aliases") or [])]
+            alias_texts = {self._identity_text(str(alias)) for alias in alias_names if str(alias).strip()}
             if approved_region and approved_region != target.region:
                 return None, "not_related_country_source"
             if stage == "official":
@@ -961,7 +983,18 @@ class ActiveSeeker:
                     return None, "publisher_binding_unverified"
                 if verdict != "official_web":
                     return None, "not_official_source"
-                if not approved_entity or self._identity_text(approved_entity) != self._identity_text(target.label):
+                if not alias_texts or self._identity_text(target.label) not in alias_texts:
+                    if self._is_governmental_domain(url):
+                        # A reviewed, clearly-governmental domain (.gov/.mil/…)
+                        # whose alias list simply doesn't happen to cover this
+                        # particular target-label phrasing should not hard-
+                        # block the candidate — fall through (None, None) so
+                        # _official_identity_reason's verifier-based judgment
+                        # gets to decide, instead of a closed alias list
+                        # gatekeeping every possible label form for a domain
+                        # we already know is legitimate. Non-governmental
+                        # registry domains keep the strict alias requirement.
+                        return None, None
                     return None, "publisher_binding_unverified"
                 return CandidateIdentity(
                     source_type=verdict,
@@ -992,14 +1025,66 @@ class ActiveSeeker:
             return "not_official_source"
         if registry_identity is not None:
             return None
-        if identity.relationship != "same_entity" or self._identity_text(identity.publisher_entity) != self._identity_text(target.label):
+        # The verifier's own relationship judgment is the primary signal for
+        # "is this actually the target entity". A verdict other than
+        # same_entity (uncertain/unrelated/quoted_by_third_party/...) is
+        # always rejected here — this is the protection commit 0ffca0f added
+        # and it stays intact regardless of confidence or domain.
+        if identity.relationship != "same_entity":
+            return "publisher_target_mismatch"
+        # A publisher_region the verifier did populate must agree with the
+        # target's region — same_entity plus an explicit country conflict is
+        # still a mismatch (a foreign ministry sharing a translated label is
+        # not the target). Absent/empty publisher_region is common (the
+        # CENTCOM production JSON omitted it) and is not itself a conflict.
+        if identity.publisher_region and identity.publisher_region != target.region:
+            return "publisher_target_mismatch"
+        # High-confidence same_entity official_web on a domain that is itself
+        # clearly governmental (.gov/.mil/ccTLD gov analog) is trusted without
+        # also demanding target.label and publisher_entity normalize to
+        # identical text. That text-equality check cannot survive translation
+        # (target label in Chinese, publisher_entity in English) or
+        # acronym/full-name variance (CENTCOM vs "U.S. Central Command
+        # (CENTCOM)") even when the verifier already correctly identified the
+        # same entity with full confidence — re-litigating a semantic
+        # judgment the LLM already made with a brittle string comparison was
+        # the bug. A domain that is NOT clearly governmental (e.g.
+        # microsoft.ai) still falls through to the strict checks below, so an
+        # unrelated org the verifier mislabels same_entity is still caught.
+        if (
+            identity.source_type == "official_web"
+            and identity.confidence is not None
+            and identity.confidence >= self.official_identity_confidence_floor
+            and self._is_governmental_domain(article.url)
+        ):
+            return None
+        if self._identity_text(identity.publisher_entity) != self._identity_text(target.label):
             return "publisher_target_mismatch"
         if identity.source_type == "official_social":
             return None if self._social_account_binding(article.url, target) else "publisher_binding_unverified"
-        registered = _TLD_EXTRACT(urllib.parse.urlparse(article.url).netloc)
-        if self._identity_text(registered.domain) != self._identity_text(target.label):
-            return "publisher_binding_unverified"
+        # The registrable domain label of a real government site (state.gov,
+        # treasury.gov, whitehouse.gov, centcom.mil) essentially never equals
+        # the entity's full name, so this equality check would false-reject
+        # governmental domains even on an exact publisher_entity match (e.g.
+        # confidence omitted by the verifier so the fast path above didn't
+        # fire). Skip it there; the domain's own suffix already vouches for
+        # government provenance.
+        if not self._is_governmental_domain(article.url):
+            registered = _TLD_EXTRACT(urllib.parse.urlparse(article.url).netloc)
+            if self._identity_text(registered.domain) != self._identity_text(target.label):
+                return "publisher_binding_unverified"
         return None
+
+    @staticmethod
+    def _is_governmental_domain(url: str) -> bool:
+        """True when the URL's registered suffix marks it as governmental.
+
+        Matches a bare gov/mil TLD (centcom.mil) as well as ccTLD second-level
+        government suffixes (gov.uk, gov.cn, gouv.fr) by checking every
+        dot-separated component of the extracted public suffix.
+        """
+        suffix = _TLD_EXTRACT(urllib.parse.urlparse(url).netloc).suffix.lower()
+        return any(part in _GOVERNMENTAL_SUFFIX_MARKERS for part in suffix.split("."))
 
     def _social_account_binding(self, url: str, target: VoiceTarget) -> bool:
         social = self._social_account(url)

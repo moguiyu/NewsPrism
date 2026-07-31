@@ -18,6 +18,13 @@ impact:
     min_feelgood: 6.0     # seed; P2 calibration tunes against the empty-rate target
     max_severity: 4.0
   batch_size: 40
+  diversity:
+    # Maximum clusters to select per display category (e.g., "World", "Tech").
+    # Higher scores in one category don't preempt selection of lower-scoring items
+    # in other categories, subject to this cap. Applies at cluster selection
+    # (editorial_planner.select_report_clusters, line 214) and summary ranking
+    # (editorial_planner._rank_main_summaries, line 273). (Issue #10)
+    max_per_category: 8
 
 quality:
   min_publish_score: 0.45
