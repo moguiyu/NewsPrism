@@ -137,6 +137,13 @@ def _storyline_name_matches_content(name: str, content: str) -> bool:
     topic (e.g. Chinese storyline name ``关税战`` with English headlines "tariff
     hike"). In that case the check is skipped (returns True) so that legitimate
     cross-language reuse is not false-flagged as stale.
+
+    **Entity-prefix guard:** the first 3 CJK chars of a storyline name are
+    typically the entity (美联储, 美以伊, 俄乌). If none appear in the content,
+    the name refers to a different entity even when generic action vocabulary
+    (维持, 利率, 不) inflates the token-overlap score. This catches same-domain
+    different-entity mismatches like ``美联储宣布维持利率不`` applied to
+    ``英国央行维持利率3.75%不变`` content.
     """
     if not name or not content:
         return False
@@ -151,6 +158,14 @@ def _storyline_name_matches_content(name: str, content: str) -> bool:
     content_has_cjk = _CJK_SEARCH.search(content) is not None
     if name_has_cjk != content_has_cjk:
         return True
+    # Entity-prefix guard: require at least one of the name's first 3 CJK
+    # characters (the entity compound) to appear in the content.
+    name_cjk = _CJK_SEARCH.findall(name)
+    if len(name_cjk) >= 3:
+        entity_chars = set(name_cjk[:3])
+        content_cjk = set(_CJK_SEARCH.findall(content))
+        if not entity_chars & content_cjk:
+            return False
     overlap = len(name_tokens & content_tokens) / len(name_tokens)
     return overlap >= _STORYLINE_NAME_MIN_OVERLAP
 
