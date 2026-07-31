@@ -1228,7 +1228,6 @@ class HtmlRenderer:
         # clusters.storyline_name. Any main-feed card sharing a hot-topic
         # family's storyline_key should show the repaired name, not the stale
         # one (e.g. "俄乌军事升级" instead of "美以伊局势").
-        repaired_keys: set[str] = set()
         for hot in hot_topics_ctx:
             hot_key = hot.get("macro_topic_key") or hot.get("storyline_key")
             if not hot_key or hot_key not in shared_label_by_key:
@@ -1238,7 +1237,6 @@ class HtmlRenderer:
             if repaired and repaired != shared_label_by_key[hot_key]:
                 shared_label_by_key[hot_key] = repaired
                 shared_label_en_by_key[hot_key] = repaired_en
-                repaired_keys.add(hot_key)
                 for ctx, jsonp in zip(clusters_ctx, clusters_json):
                     if ctx.get("storyline_key") == hot_key:
                         ctx["shared_storyline_label"] = repaired
@@ -1246,42 +1244,31 @@ class HtmlRenderer:
                         jsonp["shared_storyline_label"] = repaired
                         jsonp["shared_storyline_label_en"] = repaired_en
 
-        # Stale-name guard for non-hot-topic families: if a shared label was
-        # NOT repaired above and its CJK chars have zero overlap with the
-        # card headlines, the storyline_name was reused from a stale historical
-        # key. Clear the label so the tag doesn't render with a wrong name
-        # (e.g. "美限制机器人进口" on Tesla/Amazon robotaxi cards).
+        # Stale-name guard: for every key (repaired or not), check the label
+        # against each card's headline individually. If the label's CJK chars
+        # have zero overlap with a card's CJK headline, clear the tag on THAT
+        # card — the storyline family may be a grab-bag with off-topic members
+        # (e.g. storyline-8aa4fcb4 contains both Ru-Ua and Trump-Hamas stories;
+        # only the Ru-Ua cards should show the "俄乌军事升级" tag).
         for key in list(shared_label_by_key.keys()):
-            if key in repaired_keys:
-                continue
             label = shared_label_by_key[key]
             label_cjk = set(_CJK_CHAR.findall(label))
             if not label_cjk:
                 continue
-            # Check against all main-feed headlines with this key.
-            any_overlap = False
-            has_cjk_headline = False
-            for ctx in clusters_ctx:
+            for ctx, jsonp in zip(clusters_ctx, clusters_json):
                 if ctx.get("storyline_key") != key:
+                    continue
+                if not ctx.get("shared_storyline_label"):
                     continue
                 headline = ctx.get("headline") or ""
                 headline_cjk = set(_CJK_CHAR.findall(headline))
-                if headline_cjk:
-                    has_cjk_headline = True
-                    if label_cjk & headline_cjk:
-                        any_overlap = True
-                        break
-            # Only suppress when there's at least one CJK headline to compare
-            # against. All-non-CJK headlines (cross-script) can't be checked.
-            if has_cjk_headline and not any_overlap:
-                del shared_label_by_key[key]
-                del shared_label_en_by_key[key]
-                for ctx, jsonp in zip(clusters_ctx, clusters_json):
-                    if ctx.get("storyline_key") == key:
-                        ctx["shared_storyline_label"] = ""
-                        ctx["shared_storyline_label_en"] = ""
-                        jsonp["shared_storyline_label"] = ""
-                        jsonp["shared_storyline_label_en"] = ""
+                # Only suppress when the headline has CJK chars to compare.
+                # Cross-script headlines (non-CJK) skip the guard.
+                if headline_cjk and not label_cjk & headline_cjk:
+                    ctx["shared_storyline_label"] = ""
+                    ctx["shared_storyline_label_en"] = ""
+                    jsonp["shared_storyline_label"] = ""
+                    jsonp["shared_storyline_label_en"] = ""
 
         positive_ctx: list[dict] = []
         positive_json: list[dict] = []
