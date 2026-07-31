@@ -128,9 +128,15 @@ def _storyline_name_matches_content(name: str, content: str) -> bool:
 
     Uses a lightweight CJK/latin token-overlap heuristic rather than an
     embedding call (this runs inside the resolver hot path). When the historical
-    name has drifted — e.g. ``特朗普再提选举舞弊`` was reused for a Philippines
-    reef story — overlap is ~0 and the caller regenerates the name from today's
+    name has drifted — e.g. ``美以伊局势`` was reused for Russia-Ukraine content —
+    same-script overlap is ~0 and the caller regenerates the name from today's
     anchors.
+
+    **Cross-script guard:** when the name and content are in different scripts
+    (one CJK, one latin) token overlap is structurally 0 even for the same
+    topic (e.g. Chinese storyline name ``关税战`` with English headlines "tariff
+    hike"). In that case the check is skipped (returns True) so that legitimate
+    cross-language reuse is not false-flagged as stale.
     """
     if not name or not content:
         return False
@@ -138,12 +144,20 @@ def _storyline_name_matches_content(name: str, content: str) -> bool:
     content_tokens = _content_tokens(content)
     if not name_tokens or not content_tokens:
         return False
+    # When name and content are in different scripts (CJK vs latin), token
+    # overlap is structurally 0 even for the same topic. Give the benefit of
+    # the doubt and trust the historical name.
+    name_has_cjk = _CJK_SEARCH.search(name) is not None
+    content_has_cjk = _CJK_SEARCH.search(content) is not None
+    if name_has_cjk != content_has_cjk:
+        return True
     overlap = len(name_tokens & content_tokens) / len(name_tokens)
     return overlap >= _STORYLINE_NAME_MIN_OVERLAP
 
 
 # CJK char + latin word tokenization for the name-coherence check.
 _TOKEN_PATTERN = re.compile(r"[一-鿿]|[a-zA-Z]{2,}")
+_CJK_SEARCH = re.compile(r"[一-鿿]")
 
 
 def _content_tokens(text: str) -> set[str]:
@@ -929,23 +943,24 @@ class StorylineResolver:
                     None,
                 )
                 historical_name = str((reuse_match or {}).get("storyline_name") or reuse_key)
-                # Issue #4 (Fix 2 + Additional 3): the historical name may be
-                # stale — a weak cosine match reused this key even though the
-                # topic has drifted (e.g. storyline-3 meant "特朗普再提选举舞弊"
-                # on 7/18 but got attached to Philippines reef content on 7/22).
-                # Only validate the name when the history is non-adjacent
-                # (≥3 days old): for yesterday's storylines the name is
-                # obviously still fresh, and the cross-language token-overlap
-                # heuristic is unreliable for adjacent reuse. For older
-                # history, regenerate the name from today's anchors if the
-                # historical name no longer describes today's content.
+                # The historical name may be stale — a weak cosine match reused
+                # this key even though the topic has drifted (e.g. storyline-3
+                # meant "特朗普再提选举舞弊" on 7/18 but got attached to Philippines
+                # reef content on 7/22; or "美以伊局势" on 7/30 drifted to
+                # Russia-Ukraine content on 7/31). Always validate the name
+                # against today's content: regenerate from today's anchors if
+                # the historical name no longer describes it. The
+                # ``_storyline_name_matches_content`` check is script-aware —
+                # cross-script name/content pairs (Chinese name, English
+                # headlines) pass by default since token overlap can't compare
+                # across scripts, while same-script pairs with zero overlap
+                # signal genuine topic drift.
                 reuse_report_date = (reuse_match or {}).get("report_date") or ""
-                days_old = _days_between(reuse_report_date, current_date.isoformat())
                 today_text = " ".join(
                     str(profiles[idx]["lead_title"])
                     for idx in core_nodes[:3]
                 )
-                if days_old >= 3 and not _storyline_name_matches_content(historical_name, today_text):
+                if not _storyline_name_matches_content(historical_name, today_text):
                     storyline_name = self._build_storyline_name(
                         [clusters[idx] for idx in core_nodes]
                     )

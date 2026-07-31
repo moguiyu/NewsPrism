@@ -312,6 +312,11 @@ def _is_russia_ukraine_military_escalation(text: str) -> bool:
     )
 
 
+def _topic_name_relates_to_russia_ukraine(name: str) -> bool:
+    """True when the topic name itself mentions Russia or Ukraine entities."""
+    return bool(_RUSSIA_RE.search(name) or _UKRAINE_RE.search(name))
+
+
 def _repair_hot_topic_label(
     name: str | None,
     name_en: str | None,
@@ -324,7 +329,15 @@ def _repair_hot_topic_label(
     is_ru_ua_escalation = _is_russia_ukraine_military_escalation(family_text)
     is_stale_refinery_label = bool(_REFINERY_RE.search(f"{topic_name}\n{topic_name_en or ''}"))
 
-    if is_ru_ua_escalation and (is_stale_refinery_label or not _is_public_chinese_hot_topic_name(topic_name)):
+    # When the family content is genuinely Russia-Ukraine military escalation,
+    # repair the label unless it already mentions Russia or Ukraine. Previously
+    # this only fired for non-Chinese or stale-refinery labels — but a
+    # wrong-but-valid-Chinese label like "美以伊局势" (US-Israel-Iran) would pass
+    # through unchecked, producing a tab named after one conflict containing
+    # stories about another.
+    if is_ru_ua_escalation and (
+        is_stale_refinery_label or not _topic_name_relates_to_russia_ukraine(topic_name)
+    ):
         return "俄乌军事升级", "Russia-Ukraine military escalation"
 
     if _is_public_chinese_hot_topic_name(topic_name):

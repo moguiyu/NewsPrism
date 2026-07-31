@@ -1117,6 +1117,58 @@ class TestHotTopics:
         assert "Russia&#39;s largest refinery" not in html
         assert '<span data-lang-zh>俄乌军事升级</span><span data-lang-en>Russia-Ukraine military escalation</span>' in html
 
+    def test_template_repairs_wrong_chinese_hot_topic_name_for_ru_ua_family(self, renderer, tmp_path):
+        """Regression for 2026-07-31: a hot-topic tab named "美以伊局势"
+        (valid Chinese, US-Israel-Iran) contained Russia-Ukraine stories.
+        The renderer's Ru-Ua label repair must fire even when the existing
+        label is valid Chinese — previously it only fired for non-Chinese
+        or stale-refinery labels.
+        """
+        renderer.output_dir = tmp_path
+
+        hot_summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://example.com/poland",
+                        title="Polish PM says Russian missile entered Poland",
+                        source_name="Reuters",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Russia Ukraine military escalation body.",
+                    )
+                ],
+            ),
+            summary="**波兰总理称俄导弹落入波兰境内**\n\n俄军空袭持续，乌方呼吁防空支援。",
+            perspectives={},
+            short_topic_name="俄导弹落入波兰",
+            macro_topic_name="美以伊局势",
+            macro_topic_name_en="US-Israel-Iran",
+            storyline_name="美以伊局势",
+        )
+
+        html_path = renderer.render(
+            [],
+            datetime.now(tz=timezone.utc).date(),
+            hot_topics=[
+                {
+                    "dom_id": "hot-topic-1",
+                    "macro_topic_key": "storyline-8aa4fcb4",
+                    "macro_topic_name": "美以伊局势",
+                    "macro_topic_name_en": "US-Israel-Iran",
+                    "storyline_name": "美以伊局势",
+                    "topic_icon_key": "war",
+                    "summaries": [hot_summary],
+                }
+            ],
+        )
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert payload["hot_topics"][0]["macro_topic_name"] == "俄乌军事升级"
+        assert payload["hot_topics"][0]["macro_topic_name_en"] == "Russia-Ukraine military escalation"
+        assert "美以伊局势" not in html
+
     def test_template_wraps_emoji_with_fallback_spans(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
 
