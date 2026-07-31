@@ -571,6 +571,243 @@ def test_official_publisher_mismatch_is_rejected_even_when_event_matches():
     assert rejected == [("publisher_target_mismatch", article.url)]
 
 
+def test_high_confidence_governmental_domain_bypasses_translated_label_mismatch():
+    """Regression for the 2026-07-31 false rejection: target label is in
+    Chinese ("美国白宫" == The White House) while publisher_entity is in
+    English, so free-text equality never matches even though the verifier
+    already judged same_entity with full confidence on whitehouse.gov."""
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget(region="us", label="美国白宫", role="government")
+    article = _article(
+        "whitehouse.gov",
+        "美国白宫回应中美经贸通话",
+        url="https://www.whitehouse.gov/briefing-room/statement",
+    )
+    article.content = "美国白宫就中美经贸通话发布声明。" * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web",
+            publisher_entity="The White House",
+            relationship="same_entity",
+            confidence=1.0,
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(_cluster(), target, [
+            {"url": article.url, "title": article.title, "content": article.content}
+        ], None, "official")
+    assert rejected == []
+    assert len(accepted) == 1
+    assert accepted[0].is_official_source is True
+
+
+def test_high_confidence_governmental_domain_bypasses_acronym_mismatch():
+    """Regression for the 2026-07-31 CENTCOM false rejection: target label is
+    the bare acronym "CENTCOM" while publisher_entity is the spelled-out
+    name, so free-text equality never matches even though the verifier
+    already judged same_entity with full confidence on centcom.mil."""
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget(region="us", label="CENTCOM", role="government_agency")
+    article = _article(
+        "centcom.mil",
+        "CENTCOM statement on regional operations",
+        url="https://www.centcom.mil/press-release",
+    )
+    article.content = "CENTCOM released a statement on regional operations. " * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web",
+            publisher_entity="U.S. Central Command (CENTCOM)",
+            relationship="same_entity",
+            confidence=1.0,
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(_cluster(), target, [
+            {"url": article.url, "title": article.title, "content": article.content}
+        ], None, "official")
+    assert rejected == []
+    assert len(accepted) == 1
+    assert accepted[0].is_official_source is True
+
+
+def test_high_confidence_same_entity_still_requires_governmental_domain():
+    """The confidence+domain bypass must not become a general escape hatch:
+    a same_entity, high-confidence verdict on a non-governmental domain
+    (microsoft.ai) still falls through to the strict text-equality check, so
+    an unrelated org still gets caught."""
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget(region="us", label="Example Ministry", role="ministry")
+    article = _article("microsoft.ai", "Example Ministry policy", url="https://microsoft.ai/policy")
+    article.content = "Example Ministry policy announcement. " * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web",
+            publisher_entity="Microsoft",
+            relationship="same_entity",
+            confidence=1.0,
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(_cluster(), target, [
+            {"url": article.url, "title": article.title, "content": article.content}
+        ], None, "official")
+    assert accepted == []
+    assert rejected == [("publisher_target_mismatch", article.url)]
+
+
+def test_relationship_mismatch_is_rejected_even_with_high_confidence_and_gov_domain():
+    """The verifier's relationship field remains the primary integrity
+    signal: a non-same_entity verdict is rejected regardless of confidence
+    or a governmental domain — this is the protection commit 0ffca0f added
+    and it must not regress."""
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget(region="us", label="CENTCOM", role="government_agency")
+    article = _article(
+        "centcom.mil", "CENTCOM mentioned in wire report", url="https://www.centcom.mil/some-page"
+    )
+    article.content = "A wire report references CENTCOM among other regional commands. " * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web",
+            publisher_entity="Some Other Command",
+            relationship="uncertain",
+            confidence=0.9,
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(_cluster(), target, [
+            {"url": article.url, "title": article.title, "content": article.content}
+        ], None, "official")
+    assert accepted == []
+    assert rejected == [("publisher_target_mismatch", article.url)]
+
+
+def test_registry_entity_aliases_accept_translated_or_acronym_target_label():
+    """3b: a reviewed source_verdicts binding can list entity_aliases so one
+    domain entry matches the target under any accepted name form (English
+    canonical name, Chinese translation, acronym) instead of requiring the
+    target label to exactly equal a single stored entity string."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "whitehouse.gov": {
+            "verdict": "official_web",
+            "region": "us",
+            "entity": "The White House",
+            "entity_aliases": ["美国白宫", "白宫", "White House"],
+        },
+        "shared-government.example": {
+            "verdict": "official_web",
+            "region": "us",
+            "entity": "Example Ministry",
+        },
+    }
+    seeker = ActiveSeeker(cfg)
+    zh_target = VoiceTarget(region="us", label="美国白宫", role="government")
+    identity, reason = seeker._registry_identity(
+        "https://www.whitehouse.gov/briefing-room/statement", zh_target, "official"
+    )
+    assert reason is None
+    assert identity is not None and identity.relationship == "same_entity"
+
+    # A non-governmental registry domain (no .gov/.mil suffix) keeps the
+    # strict alias requirement: an unrelated target label is hard-rejected
+    # rather than left to fall through to the verifier. Only a *governmental*
+    # domain's alias miss falls through — see
+    # test_registry_alias_miss_on_governmental_domain_falls_through_not_hard_rejects.
+    unrelated_target = VoiceTarget(region="us", label="Other Ministry", role="government")
+    _, unrelated_reason = seeker._registry_identity(
+        "https://shared-government.example/statement", unrelated_target, "official"
+    )
+    assert unrelated_reason == "publisher_binding_unverified"
+
+
+def test_registry_alias_miss_on_governmental_domain_falls_through_not_hard_rejects():
+    """A reviewed governmental-domain binding whose alias list doesn't happen
+    to cover this particular target-label phrasing must not hard-block the
+    candidate (the impact LLM's voice_needs labels vary in translation and
+    phrasing far more than any fixed alias list can enumerate) — it should
+    fall through to the verifier-based judgment in _official_identity_reason
+    instead. Non-governmental registry domains keep the strict alias
+    requirement (see test_official_registry_requires_exact_entity_binding...).
+    """
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "treasury.gov": {
+            "verdict": "official_web",
+            "region": "us",
+            "entity": "U.S. Department of the Treasury",
+            "entity_aliases": ["美国财政部"],
+        },
+    }
+    seeker = ActiveSeeker(cfg)
+    # Label not present in the alias list at all.
+    target = VoiceTarget(region="us", label="美财政部", role="ministry")
+    identity, reason = seeker._registry_identity(
+        "https://home.treasury.gov/press-release", target, "official"
+    )
+    assert identity is None and reason is None
+
+    article = _article(
+        "home.treasury.gov",
+        "美财政部就中美经贸问题发表声明",
+        url="https://home.treasury.gov/press-release",
+    )
+    article.content = "美财政部就中美经贸问题发表声明。" * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web",
+            publisher_entity="U.S. Department of the Treasury",
+            relationship="same_entity",
+            confidence=1.0,
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(_cluster(), target, [
+            {"url": article.url, "title": article.title, "content": article.content}
+        ], None, "official")
+    assert rejected == []
+    assert len(accepted) == 1
+
+
+def test_governmental_domain_tail_bypass_accepts_exact_match_without_confidence():
+    """Reproduces the fourth 2026-07-31 production case: target label
+    "U.S. Department of State" and publisher_entity are textually identical,
+    but the verifier didn't populate confidence (so the high-confidence fast
+    path doesn't fire) and the old code fell through to the domain-vs-label
+    equality tail, where registered.domain("state.gov") == "state" never
+    equals the full department name. On a governmental domain that tail must
+    be skipped once the entity text already matched."""
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget(region="us", label="U.S. Department of State", role="government_agency")
+    article = _article(
+        "state.gov",
+        "U.S. Department of State issues statement",
+        url="https://www.state.gov/statement",
+    )
+    article.content = "The U.S. Department of State issued a statement on the talks. " * 10
+    with patch.object(
+        ActiveSeeker,
+        "_verify_candidate",
+        return_value=CandidateIdentity(
+            source_type="official_web",
+            publisher_entity="U.S. Department of State",
+            relationship="same_entity",
+            # confidence intentionally omitted (None) — matches production evidence.
+        ),
+    ):
+        accepted, rejected = seeker._accept_results(_cluster(), target, [
+            {"url": article.url, "title": article.title, "content": article.content}
+        ], None, "official")
+    assert rejected == []
+    assert len(accepted) == 1
+
+
 def test_ambiguous_official_binding_is_queued_for_review():
     seeker = ActiveSeeker(_config())
     cluster = _cluster()
