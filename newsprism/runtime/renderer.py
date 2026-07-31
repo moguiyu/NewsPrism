@@ -1088,6 +1088,7 @@ class HtmlRenderer:
         # clusters share a storyline_key (e.g. a 2-member family that didn't
         # claim a tab because of max_topic_tabs), tag them with a shared label
         # so the reader can see the connection. Flat tag — no card/lift/shadow.
+        _CJK_CHAR = re.compile(r"[一-鿿]")
         shared_label_by_key: dict[str, str] = {}
         shared_label_en_by_key: dict[str, str] = {}
         key_counts: dict[str, int] = {}
@@ -1220,6 +1221,67 @@ class HtmlRenderer:
                     "clusters": member_json,
                 }
             )
+
+        # Propagate repaired hot-topic tab names to main-feed shared labels.
+        # The tab label was repaired by _repair_hot_topic_label above, but
+        # shared_label_by_key was populated earlier from the stale
+        # clusters.storyline_name. Any main-feed card sharing a hot-topic
+        # family's storyline_key should show the repaired name, not the stale
+        # one (e.g. "俄乌军事升级" instead of "美以伊局势").
+        repaired_keys: set[str] = set()
+        for hot in hot_topics_ctx:
+            hot_key = hot.get("macro_topic_key") or hot.get("storyline_key")
+            if not hot_key or hot_key not in shared_label_by_key:
+                continue
+            repaired = hot.get("macro_topic_name") or ""
+            repaired_en = hot.get("macro_topic_name_en") or repaired
+            if repaired and repaired != shared_label_by_key[hot_key]:
+                shared_label_by_key[hot_key] = repaired
+                shared_label_en_by_key[hot_key] = repaired_en
+                repaired_keys.add(hot_key)
+                for ctx, jsonp in zip(clusters_ctx, clusters_json):
+                    if ctx.get("storyline_key") == hot_key:
+                        ctx["shared_storyline_label"] = repaired
+                        ctx["shared_storyline_label_en"] = repaired_en
+                        jsonp["shared_storyline_label"] = repaired
+                        jsonp["shared_storyline_label_en"] = repaired_en
+
+        # Stale-name guard for non-hot-topic families: if a shared label was
+        # NOT repaired above and its CJK chars have zero overlap with the
+        # card headlines, the storyline_name was reused from a stale historical
+        # key. Clear the label so the tag doesn't render with a wrong name
+        # (e.g. "美限制机器人进口" on Tesla/Amazon robotaxi cards).
+        for key in list(shared_label_by_key.keys()):
+            if key in repaired_keys:
+                continue
+            label = shared_label_by_key[key]
+            label_cjk = set(_CJK_CHAR.findall(label))
+            if not label_cjk:
+                continue
+            # Check against all main-feed headlines with this key.
+            any_overlap = False
+            has_cjk_headline = False
+            for ctx in clusters_ctx:
+                if ctx.get("storyline_key") != key:
+                    continue
+                headline = ctx.get("headline") or ""
+                headline_cjk = set(_CJK_CHAR.findall(headline))
+                if headline_cjk:
+                    has_cjk_headline = True
+                    if label_cjk & headline_cjk:
+                        any_overlap = True
+                        break
+            # Only suppress when there's at least one CJK headline to compare
+            # against. All-non-CJK headlines (cross-script) can't be checked.
+            if has_cjk_headline and not any_overlap:
+                del shared_label_by_key[key]
+                del shared_label_en_by_key[key]
+                for ctx, jsonp in zip(clusters_ctx, clusters_json):
+                    if ctx.get("storyline_key") == key:
+                        ctx["shared_storyline_label"] = ""
+                        ctx["shared_storyline_label_en"] = ""
+                        jsonp["shared_storyline_label"] = ""
+                        jsonp["shared_storyline_label_en"] = ""
 
         positive_ctx: list[dict] = []
         positive_json: list[dict] = []
