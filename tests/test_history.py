@@ -542,6 +542,43 @@ def test_resolver_regenerates_name_on_adjacent_same_script_drift():
     assert "美以伊局势" not in names
 
 
+def test_resolver_regenerates_name_on_same_domain_different_entity():
+    """Regression for the 2026-07-31 Tab 3 issue: a storyline named
+    "美联储宣布维持利率不" (Fed holds rates) was reused for Bank of England and
+    Bank of Japan rate-decision content. The entity-prefix guard catches this:
+    none of {美, 联, 储} appear in BoE/BoJ content, so the name is regenerated
+    even though generic vocabulary (维持, 利率, 不) gives 45% token overlap.
+    """
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer(
+            [{"left_index": 0, "right_index": 1, "relation": "same_core_storyline", "confidence": 0.80}]
+        ),
+        similarity_fn=lambda _t, _h: 0.55,
+    )
+    clusters = [
+        ArticleCluster(topic_category="Business", articles=[_article("英国央行维持利率3.75%不变", [1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="Business", articles=[_article("日本央行维持利率1%不变", [0.95, 0.05, 0.0])]),
+    ]
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="Business",
+            article_ids=[1],
+            summary="Federal Reserve holds interest rate",
+            perspectives={},
+            report_date="2026-07-30",
+            storyline_key="single-ad5f91a3",
+            storyline_name="美联储宣布维持利率不",
+            storyline_role="core",
+            storyline_confidence=0.81,
+        )
+    ]
+    resolved = resolver.resolve(clusters, historical, datetime(2026, 7, 31, tzinfo=timezone.utc).date())
+    names = {cluster.storyline_name for cluster in resolved}
+    assert "美联储宣布维持利率不" not in names
+
+
 def test_resolver_uses_llm_name_for_new_family():
     resolver = StorylineResolver(
         _config(),
