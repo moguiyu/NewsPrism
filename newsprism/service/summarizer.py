@@ -981,6 +981,21 @@ class Summarizer:
                     return True
         return False
 
+    @staticmethod
+    def _bare_digits_in_evidence(claim: str, evidence: str) -> bool:
+        """Check if the bare digits of a claim appear in the evidence.
+
+        Handles CJK unit suffixes: a claim like ``28人`` (28 people) should
+        match source text containing ``28 dead`` — the ``人`` suffix prevents
+        a literal substring match against English sources, but the bare
+        digits ``28`` are the same number. Only applies to claims with 2+
+        digits to avoid matching trivial single-digit numbers.
+        """
+        digits = re.sub(r"[^\d]", "", claim)
+        if len(digits) < 2:
+            return False
+        return digits in evidence
+
     def _unsupported_numeric_claims(
         self,
         cluster: ArticleCluster,
@@ -998,6 +1013,7 @@ class Summarizer:
             for claim in self._numeric_claims(summary_text)
             if self._normalized_claim_text(claim) not in evidence
             and not self._claim_supported_by_money_amounts(claim, evidence_money)
+            and not self._bare_digits_in_evidence(claim, evidence)
         ]
         vote_pattern = re.compile(r"\d[\d,]*\s*[-–—]\s*\d[\d,]*")
         source_vote_counts = {
