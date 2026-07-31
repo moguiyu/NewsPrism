@@ -2708,7 +2708,7 @@
             <div class="source-row">
               <div class="source-chips">
                 {% for src in c.footer_sources %}
-                {% if src.url %}
+                {% if src.url and not src.is_placeholder %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
                   <span class="dot"></span>{{ source_chip_body(src) }}
                 </a>
@@ -2780,7 +2780,7 @@
             <div class="source-row">
               <div class="source-chips">
                 {% for src in c.footer_sources %}
-                {% if src.url %}
+                {% if src.url and not src.is_placeholder %}
                 <a class="src-chip src-chip-link" href="{{ src.url }}" target="_blank" rel="noopener">
                   <span class="dot"></span>{{ source_chip_body(src) }}
                 </a>

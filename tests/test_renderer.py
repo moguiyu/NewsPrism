@@ -1950,3 +1950,56 @@ def test_render_does_not_add_shared_tag_when_only_one_cluster_per_key(renderer, 
     html_path = renderer.render([summary], date(2026, 7, 21), update_latest=False)
     html = html_path.read_text(encoding="utf-8")
     assert 'class="shared-storyline-tag"' not in html
+
+
+def test_placeholder_sources_never_render_as_broken_links(renderer, tmp_path):
+    """Regression test: placeholder sources must never have truthy URLs that
+    render as broken links in the template. After fix: placeholder URL is set
+    to None in _build_source_entry, so template guards (src.url and not src.is_placeholder)
+    correctly skip the href= attribute, making placeholders non-navigable.
+    """
+    renderer.output_dir = tmp_path
+    organic = Article(
+        url="https://reuters.com/japan-earthquake",
+        title="Japan's earthquakes: Breaking news",
+        source_name="Reuters",
+        published_at=datetime.now(tz=timezone.utc),
+        content="Japan earthquake coverage.",
+        origin_region="us",
+    )
+    placeholder = Article(
+        url="placeholder:jp:Japan's earthquakes: Maps and graphics",
+        title="待补充：Japan声音",
+        source_name="[Japan声音待补]",
+        published_at=datetime.now(tz=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="jp",
+        origin_region="jp",
+        searched_provider="tavily_search",
+        is_placeholder=True,
+        search_acceptance_status="failed",
+        search_acceptance_reason="no_acceptable_result",
+    )
+    summary = ClusterSummary(
+        cluster=ArticleCluster(topic_category="World News", articles=[organic, placeholder]),
+        summary="**Japan earthquakes map**\n\nNew earthquake map released.",
+        perspectives={},
+    )
+
+    html_path = renderer.render([summary], date(2026, 7, 21), update_latest=False)
+    html = html_path.read_text(encoding="utf-8")
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+    # In the JSON payload, placeholder sources must have url = None
+    placeholder_sources = [s for s in payload["clusters"][0]["footer_sources"] if s["is_placeholder"]]
+    assert len(placeholder_sources) == 1
+    assert placeholder_sources[0]["url"] is None, "Placeholder source URL must be None to prevent broken links"
+
+    # In the rendered HTML, there must be no href="placeholder:..." attributes
+    # (which would be broken links that go nowhere when clicked)
+    assert 'href="placeholder:' not in html, "HTML must not contain broken placeholder links"
+
+    # Placeholder should still appear in the rendered HTML with the failure reason
+    assert "[Japan声音待補]" in html or "[Japan声音待补]" in html
+    assert "无可用结果" in html
