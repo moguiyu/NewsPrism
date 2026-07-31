@@ -421,15 +421,16 @@ def test_resolver_reuses_historical_identity():
 
 
 def test_resolver_regenerates_name_when_history_reuse_is_stale():
-    """Issue #4 Fix 2 + Additional fix #3: when a historical storyline_key is
-    reused via a weak cosine match for a DIFFERENT topic (≥3 days old), the
-    historical name is dropped and a fresh name is generated from today's
-    content. The KEY is preserved for cross-day continuity.
+    """When a historical storyline_key is reused via a weak cosine match for a
+    DIFFERENT topic, the historical name is dropped and a fresh name is
+    generated from today's content. The KEY is preserved for cross-day
+    continuity.
 
     Reproduces the 7/22 incident where storyline-3 (historically
     "特朗普再提选举舞弊") was attached to Philippines reef content via a weak
     match — the user saw a tab named "特朗普再提选举舞弊" containing stories
-    about 中方/菲方/仁爱礁.
+    about 中方/菲方/仁爱礁. Uses Chinese content (as production does per the
+    style guide) so the same-script token-overlap check can detect the drift.
     """
     resolver = StorylineResolver(
         _config(),
@@ -439,8 +440,8 @@ def test_resolver_regenerates_name_when_history_reuse_is_stale():
         similarity_fn=lambda _t, _h: 0.6,  # weak but above threshold → triggers reuse
     )
     clusters = [
-        ArticleCluster(topic_category="World News", articles=[_article("China warns Philippines over reef", [1.0, 0.0, 0.0])]),
-        ArticleCluster(topic_category="World News", articles=[_article("Coast guard clashes near disputed reef", [0.95, 0.05, 0.0])]),
+        ArticleCluster(topic_category="World News", articles=[_article("中方就仁爱礁问题警告菲方", [1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="World News", articles=[_article("海警在争议礁石附近对峙", [0.95, 0.05, 0.0])]),
     ]
     # 5-day-old history with an UNRELATED storyline name → name should regenerate.
     historical = [
@@ -501,6 +502,44 @@ def test_resolver_keeps_historical_name_when_adjacent():
     resolved = resolver.resolve(clusters, historical, datetime(2026, 7, 22, tzinfo=timezone.utc).date())
     # Adjacent history → name preserved even with cross-language mismatch.
     assert "关税战" in {cluster.storyline_name for cluster in resolved}
+
+
+def test_resolver_regenerates_name_on_adjacent_same_script_drift():
+    """Regression for the 2026-07-31 incident: a storyline named "美以伊局势"
+    (US-Israel-Iran) was reused for Russia-Ukraine content the very next day.
+    The name and content are both Chinese (same script), so the cross-script
+    guard does NOT apply — zero token overlap correctly detects the drift and
+    the name is regenerated even though the history is only 1 day old.
+    """
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer(
+            [{"left_index": 0, "right_index": 1, "relation": "same_core_storyline", "confidence": 0.80}]
+        ),
+        similarity_fn=lambda _t, _h: 0.55,
+    )
+    clusters = [
+        ArticleCluster(topic_category="World News", articles=[_article("波兰总理称俄导弹落入波兰境内", [1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="World News", articles=[_article("俄军大规模空袭乌克兰致多人伤亡", [0.95, 0.05, 0.0])]),
+    ]
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="World News",
+            article_ids=[1],
+            summary="US Israel Iran military escalation",
+            perspectives={},
+            report_date="2026-07-30",  # 1 day before 7/31 — adjacent
+            storyline_key="storyline-8aa4fcb4",
+            storyline_name="美以伊局势",
+            storyline_role="core",
+            storyline_confidence=0.81,
+        )
+    ]
+    resolved = resolver.resolve(clusters, historical, datetime(2026, 7, 31, tzinfo=timezone.utc).date())
+    names = {cluster.storyline_name for cluster in resolved}
+    # Same-script, zero-overlap → name regenerated despite adjacent reuse.
+    assert "美以伊局势" not in names
 
 
 def test_resolver_uses_llm_name_for_new_family():
