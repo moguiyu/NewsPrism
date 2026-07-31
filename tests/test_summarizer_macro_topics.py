@@ -348,6 +348,80 @@ def test_numeric_grounding_blocks_unsupported_vote_count(monkeypatch):
     assert "unsupported_numeric_claim" in summary.quality_flags
 
 
+def test_numeric_grounding_accepts_currency_scale_equivalent_claim():
+    """Regression for cluster 5775 (2026-07-31): a Chinese claim like '114亿美元'
+    must be recognized as supported when English sources say '$11.4 billion' /
+    '$11.5 billion' — same fact, different currency notation, not a substring
+    match."""
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/ap",
+                title="EU lays out $11.4 billion for 7 AI gigafactories",
+                source_name="AP",
+                published_at=datetime.now(tz=timezone.utc),
+                content="The EU unveiled $11.4 billion in funding for seven AI gigafactories across the bloc.",
+            ),
+            Article(
+                url="https://example.com/hindu",
+                title="EU announces AI investment package",
+                source_name="The Hindu",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Brussels pledged a package worth €10 billion ($11.5 billion) for AI gigafactories.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**欧盟为7个AI超算中心投入114亿美元**\n\n欧盟宣布为7个人工智能超算中心投入114亿美元资金。",
+        quality_status="publishable",
+    )
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "114亿美元" in summary.summary
+    assert summary.quality_status == "publishable"
+    assert "unsupported_numeric_claim" not in summary.quality_flags
+
+
+def test_numeric_grounding_headline_fallback_never_emits_raw_source_title(monkeypatch):
+    """Regression for cluster 5779 (2026-07-31): when the LLM rewrite fails and
+    the headline itself carries a genuinely unsupported number, the fallback
+    must strip just the flagged value — never replace the whole headline with
+    the raw, non-Chinese article title."""
+    summarizer = Summarizer(_config())
+    raw_title = "Цены на чипы Qualcomm вырастут на 15%"
+    cluster = ArticleCluster(
+        topic_category=raw_title,
+        articles=[
+            Article(
+                url="https://example.com/ru",
+                title=raw_title,
+                source_name="RU Outlet",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Компания Qualcomm заявила о повышении цен на чипы на 15% из-за роста издержек.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**高通芯片提价23%**\n\n高通宣布芯片价格上调23%，理由是成本上升。",
+        quality_status="publishable",
+    )
+    monkeypatch.setattr(summarizer, "_rewrite_grounded_summary", lambda *_args: None)
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    headline = summary.summary.splitlines()[0]
+    assert raw_title not in summary.summary
+    assert headline != f"**{raw_title}**"
+    assert "23%" not in summary.summary
+    assert "高通" in headline
+    assert summary.quality_status == "needs_review"
+
+
 def test_numeric_grounding_accepts_source_supported_vote_count():
     summarizer = Summarizer(_config())
     cluster = ArticleCluster(
