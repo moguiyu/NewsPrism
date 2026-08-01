@@ -27,7 +27,7 @@ from newsprism.service.categories import (
 )
 from newsprism.service.language import looks_like_chinese_text
 from newsprism.service.locales import region_flag, region_flags
-from newsprism.types import ClusterSummary, SourceCertification
+from newsprism.types import ClusterSummary, SourceCertification, is_real_article
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +363,80 @@ def _is_renderable_perspective(text: str) -> bool:
     return not any(pattern.search(normalized) for pattern in _INVALID_PERSPECTIVE_PATTERNS)
 
 
+def _placeholder_source_label_en(source_name: str) -> str:
+    """Translate the compact synthetic source marker without an LLM call."""
+    label = str(source_name or "").strip()
+    bracketed = label.startswith("[") and label.endswith("]")
+    inner = label[1:-1] if bracketed else label
+    inner = inner.replace("声音待补", " voice pending")
+    inner = inner.replace("视角待补", " perspective pending")
+    inner = inner.replace("待补", " pending")
+    inner = re.sub(r"\s+", " ", inner).strip()
+    return f"[{inner}]" if bracketed else inner
+
+
+def _is_real_article(article: object) -> bool:
+    return is_real_article(article)  # type: ignore[arg-type]
+
+
+def _is_background_search_meta(meta: dict) -> bool:
+    role = str(meta.get("search_evidence_role") or meta.get("evidence_role") or "").strip().lower()
+    reason = str(meta.get("search_acceptance_reason") or "").strip().lower()
+    freshness = str(meta.get("result_freshness_state") or "").strip().lower()
+    return (
+        role in {"background_context", "official_confirmation", "background"}
+        or reason in {"background_context", "official_confirmation", "stale_result", "event_mismatch"}
+        or freshness in {"stale", "old", "background"}
+    )
+
+
+def _counts_as_current_perspective(meta: dict) -> bool:
+    if bool(meta.get("is_placeholder")) or _is_background_search_meta(meta):
+        return False
+    if not bool(meta.get("is_searched")):
+        return True
+    status = meta.get("search_acceptance_status")
+    if status is not None and status != "accepted":
+        return False
+    # A persisted accepted row without freshness or an explicit evidence role
+    # is review-only. Legacy in-memory test/articles with no acceptance verdict
+    # remain renderable for compatibility.
+    if status == "accepted" and not (
+        meta.get("result_freshness_state")
+        or meta.get("search_evidence_role")
+        or meta.get("search_acceptance_reason") == "current_event_perspective"
+    ):
+        return False
+    freshness = str(meta.get("result_freshness_state") or "").strip().lower()
+    return freshness not in {"stale", "old", "background"}
+
+
+def _counts_for_summary(
+    summary: ClusterSummary,
+    source_regions: dict[str, str] | None = None,
+) -> dict[str, int]:
+    source_regions = source_regions or {}
+    real_articles = [article for article in summary.cluster.articles if _is_real_article(article)]
+    placeholders = [article for article in summary.cluster.articles if not _is_real_article(article)]
+    real_sources = {article.source_name for article in real_articles}
+    organic_articles = [article for article in real_articles if not article.is_searched]
+    organic_sources = {article.source_name for article in organic_articles}
+    organic_regions = {
+        article.origin_region or source_regions.get(article.source_name)
+        for article in organic_articles
+    } - {None, ""}
+    return {
+        "article_count": len(real_articles),
+        "real_article_count": len(real_articles),
+        "placeholder_count": len(placeholders),
+        "total_article_count": len(real_articles) + len(placeholders),
+        "real_source_count": len(real_sources),
+        "placeholder_source_count": len({article.source_name for article in placeholders}),
+        "organic_unique_sources": len(organic_sources),
+        "organic_unique_regions": len(organic_regions),
+    }
+
+
 def _truncate_preview(text: str, max_chars: int = 54) -> str:
     compact = _normalize_text_whitespace(text)
     if len(compact) <= max_chars:
@@ -576,9 +650,11 @@ class HtmlRenderer:
                     "is_official_source": article.is_official_source,
                     "origin_region": article.origin_region,
                     "searched_provider": article.searched_provider,
-                    "is_placeholder": getattr(article, "is_placeholder", False),
+                    "is_placeholder": not _is_real_article(article),
                     "search_acceptance_status": getattr(article, "search_acceptance_status", None),
                     "search_acceptance_reason": getattr(article, "search_acceptance_reason", None),
+                    "result_freshness_state": getattr(article, "result_freshness_state", None),
+                    "search_evidence_role": getattr(article, "search_evidence_role", None),
                 }
             )
         return dict(by_source)
@@ -626,6 +702,16 @@ class HtmlRenderer:
         if source_name == "联合早报" and url_domain == "zaochenbao.com" and not is_searched:
             provenance_label = "转载镜像"
             provenance_label_en = "Mirror"
+        elif is_searched and _is_background_search_meta(meta):
+            provenance_label = "背景资料"
+            provenance_label_en = "Background context"
+        elif is_searched and meta.get("search_acceptance_status") == "accepted" and not (
+            meta.get("result_freshness_state")
+            or meta.get("search_evidence_role")
+            or meta.get("search_acceptance_reason") == "current_event_perspective"
+        ):
+            provenance_label = "待核验"
+            provenance_label_en = "Review only"
         compact_label = source_name
         compact_label_en = source_name
         if is_searched:
@@ -643,7 +729,7 @@ class HtmlRenderer:
         placeholder_reason_zh, placeholder_reason_en = _placeholder_failure_label(acceptance_reason)
         if is_placeholder:
             compact_label = f"🔍{source_name}"
-            compact_label_en = f"🔍{source_name}"
+            compact_label_en = f"🔍{_placeholder_source_label_en(source_name)}"
             provenance_label = placeholder_reason_zh
             provenance_label_en = placeholder_reason_en
             url = None  # Nullify synthetic placeholder URL to prevent broken links in template
@@ -662,6 +748,9 @@ class HtmlRenderer:
             "platform": platform,
             "is_official_source": meta.get("is_official_source", False),
             "searched_provider": meta.get("searched_provider"),
+            "result_freshness_state": meta.get("result_freshness_state"),
+            "search_evidence_role": meta.get("search_evidence_role"),
+            "counts_as_perspective": _counts_as_current_perspective(meta),
             "provenance_label": provenance_label,
             "provenance_label_en": provenance_label_en,
             "url": url,
@@ -701,8 +790,22 @@ class HtmlRenderer:
         # is_multi_source. Without this, a failed regional search leaves no
         # visible trace in the source list.
         ordered_sources = list(preferred_sources) if preferred_sources is not None else list(summary.cluster.sources)
+        if preferred_sources is not None:
+            # Keep accepted-but-non-perspective evidence visible as labelled
+            # provenance instead of silently dropping it from the footer.
+            article_meta = self._article_meta(summary)
+            ordered_sources.extend(
+                source_name
+                for source_name in summary.cluster.sources
+                if source_name not in ordered_sources
+                and any(
+                    bool(entry.get("is_searched"))
+                    and entry.get("search_acceptance_status") == "accepted"
+                    for entry in article_meta.get(source_name, [])
+                )
+            )
         for article in summary.cluster.articles:
-            if getattr(article, "is_placeholder", False) and article.source_name not in ordered_sources:
+            if not _is_real_article(article) and article.source_name not in ordered_sources:
                 ordered_sources.append(article.source_name)
         seen: set[str] = set()
         footer_sources: list[dict] = []
@@ -720,6 +823,12 @@ class HtmlRenderer:
     ) -> dict[str, object]:
         article_meta = self._article_meta(summary)
         group_definitions = self._perspective_groups_data(summary, english=english)
+        real_source_names = {
+            article.source_name
+            for article in summary.cluster.articles
+            if _is_real_article(article)
+        }
+        is_multi_source = len(real_source_names) >= 2
         if not group_definitions:
             footer_sources = self._build_footer_sources(summary)
             return {
@@ -740,8 +849,17 @@ class HtmlRenderer:
         rendered_source_names: list[str] = []
         source_cursors: dict[str, int] = defaultdict(int)
         suppressed_group_count = 0
+        eligible_source_names = {
+            source_name
+            for source_name, entries in article_meta.items()
+            if any(_counts_as_current_perspective(entry) for entry in entries)
+        }
 
         for sources, perspective in group_definitions:
+            sources = [source_name for source_name in sources if source_name in eligible_source_names]
+            if not sources:
+                suppressed_group_count += 1
+                continue
             source_entries = [
                 self._build_source_entry(source_name, article_meta, source_cursors)
                 for source_name in sources
@@ -776,14 +894,14 @@ class HtmlRenderer:
             perspective_preview = " / ".join(preview_texts)
 
         return {
-            "grouped_perspectives": renderable_groups if summary.cluster.is_multi_source else [],
-            "perspectives_list": perspectives_list if summary.cluster.is_multi_source else [],
+            "grouped_perspectives": renderable_groups if is_multi_source else [],
+            "perspectives_list": perspectives_list if is_multi_source else [],
             "source_groups": source_groups,
             "footer_sources": footer_sources,
             "rendered_perspectives": rendered_perspectives,
-            "distinct_perspective_count": distinct_perspective_count if summary.cluster.is_multi_source else 0,
+            "distinct_perspective_count": distinct_perspective_count if is_multi_source else 0,
             "suppressed_group_count": suppressed_group_count,
-            "has_expandable_perspectives": summary.cluster.is_multi_source and distinct_perspective_count >= 2,
+            "has_expandable_perspectives": is_multi_source and distinct_perspective_count >= 2,
             "perspective_preview": perspective_preview,
         }
 
@@ -851,16 +969,18 @@ class HtmlRenderer:
         storyline_display_mode: str = "main",
         include_english: bool = False,
     ) -> tuple[dict, dict]:
+        counts = _counts_for_summary(summary, self.source_regions)
         articles_data = [
             {
                 "title": article.title,
-                "url": article.url,
+                "url": article.url if _is_real_article(article) else None,
                 "source": article.source_name,
                 "published_at": article.published_at.strftime("%H:%M") if article.published_at else "",
                 "search_acceptance_status": getattr(article, "search_acceptance_status", "accepted" if article.is_searched else None),
                 "search_acceptance_reason": getattr(article, "search_acceptance_reason", ""),
                 "result_freshness_state": getattr(article, "result_freshness_state", None),
-                "is_placeholder": getattr(article, "is_placeholder", False),
+                "is_placeholder": not _is_real_article(article),
+                "is_real_article": _is_real_article(article),
             }
             for article in summary.cluster.articles
         ]
@@ -901,8 +1021,12 @@ class HtmlRenderer:
             "topic": summary.cluster.topic_category,
             "broad_category": broad,
             "broad_category_en": _BROAD_CATEGORY_EN_MAP.get(broad, broad),
-            "sources": summary.cluster.sources,
-            "is_multi": summary.cluster.is_multi_source,
+            "sources": list(dict.fromkeys(
+                article.source_name
+                for article in summary.cluster.articles
+                if _is_real_article(article)
+            )),
+            "is_multi": counts["real_source_count"] >= 2,
             "perspectives": perspective_payload["rendered_perspectives"],
             "grouped_perspectives": grouped_perspectives,
             "grouped_perspectives_en": grouped_perspectives_en,
@@ -920,7 +1044,12 @@ class HtmlRenderer:
             "source_confirmation_preview_en": "",
             "has_expandable_perspectives": perspective_payload["has_expandable_perspectives"],
             "articles": articles_data,
-            "article_count": len(articles_data),
+            "article_count": counts["article_count"],
+            "real_article_count": counts["real_article_count"],
+            "placeholder_count": counts["placeholder_count"],
+            "total_article_count": counts["total_article_count"],
+            "real_source_count": counts["real_source_count"],
+            "placeholder_source_count": counts["placeholder_source_count"],
             "freshness_state": getattr(summary, "freshness_state", "new"),
             "is_developing": getattr(summary, "freshness_state", "new") == "developing",
             "storyline_key": getattr(summary, "storyline_key", None),
@@ -956,8 +1085,8 @@ class HtmlRenderer:
             "macro_topic_name": getattr(summary, "macro_topic_name", None),
             "macro_topic_name_en": getattr(summary, "macro_topic_name_en", None) if include_english else None,
             "topic_icon_key": getattr(summary, "topic_icon_key", None),
-            "organic_unique_regions": getattr(summary, "organic_unique_regions", 0),
-            "organic_unique_sources": getattr(summary, "organic_unique_sources", 0),
+            "organic_unique_regions": counts["organic_unique_regions"],
+            "organic_unique_sources": counts["organic_unique_sources"],
             "event_signature": getattr(summary, "event_signature", None),
             "duplicate_action": getattr(summary, "duplicate_action", "kept"),
             "duplicate_reason": getattr(summary, "duplicate_reason", ""),

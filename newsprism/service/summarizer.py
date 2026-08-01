@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from pathlib import Path
 
 import litellm
@@ -20,7 +21,7 @@ from pydantic import BaseModel, Field
 from newsprism.config import Config
 from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.service.perspectives import canonicalize_perspective_groups
-from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup
+from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup, is_real_article
 
 logger = logging.getLogger(__name__)
 
@@ -298,10 +299,12 @@ class Summarizer:
         """Storyline/impact fields copied from the cluster onto its summary."""
         impact = getattr(cluster, "impact", None)
         regions = {
-            article.origin_region for article in cluster.articles if article.origin_region
+            article.origin_region
+            for article in cluster.articles
+            if article.origin_region and is_real_article(article)
         }
         evidence_summary = (
-            f"{len(cluster.sources)} 个来源、{max(len(regions), 1)} 个地区参与评估。"
+            f"{len(cluster.sources)} 个来源、{len(regions)} 个地区参与评估。"
             if impact is not None
             else ""
         )
@@ -324,6 +327,8 @@ class Summarizer:
             "quality_score": impact.composite if impact is not None else 0.0,
             "quality_flags": list(impact.flags) if impact is not None else [],
             "evidence_summary": evidence_summary,
+            "organic_unique_regions": getattr(cluster, "organic_unique_regions", 0),
+            "organic_unique_sources": getattr(cluster, "organic_unique_sources", 0),
         }
 
     def translate_report_content(
@@ -437,6 +442,7 @@ class Summarizer:
                 summary,
                 item.perspective_groups,
             )
+            self._enforce_translated_numeric_grounding(summary)
             if item.short_topic_name and item.short_topic_name.strip():
                 summary.short_topic_name_en = self._clean_short_label(item.short_topic_name)
         return {key: self._clean_short_label(value) for key, value in parsed.labels.items() if value}
@@ -835,25 +841,58 @@ class Summarizer:
     def _fallback_perspective_text_en(self) -> str:
         return "This source reports a similar angle to the main summary."
 
+    # Keep the numeric token deliberately small and deterministic.  The
+    # surrounding language is not part of the token: ``4人`` and ``4 dead``
+    # should compare through their numeric value, while a source sentence can
+    # still be removed as a unit when a value is not grounded.
+    _NUMERIC_VALUE = r"\d[\d,]*(?:\.\d+)?"
     _NUMERIC_CLAIM_PATTERN = re.compile(
-        r"(?:[$€£¥￥]\s*)?\d[\d,]*(?:\.\d+)?"
-        r"(?:\s*(?:[-–—:比]\s*)\d[\d,]*(?:\.\d+)?)?"
+        rf"(?:[$€£¥￥]\s*)?{_NUMERIC_VALUE}"
+        rf"(?:\s*(?:[-–—:比]\s*){_NUMERIC_VALUE})?"
+        rf"(?:\s*(?:千|천|万|만|亿|억|兆|조)(?:\s*{_NUMERIC_VALUE})?)?"
         r"(?:\s*(?:%|％|万亿美元|亿美元|亿元|万元|美元|欧元|人民币|"
-        r"票|项|人|名|家|国|枚|架|艘|倍|岁|年|月|日))?"
+        r"票|项|例|病例|人|名|家|国|枚|架|艘|倍|岁|年|月|日|건|명))?"
     )
+
+    _NUMERIC_CONTEXT_PATTERN = re.compile(
+        r"(?:[$€£¥￥%％]|万亿美元|亿美元|亿元|万元|美元|欧元|人民币|"
+        r"票|项|例|病例|人|名|家|国|枚|架|艘|倍|岁|年|月|日|건|명|"
+        r"死亡|死者|遇难|伤亡|受伤|伤者|确诊|病例|"
+        r"\b(?:dead|death(?:s)?|died|kill(?:ed|s)?|casualt(?:y|ies)|"
+        r"injur(?:ed|y|ies)|people|persons|cases|patients|votes?|"
+        r"years?|months?|days?|percent|points?|items?|ships?|aircraft)\b)",
+        re.IGNORECASE,
+    )
+
+    _NUMERIC_SCALE_PATTERN = re.compile(
+        rf"(?<!\d)(?P<major>{_NUMERIC_VALUE})"
+        r"(?P<scale>千|천|万|만|亿|억|兆|조)"
+        rf"(?P<minor>{_NUMERIC_VALUE})?"
+    )
+
+    _NUMERIC_SCALE_FACTORS = {
+        "千": 1e3,
+        "천": 1e3,
+        "万": 1e4,
+        "만": 1e4,
+        "亿": 1e8,
+        "억": 1e8,
+        "兆": 1e12,
+        "조": 1e12,
+    }
 
     @classmethod
     def _numeric_claims(cls, text: str) -> list[str]:
         claims: list[str] = []
-        for match in cls._NUMERIC_CLAIM_PATTERN.finditer(text or ""):
+        text = text or ""
+        for match in cls._NUMERIC_CLAIM_PATTERN.finditer(text):
             value = match.group(0).strip()
             digits = re.sub(r"\D", "", value)
+            context_window = text[max(0, match.start() - 12): match.end() + 24]
             has_context = bool(
-                re.search(
-                    r"[$€£¥￥%％]|[-–—:比]|万亿美元|亿美元|亿元|万元|美元|欧元|人民币|"
-                    r"票|项|人|名|家|国|枚|架|艘|倍|岁|年|月|日",
-                    value,
-                )
+                cls._NUMERIC_CONTEXT_PATTERN.search(value)
+                or cls._NUMERIC_CONTEXT_PATTERN.search(context_window)
+                or re.search(r"[-–—:比]", value)
             )
             if len(digits) >= 2 or has_context:
                 claims.append(value)
@@ -862,7 +901,7 @@ class Summarizer:
     @staticmethod
     def _normalized_claim_text(text: str) -> str:
         return (
-            (text or "")
+            unicodedata.normalize("NFKC", text or "")
             .casefold()
             .replace("–", "-")
             .replace("—", "-")
@@ -870,6 +909,38 @@ class Summarizer:
             .replace(",", "")
             .replace(" ", "")
         )
+
+    @classmethod
+    def _numeric_values(cls, text: str) -> list[float]:
+        """Return canonical numeric values, including CJK/Korean scale forms.
+
+        ``3千500`` and ``3천500`` both mean 3,500.  Keeping this conversion
+        separate from the textual claim list lets the existing currency logic
+        remain exact while allowing cross-script news evidence to ground the
+        same fact.
+        """
+        text = unicodedata.normalize("NFKC", text or "")
+        values: list[float] = []
+        covered_spans: list[tuple[int, int]] = []
+        for match in cls._NUMERIC_SCALE_PATTERN.finditer(text):
+            try:
+                major = float(match.group("major").replace(",", ""))
+                minor_text = match.group("minor")
+                minor = float(minor_text.replace(",", "")) if minor_text else 0.0
+                factor = cls._NUMERIC_SCALE_FACTORS[match.group("scale")]
+            except (KeyError, ValueError):
+                continue
+            values.append(major * factor + minor)
+            covered_spans.append(match.span())
+
+        for match in re.finditer(r"(?<![\d\w])\d[\d,]*(?:\.\d+)?(?!\d)", text):
+            if any(start <= match.start() and match.end() <= end for start, end in covered_spans):
+                continue
+            try:
+                values.append(float(match.group(0).replace(",", "")))
+            except ValueError:
+                continue
+        return values
 
     # Currency/scale equivalence for the numeric-grounding check. This lets a
     # Chinese claim like "114亿美元" match an English source that says
@@ -983,18 +1054,38 @@ class Summarizer:
 
     @staticmethod
     def _bare_digits_in_evidence(claim: str, evidence: str) -> bool:
-        """Check if the bare digits of a claim appear in the evidence.
+        """Check whether a claim's numeric value occurs in source evidence.
 
-        Handles CJK unit suffixes: a claim like ``28人`` (28 people) should
-        match source text containing ``28 dead`` — the ``人`` suffix prevents
-        a literal substring match against English sources, but the bare
-        digits ``28`` are the same number. Only applies to claims with 2+
-        digits to avoid matching trivial single-digit numbers.
+        This deliberately accepts one-digit claims when their surrounding
+        claim has a unit/context (``4人`` vs ``4 dead``).  It also compares
+        canonical values so Korean/CJK forms such as ``3천500``/``3千500``
+        match ``3500`` rather than relying on a literal substring.
         """
-        digits = re.sub(r"[^\d]", "", claim)
-        if len(digits) < 2:
+        claim_values = Summarizer._numeric_values(claim)
+        evidence_values = Summarizer._numeric_values(evidence)
+        for claim_value in claim_values:
+            for evidence_value in evidence_values:
+                if abs(claim_value - evidence_value) <= max(1e-9, abs(claim_value) * 1e-9):
+                    return True
+
+        digits = re.sub(r"[^\d]", "", unicodedata.normalize("NFKC", claim))
+        if not digits:
             return False
-        return digits in evidence
+        normalized_evidence = unicodedata.normalize("NFKC", evidence or "")
+        matches = list(re.finditer(rf"(?<!\d){re.escape(digits)}(?!\d)", normalized_evidence))
+        if not matches:
+            return False
+        # One-digit claims need a nearby unit/context marker; otherwise a
+        # date, version, or list index can accidentally ground a casualty or
+        # count claim (for example ``4人`` against an unrelated ``2024``).
+        if len(digits) == 1:
+            return any(
+                Summarizer._NUMERIC_CONTEXT_PATTERN.search(
+                    normalized_evidence[max(0, match.start() - 12): match.end() + 24]
+                )
+                for match in matches
+            )
+        return True
 
     def _unsupported_numeric_claims(
         self,
@@ -1004,7 +1095,7 @@ class Summarizer:
         raw_evidence_text = "\n".join(
             f"{article.title}\n{article.content}"
             for article in cluster.articles
-            if not article.is_placeholder
+            if is_real_article(article)
         )
         evidence = self._normalized_claim_text(raw_evidence_text)
         evidence_money = self._money_amounts(raw_evidence_text)
@@ -1013,13 +1104,13 @@ class Summarizer:
             for claim in self._numeric_claims(summary_text)
             if self._normalized_claim_text(claim) not in evidence
             and not self._claim_supported_by_money_amounts(claim, evidence_money)
-            and not self._bare_digits_in_evidence(claim, evidence)
+            and not self._bare_digits_in_evidence(claim, raw_evidence_text)
         ]
         vote_pattern = re.compile(r"\d[\d,]*\s*[-–—]\s*\d[\d,]*")
         source_vote_counts = {
             self._normalized_claim_text(match.group(0))
             for article in cluster.articles
-            if not article.is_placeholder
+            if is_real_article(article)
             for match in vote_pattern.finditer(f"{article.title}\n{article.content}")
         }
         if len(source_vote_counts) > 1:
@@ -1062,75 +1153,240 @@ class Summarizer:
             logger.warning("Numeric grounding rewrite failed for '%s': %s", summary.cluster.topic_category, exc)
             return None
 
-    # Placeholder text swapped in for a flagged numeric value inside a headline
-    # that must otherwise stay intact. Never a raw source title: `topic_category`
-    # and `cluster.articles[0].title` are both potentially non-Chinese (they can
-    # be the raw first-article title — see clusterer.py/llm_clusterer.py — which
-    # would violate the Chinese-output style guide).
-    _UNSUPPORTED_VALUE_PLACEHOLDER = "有关数字"
+    # These are output-only fallbacks.  They intentionally contain no numeric
+    # token and never expose the old ``有关数字`` placeholder to readers.
+    _UNSUPPORTED_VALUE_PLACEHOLDER = "有关数字"  # forbidden output marker; input detection only
     _SAFE_HEADLINE_FALLBACK = "相关报道：具体数字有待进一步核实"
+    _SAFE_BODY_FALLBACK = "报道披露了相关进展，但具体数字仍待进一步核实。"
+    _SAFE_HEADLINE_FALLBACK_EN = "Related report: specific figures remain unverified"
+    _SAFE_BODY_FALLBACK_EN = "The report describes the development, while specific figures remain unverified."
+
+    _NUMERIC_PLACEHOLDER_PATTERN = re.compile(
+        r"有关数字|\bcertain\s+number\b",
+        re.IGNORECASE,
+    )
+    _ORPHAN_NUMERIC_SENTENCE_PATTERN = re.compile(
+        rf"^\s*(?:[$€£¥￥]\s*)?{_NUMERIC_VALUE}"
+        rf"(?:\s*(?:千|천|万|만|亿|억|兆|조)(?:\s*{_NUMERIC_VALUE})?)?"
+        r"(?:\s*(?:%|％|万亿美元|亿美元|亿元|万元|美元|欧元|人民币|"
+        r"票|项|例|病例|人|名|家|国|枚|架|艘|倍|岁|年|月|日|건|명|"
+        r"dead|deaths?|people|cases|injured?))?"
+        r"\s*[.,。!?！？]\s*$",
+        re.IGNORECASE,
+    )
+    _LEADING_NUMERIC_FRAGMENT_PATTERN = re.compile(
+        rf"^\s*(?:[$€£¥￥]\s*)?{_NUMERIC_VALUE}"
+        rf"(?:\s*(?:千|천|万|만|亿|억|兆|조)(?:\s*{_NUMERIC_VALUE})?)?"
+        r"(?:\s*(?:%|％|万亿美元|亿美元|亿元|万元|美元|欧元|人民币|"
+        r"票|项|例|病例|人|名|家|国|枚|架|艘|倍|岁|年|月|日|건|명|"
+        r"dead|deaths?|people|cases|injured?))?"
+        r"\s*[.,。!?！？]",
+        re.IGNORECASE,
+    )
+    _MALFORMED_NUMERIC_REMNANT_PATTERN = re.compile(
+        r"(?:超|超过|约|近|达|至少|至多|致|导致|造成)\s*"
+        r"(?:例|病例|人|名|死亡|受伤|%|％|[，,。.!！？?])"
+        r"|\b(?:kills?|killed|dead|deaths?|injured?)\s*[,.;:]",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _split_sentences(cls, text: str) -> list[str]:
+        return [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[。！？])\s*|(?<=[.!?])(?:\s+|$)", text or "")
+            if sentence.strip()
+        ]
+
+    @classmethod
+    def _numeric_safety_violations(cls, text: str) -> list[str]:
+        """Find output shapes that must never reach a publication boundary."""
+        violations: list[str] = []
+        if cls._NUMERIC_PLACEHOLDER_PATTERN.search(text or ""):
+            violations.append("numeric_placeholder")
+
+        body = _body_only(text or "")
+        if cls._LEADING_NUMERIC_FRAGMENT_PATTERN.search(body):
+            violations.append("leading_numeric_fragment")
+        for sentence in cls._split_sentences(body):
+            if cls._ORPHAN_NUMERIC_SENTENCE_PATTERN.fullmatch(sentence):
+                violations.append("orphan_numeric_fragment")
+
+        if re.match(r"^\s*[，,、。.!！？?]", body):
+            violations.append("malformed_sentence_start")
+        if cls._MALFORMED_NUMERIC_REMNANT_PATTERN.search(text or ""):
+            violations.append("malformed_numeric_remnant")
+        return list(dict.fromkeys(violations))
 
     @classmethod
     def _strip_unsupported_values(cls, text: str, unsupported: list[str]) -> str:
         result = text
-        for value in unsupported:
+        for value in sorted(unsupported, key=len, reverse=True):
             if value and value in result:
-                result = result.replace(value, cls._UNSUPPORTED_VALUE_PLACEHOLDER)
-        # Collapse runs of the placeholder (e.g. two adjacent flagged values)
-        # into a single mention.
-        placeholder = re.escape(cls._UNSUPPORTED_VALUE_PLACEHOLDER)
-        result = re.sub(rf"(?:{placeholder}[，,、\s]*){{2,}}", cls._UNSUPPORTED_VALUE_PLACEHOLDER, result)
-        return re.sub(r"\s+", " ", result).strip()
+                result = result.replace(value, "")
+        result = cls._NUMERIC_PLACEHOLDER_PATTERN.sub("", result)
+        result = re.sub(r"\s+([，,。.!！？?%％])", r"\1", result)
+        result = re.sub(r"([，,、])\s*[，,、]+", r"\1", result)
+        return re.sub(r"\s+", " ", result).strip(" *，,、。.!！？?;；:：")
+
+    @classmethod
+    def _safe_headline_without_unsupported_values(
+        cls,
+        headline: str,
+        unsupported: list[str],
+        language: str = "zh",
+    ) -> str:
+        if language == "en":
+            return cls._SAFE_HEADLINE_FALLBACK_EN
+
+        candidate = cls._strip_unsupported_values(headline, unsupported)
+        if not candidate:
+            return cls._SAFE_HEADLINE_FALLBACK
+
+        # Removing a quantity from phrases such as “致4人死亡” or “超3500例”
+        # can leave a grammatical-looking but semantically broken remnant.
+        if cls._MALFORMED_NUMERIC_REMNANT_PATTERN.search(candidate):
+            for marker in ("导致", "造成", "致", "超过", "超", "约", "近", "达"):
+                marker_index = candidate.find(marker)
+                if marker_index > 1:
+                    candidate = candidate[:marker_index].rstrip(" ，,、:：")
+                    break
+
+        candidate = candidate.strip(" *，,、。.!！？?;；:：")
+        if len(candidate) < 2 or cls._NUMERIC_PLACEHOLDER_PATTERN.search(candidate):
+            return cls._SAFE_HEADLINE_FALLBACK
+        return f"{candidate}，具体数字有待进一步核实"
+
+    @classmethod
+    def _safe_body_without_unsupported_values(
+        cls,
+        body: str,
+        unsupported: list[str],
+        language: str = "zh",
+    ) -> str:
+        kept: list[str] = []
+        for sentence in cls._split_sentences(body):
+            if any(value and value in sentence for value in unsupported):
+                continue
+            if cls._NUMERIC_PLACEHOLDER_PATTERN.search(sentence):
+                continue
+            if cls._ORPHAN_NUMERIC_SENTENCE_PATTERN.fullmatch(sentence):
+                continue
+            kept.append(sentence)
+
+        separator = " " if language == "en" else ""
+        grounded_body = separator.join(kept).strip()
+        if not grounded_body:
+            return cls._SAFE_BODY_FALLBACK_EN if language == "en" else cls._SAFE_BODY_FALLBACK
+        return grounded_body
+
+    @classmethod
+    def _safe_numeric_fallback(
+        cls,
+        text: str,
+        unsupported: list[str],
+        language: str = "zh",
+    ) -> str:
+        headline = _extract_headline(text)
+        body = _body_only(text)
+        safe_headline = cls._safe_headline_without_unsupported_values(
+            headline,
+            unsupported,
+            language=language,
+        )
+        safe_body = cls._safe_body_without_unsupported_values(
+            body,
+            unsupported,
+            language=language,
+        )
+        candidate = f"**{safe_headline}**\n\n{safe_body}"
+        if cls._numeric_safety_violations(candidate):
+            fallback_headline = (
+                cls._SAFE_HEADLINE_FALLBACK_EN
+                if language == "en"
+                else cls._SAFE_HEADLINE_FALLBACK
+            )
+            fallback_body = (
+                cls._SAFE_BODY_FALLBACK_EN
+                if language == "en"
+                else cls._SAFE_BODY_FALLBACK
+            )
+            return f"**{fallback_headline}**\n\n{fallback_body}"
+        return candidate
 
     def _remove_unsupported_numeric_sentences(
         self,
         summary: ClusterSummary,
         unsupported: list[str],
     ) -> str:
-        headline = _extract_headline(summary.summary)
-        body = _body_only(summary.summary)
-        if any(value in headline for value in unsupported):
-            stripped_headline = self._strip_unsupported_values(headline, unsupported)
-            placeholder = re.escape(self._UNSUPPORTED_VALUE_PLACEHOLDER)
-            residual = re.sub(rf"[\s，,。.!！？?、]+|{placeholder}", "", stripped_headline)
-            # Only keep the stripped headline if meaningful Chinese-authored
-            # content survives beyond the placeholder itself; otherwise fall
-            # back to a safe generic phrase — never to a raw, possibly
-            # non-Chinese source title.
-            headline = stripped_headline if residual else self._SAFE_HEADLINE_FALLBACK
-        sentences = re.split(r"(?<=[。！？.!?])\s*", body)
-        kept = [
-            sentence
-            for sentence in sentences
-            if sentence and not any(value in sentence for value in unsupported)
-        ]
-        grounded_body = "".join(kept).strip()
-        if not grounded_body:
-            grounded_body = "报道披露了相关进展，具体数字仍待进一步核实。"
-        return f"**{headline.strip().strip('*')}**\n\n{grounded_body}"
+        return self._safe_numeric_fallback(summary.summary, unsupported, language="zh")
 
     def _enforce_numeric_grounding(self, summary: ClusterSummary) -> None:
         unsupported = self._unsupported_numeric_claims(summary.cluster, summary.summary)
-        if not unsupported:
+        violations = self._numeric_safety_violations(summary.summary)
+        if not unsupported and not violations:
             return
-        rewritten = self._rewrite_grounded_summary(summary, unsupported)
-        if rewritten and not self._unsupported_numeric_claims(summary.cluster, rewritten):
+        rewritten = self._rewrite_grounded_summary(summary, unsupported) if unsupported else None
+        if (
+            rewritten
+            and not self._unsupported_numeric_claims(summary.cluster, rewritten)
+            and not self._numeric_safety_violations(rewritten)
+        ):
             summary.summary = rewritten
             summary.quality_flags.append("numeric_grounding_rewritten")
             return
         summary.summary = self._remove_unsupported_numeric_sentences(summary, unsupported)
         summary.quality_status = "needs_review"
         if "unsupported_numeric_claim" not in summary.quality_flags:
-            summary.quality_flags.append("unsupported_numeric_claim")
+            if unsupported:
+                summary.quality_flags.append("unsupported_numeric_claim")
+        if violations and "numeric_safety_failed" not in summary.quality_flags:
+            summary.quality_flags.append("numeric_safety_failed")
         summary.contested_claims.extend(
             claim for claim in unsupported if claim not in summary.contested_claims
         )
 
+    def _enforce_translated_numeric_grounding(self, summary: ClusterSummary) -> None:
+        """Apply the same numeric and malformed-output gate to English text."""
+        if not summary.summary_en:
+            return
+        translated_text = summary.summary_en
+        unsupported = self._unsupported_numeric_claims(summary.cluster, translated_text)
+        violations = self._numeric_safety_violations(translated_text)
+        perspective_text = "\n".join(
+            group.perspective for group in summary.grouped_perspectives_en
+        )
+        perspective_violations = self._numeric_safety_violations(perspective_text)
+        if not unsupported and not violations and not perspective_violations:
+            return
+
+        summary.summary_en = self._safe_numeric_fallback(
+            translated_text,
+            unsupported,
+            language="en",
+        )
+        if perspective_violations:
+            for group in summary.grouped_perspectives_en:
+                if self._numeric_safety_violations(group.perspective):
+                    group.perspective = self._fallback_perspective_text_en()
+        summary.quality_status = "needs_review"
+        if unsupported and "unsupported_numeric_claim" not in summary.quality_flags:
+            summary.quality_flags.append("unsupported_numeric_claim")
+            summary.contested_claims.extend(
+                claim for claim in unsupported if claim not in summary.contested_claims
+            )
+        if "numeric_safety_failed" not in summary.quality_flags:
+            summary.quality_flags.append("numeric_safety_failed")
+
     def _format_articles(self, cluster: ArticleCluster) -> str:
         lines: list[str] = []
-        for i, article in enumerate(cluster.articles, 1):
+        article_index = 0
+        for article in cluster.articles:
+            if not is_real_article(article):
+                continue
+            article_index += 1
             lines.append(
-                f"[{i}] 来源：{article.source_name}\n"
+                f"[{article_index}] 来源：{article.source_name}\n"
                 f"标题：{article.title}\n"
                 f"内容：{article.content[:3000]}\n"
                 f"链接：{article.url}\n"

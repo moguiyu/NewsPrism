@@ -40,9 +40,14 @@ from newsprism.types import (
     OWNERSHIP_GATE_REVIEW,
     OWNERSHIP_GATE_SUPPRESS,
     VoiceNeed,
+    is_real_article,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _real_articles(cluster: ArticleCluster) -> list[Article]:
+    return [article for article in cluster.articles if is_real_article(article)]
 
 DIMENSIONS = (
     "scope",
@@ -67,7 +72,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 
 def cluster_key(cluster: ArticleCluster) -> str:
     """Stable key for evaluation persistence; same scheme for link-after-insert."""
-    seed = "|".join(article.url for article in cluster.articles[:4]) or cluster.topic_category
+    seed = "|".join(article.url for article in _real_articles(cluster)[:4]) or cluster.topic_category
     return hashlib.sha1(seed.encode("utf-8")).hexdigest()[:16]
 
 
@@ -363,15 +368,16 @@ class ImpactAssessor:
     def _build_prompt(self, chunk: list[ArticleCluster]) -> str:
         rows = []
         for index, cluster in enumerate(chunk, 1):
-            lead = cluster.articles[0] if cluster.articles else None
+            articles = _real_articles(cluster)
+            lead = articles[0] if articles else None
             titles = [
                 f"{article.source_name}: {article.title}"
-                for article in cluster.articles[:3]
+                for article in articles[:3]
             ]
             regions = sorted(
                 {
                     article.origin_region or self.source_regions.get(article.source_name)
-                    for article in cluster.articles
+                    for article in articles
                 }
                 - {None}
             )
@@ -500,7 +506,7 @@ class ImpactAssessor:
         return tier or "unknown"
 
     def _signal(self, cluster: ArticleCluster) -> tuple[float, list[str]]:
-        articles = cluster.articles
+        articles = _real_articles(cluster)
         if not articles:
             return 0.0, ["empty_cluster"]
         organic = [article for article in articles if not article.is_searched]
@@ -508,6 +514,12 @@ class ImpactAssessor:
 
         sources = {article.source_name for article in articles}
         organic_sources = {article.source_name for article in organic}
+        organic_regions = {
+            article.origin_region or self.source_regions.get(article.source_name)
+            for article in organic
+        } - {None, ""}
+        cluster.organic_unique_sources = len(organic_sources)
+        cluster.organic_unique_regions = len(organic_regions)
         regions = {
             article.origin_region or self.source_regions.get(article.source_name)
             for article in articles
@@ -585,7 +597,8 @@ class ImpactAssessor:
         suppressed_count = 0
         needs_review = False
 
-        for article in cluster.articles:
+        articles = _real_articles(cluster)
+        for article in articles:
             ownership = self.source_ownerships.get(article.source_name, "state_influenced_review")
             source_region = self.source_regions.get(article.source_name)
 
@@ -618,7 +631,7 @@ class ImpactAssessor:
                 )
 
         all_blocked = (
-            cluster.articles and suppressed_count == len(cluster.articles)
+            articles and suppressed_count == len(articles)
         )
         # Hard-suppress only when we have enough cross-source signal to be
         # confident the story is genuinely state-media-only AND the impact is
@@ -627,7 +640,7 @@ class ImpactAssessor:
         # the event rather than it vanishing entirely. (Issue #3: this rule
         # previously hard-suppressed UK-PM-resignation composites ~0.59 because
         # 2 articles happened to both be CN state media covering GB 内政.)
-        small_cluster = len(cluster.articles) < self.gate_suppress_min_cluster_size
+        small_cluster = len(articles) < self.gate_suppress_min_cluster_size
         high_impact = assessment.composite >= self.review_floor
         if all_blocked and not (small_cluster or high_impact):
             assessment.status = "suppress"
@@ -652,14 +665,14 @@ class ImpactAssessor:
         # Apply composite weight penalty for constrained/low-evidence tiers
         if needs_review and any(
             self.source_ownerships.get(a.source_name, "") in OWNERSHIP_GATE_REVIEW
-            for a in cluster.articles
+            for a in articles
         ):
             worst_multiplier = min(
                 (
                     self._gate_weight_multipliers.get(
                         self.source_ownerships.get(a.source_name, ""), 1.0
                     )
-                    for a in cluster.articles
+                    for a in articles
                     if self.source_ownerships.get(a.source_name, "") in OWNERSHIP_GATE_REVIEW
                 ),
                 default=1.0,

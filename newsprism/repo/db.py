@@ -14,7 +14,7 @@ from typing import Any, Generator
 
 from newsprism.types import (
     Article, Cluster, ClusterQualityReport, ClusterSummary, SearchCandidateReview,
-    SearchRequestEvent,
+    SearchRequestEvent, is_placeholder_article, is_placeholder_url,
 )
 
 DB_PATH = Path("data/newsprism.db")
@@ -58,6 +58,9 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 is_official_source INTEGER NOT NULL DEFAULT 0,
                 origin_region TEXT,
                 searched_provider TEXT,
+                is_placeholder INTEGER NOT NULL DEFAULT 0,
+                search_acceptance_status TEXT,
+                search_acceptance_reason TEXT,
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -319,6 +322,34 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("ALTER TABLE articles ADD COLUMN origin_region TEXT")
         if "searched_provider" not in article_columns:
             conn.execute("ALTER TABLE articles ADD COLUMN searched_provider TEXT")
+        if "is_placeholder" not in article_columns:
+            _add_column(
+                "articles",
+                "is_placeholder",
+                "is_placeholder INTEGER NOT NULL DEFAULT 0",
+            )
+        if "search_acceptance_status" not in article_columns:
+            _add_column(
+                "articles",
+                "search_acceptance_status",
+                "search_acceptance_status TEXT",
+            )
+        if "search_acceptance_reason" not in article_columns:
+            _add_column(
+                "articles",
+                "search_acceptance_reason",
+                "search_acceptance_reason TEXT",
+            )
+        # Older databases may contain synthetic rows created before the
+        # placeholder flag existed, or rows written with the flag set false.
+        # The URL scheme is unambiguous, so repair the persisted flag without
+        # deleting audit history.  The update is idempotent and safe to rerun.
+        conn.execute(
+            """UPDATE articles
+               SET is_placeholder = 1
+               WHERE lower(trim(url)) LIKE 'placeholder:%'
+                 AND COALESCE(is_placeholder, 0) = 0"""
+        )
         # Issue #5: persist the article-level ownership-gate decision so the
         # portal/audit can show WHICH articles were state-media-suppressed,
         # not just the aggregate cluster-level verdict. ALTER TABLE ADD COLUMN
@@ -402,15 +433,20 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
     published_at = article.published_at
     if published_at is None:
         published_at = datetime.now(timezone.utc)
+    # Synthetic placeholder URLs are authoritative even when a legacy caller
+    # supplies an Article with the flag missing/false.
+    is_placeholder = is_placeholder_article(article)
     with get_conn(db_path) as conn:
         try:
             cur = conn.execute(
                 """INSERT INTO articles (
                        url, title, source_name, published_at, content, topics, embedding,
                        is_searched, search_region, source_kind, platform, account_id,
-                       is_official_source, origin_region, searched_provider, ownership_suppressed
+                       is_official_source, origin_region, searched_provider,
+                       is_placeholder, search_acceptance_status, search_acceptance_reason,
+                       ownership_suppressed
                    )
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     article.url,
                     article.title,
@@ -427,6 +463,9 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                     1 if article.is_official_source else 0,
                     article.origin_region,
                     article.searched_provider,
+                    1 if is_placeholder else 0,
+                    article.search_acceptance_status,
+                    article.search_acceptance_reason,
                     1 if getattr(article, "ownership_suppressed", False) else 0,
                 ),
             )
@@ -452,6 +491,8 @@ def get_unclustered_articles(
         rows = conn.execute(
             """SELECT * FROM articles
                WHERE clustered = 0
+                 AND COALESCE(is_placeholder, 0) = 0
+                 AND lower(trim(url)) NOT LIKE 'placeholder:%'
                  AND published_at >= datetime('now', ?)
                ORDER BY published_at DESC""",
             (f"-{max_age_hours} hours",),
@@ -1135,7 +1176,9 @@ def selected_source_regions(
             """SELECT c.id AS cluster_id, a.origin_region, a.source_name
                FROM clusters c, json_each(c.article_ids) j
                JOIN articles a ON a.id = j.value
-               WHERE c.report_date BETWEEN ? AND ?""",
+               WHERE c.report_date BETWEEN ? AND ?
+                 AND COALESCE(a.is_placeholder, 0) = 0
+                 AND lower(trim(a.url)) NOT LIKE 'placeholder:%'""",
             (date_from, date_to),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -1180,9 +1223,13 @@ def delete_old_unclustered_articles(days: int = 30, db_path: Path = DB_PATH) -> 
 # ─── HELPERS ───────────────────────────────────────────────────────────────────
 
 def _row_to_article(row: sqlite3.Row) -> Article:
+    url = row["url"]
+    effective_placeholder = (
+        bool(row["is_placeholder"]) if "is_placeholder" in row.keys() else False
+    ) or is_placeholder_url(url)
     return Article(
         id=row["id"],
-        url=row["url"],
+        url=url,
         title=row["title"],
         source_name=row["source_name"],
         published_at=datetime.fromisoformat(row["published_at"]),
@@ -1199,6 +1246,17 @@ def _row_to_article(row: sqlite3.Row) -> Article:
         origin_region=row["origin_region"] if "origin_region" in row.keys() else None,
         searched_provider=row["searched_provider"] if "searched_provider" in row.keys() else None,
         ownership_suppressed=bool(row["ownership_suppressed"]) if "ownership_suppressed" in row.keys() else False,
+        is_placeholder=effective_placeholder,
+        search_acceptance_status=(
+            row["search_acceptance_status"]
+            if "search_acceptance_status" in row.keys()
+            else None
+        ),
+        search_acceptance_reason=(
+            row["search_acceptance_reason"]
+            if "search_acceptance_reason" in row.keys()
+            else None
+        ),
     )
 
 

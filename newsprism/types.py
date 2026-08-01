@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from urllib.parse import urlparse
 
 
 # ─── COLLECTION ───────────────────────────────────────────────────────────────
@@ -55,6 +56,34 @@ class Article:
     is_placeholder: bool = False
     search_acceptance_status: str | None = None   # "accepted" | "failed" | None
     search_acceptance_reason: str | None = None   # short machine code, e.g. "http_401", "stale_result"
+
+
+def is_placeholder_url(url: str | None) -> bool:
+    """Return whether *url* is a synthetic missing-perspective URL.
+
+    Placeholder rows predate the persisted ``is_placeholder`` flag, so the
+    URL prefix remains a conservative source of truth for legacy data.  Keep
+    this narrowly scoped to the synthetic ``placeholder:`` scheme so normal
+    HTTP(S) article URLs are unaffected.
+    """
+    return isinstance(url, str) and url.strip().lower().startswith("placeholder:")
+
+
+def is_placeholder_article(article: Article) -> bool:
+    """Return the effective placeholder state for an article.
+
+    A synthetic URL is always treated as a placeholder, even when an older
+    database row has no flag or incorrectly stores it as false.
+    """
+    return bool(getattr(article, "is_placeholder", False)) or is_placeholder_url(article.url)
+
+
+def is_real_article(article: Article) -> bool:
+    """Return whether an article is a real HTTP(S) item for publication."""
+    if is_placeholder_article(article):
+        return False
+    parsed = urlparse(str(getattr(article, "url", "") or ""))
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
 
 
 @dataclass
@@ -262,7 +291,7 @@ class ArticleCluster:
         # toward sources, perspectives, or multi-source detection.
         self.sources = list(
             dict.fromkeys(
-                a.source_name for a in self.articles if not getattr(a, "is_placeholder", False)
+                a.source_name for a in self.articles if not is_placeholder_article(a)
             )
         )
 

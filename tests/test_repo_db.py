@@ -3,13 +3,16 @@ from datetime import datetime, timezone
 import sqlite3
 
 from newsprism.repo import (
+    get_articles_by_ids,
     get_unclustered_articles,
     init_db,
     insert_article,
+    insert_cluster,
     insert_search_candidate_review,
     insert_search_request_event,
+    selected_source_regions,
 )
-from newsprism.types import Article, SearchCandidateReview, SearchRequestEvent
+from newsprism.types import Article, Cluster, SearchCandidateReview, SearchRequestEvent
 
 
 def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
@@ -46,6 +49,7 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
     assert rows[0].is_official_source is True
     assert rows[0].origin_region == "jp"
     assert rows[0].searched_provider == "x_user_timeline"
+    assert rows[0].is_placeholder is False
 
     insert_search_request_event(
         SearchRequestEvent(
@@ -108,6 +112,132 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
         ).fetchone()
     assert candidate[:5] == ("new-local.example", "cd", "company", "country_editorial", "pending_review")
     assert candidate[5] == '{"source_type":"country_editorial","relationship":"uncertain"}'
+
+
+def test_placeholder_metadata_round_trips_and_is_not_unclustered(tmp_path):
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+
+    placeholder = Article(
+        url="placeholder:fr:cluster-1",
+        title="待补充：法国声音",
+        source_name="[法国声音待补]",
+        published_at=datetime.now(tz=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="fr",
+        origin_region="fr",
+        searched_provider="tavily_search",
+        is_placeholder=True,
+        search_acceptance_status="failed",
+        search_acceptance_reason="candidate_pending_review",
+    )
+    article_id = insert_article(placeholder, db_path=db_path)
+    assert article_id is not None
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT is_placeholder, search_acceptance_status, search_acceptance_reason "
+            "FROM articles WHERE id = ?",
+            (article_id,),
+        ).fetchone()
+    assert row == (1, "failed", "candidate_pending_review")
+
+    loaded = get_articles_by_ids([article_id], db_path=db_path)
+    assert len(loaded) == 1
+    assert loaded[0].is_placeholder is True
+    assert loaded[0].search_acceptance_status == "failed"
+    assert loaded[0].search_acceptance_reason == "candidate_pending_review"
+    assert get_unclustered_articles(max_age_hours=48, db_path=db_path) == []
+
+
+def test_legacy_placeholder_url_is_migrated_and_filtered(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    published_at = datetime.now(tz=timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """CREATE TABLE articles (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   url TEXT UNIQUE NOT NULL,
+                   title TEXT NOT NULL,
+                   source_name TEXT NOT NULL,
+                   published_at TEXT NOT NULL,
+                   content TEXT NOT NULL,
+                   topics TEXT NOT NULL DEFAULT '[]',
+                   embedding TEXT,
+                   clustered INTEGER NOT NULL DEFAULT 0
+               )"""
+        )
+        conn.execute(
+            "INSERT INTO articles (url, title, source_name, published_at, content) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "placeholder:ua:legacy-cluster",
+                "待补充：乌克兰声音",
+                "[乌克兰声音待补]",
+                published_at,
+                "",
+            ),
+        )
+
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(articles)")}
+        stored = conn.execute(
+            "SELECT is_placeholder, search_acceptance_status, search_acceptance_reason "
+            "FROM articles WHERE url LIKE 'placeholder:%'"
+        ).fetchone()
+    assert {"is_placeholder", "search_acceptance_status", "search_acceptance_reason"} <= columns
+    assert stored == (1, None, None)
+
+    loaded = get_unclustered_articles(max_age_hours=48, db_path=db_path)
+    assert loaded == []
+    by_id = get_articles_by_ids([1], db_path=db_path)
+    assert by_id[0].is_placeholder is True
+
+
+def test_selected_source_regions_excludes_placeholder_rows(tmp_path):
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    now = datetime.now(tz=timezone.utc)
+    real_id = insert_article(
+        Article(
+            url="https://reuters.example/story",
+            title="Real story",
+            source_name="Reuters",
+            published_at=now,
+            content="body",
+            origin_region="us",
+        ),
+        db_path=db_path,
+    )
+    placeholder_id = insert_article(
+        Article(
+            url="placeholder:fr:story",
+            title="待补充：法国声音",
+            source_name="[法国声音待补]",
+            published_at=now,
+            content="",
+            origin_region="fr",
+            is_placeholder=True,
+        ),
+        db_path=db_path,
+    )
+    cluster_id = insert_cluster(
+        Cluster(
+            topic_category="World",
+            article_ids=[real_id, placeholder_id],
+            summary="story",
+            perspectives={},
+            report_date="2026-08-01",
+        ),
+        db_path=db_path,
+    )
+
+    assert selected_source_regions("2026-08-01", "2026-08-01", db_path=db_path) == [
+        {"cluster_id": cluster_id, "origin_region": "us", "source_name": "Reuters"}
+    ]
 
 
 def test_init_db_adds_target_identity_columns_to_existing_search_tables(tmp_path):

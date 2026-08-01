@@ -113,6 +113,44 @@ _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
 # bare TLD (centcom.mil -> "mil") and a ccTLD second-level suffix
 # (gov.uk/gov.cn/gouv.fr) match.
 _GOVERNMENTAL_SUFFIX_MARKERS = {"gov", "mil", "govt", "gouv"}
+_CURRENT_EVENT_ACCEPTANCE_REASON = "current_event_perspective"
+_OFFICIAL_BACKGROUND_PATTERN = re.compile(
+    r"(?:"
+    r"annual[-_ ]?report|business[-_ ]?report|financial[-_ ]?report|"
+    r"quarterly[-_ ]?report|10[-_ ]?k|year[-_ ]?in[-_ ]?review|"
+    r"investor[-_ ]?relations|(?:press|photo|media)?[-_ ]?gallery|"
+    r"fact[-_ ]?sheet|factsheet|brochure|about[-_ ]?(?:the|us)|"
+    r"company[-_ ]?overview|institutional[-_ ]?history|our[-_ ]?history|"
+    r"backgrounder"
+    r")",
+    re.IGNORECASE,
+)
+_MONTH_NAME_TO_NUMBER = {
+    "january": 1,
+    "jan": 1,
+    "february": 2,
+    "feb": 2,
+    "march": 3,
+    "mar": 3,
+    "april": 4,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "jun": 6,
+    "july": 7,
+    "jul": 7,
+    "august": 8,
+    "aug": 8,
+    "september": 9,
+    "sept": 9,
+    "sep": 9,
+    "october": 10,
+    "oct": 10,
+    "november": 11,
+    "nov": 11,
+    "december": 12,
+    "dec": 12,
+}
 
 
 class ActiveSeeker:
@@ -663,6 +701,7 @@ class ActiveSeeker:
             "publisher_target_mismatch",
             "not_official_source",
             "event_mismatch",
+            "background_context",
             "entity_mismatch",
             "stale_result",
             "duplicate_of_existing",
@@ -820,8 +859,18 @@ class ActiveSeeker:
             article.source_kind = identity.source_type if article.is_official_source else "news"
             article.searched_provider = f"tavily_search_{stage}"
             article.search_acceptance_status = "accepted"
-            article.search_acceptance_reason = ""
-            self._record_candidate_review(article, target, stage, identity, "accepted", "")
+            # Keep the existing source_kind role (official_web, official_social,
+            # or news) and use the existing acceptance-reason field to retain
+            # the evidence role without widening the Article/DB contract.
+            article.search_acceptance_reason = _CURRENT_EVENT_ACCEPTANCE_REASON
+            self._record_candidate_review(
+                article,
+                target,
+                stage,
+                identity,
+                "accepted",
+                _CURRENT_EVENT_ACCEPTANCE_REASON,
+            )
             accepted.append(article)
             if len(accepted) >= self.max_results_per_region:
                 break
@@ -869,6 +918,8 @@ class ActiveSeeker:
             return "entity_mismatch"
         if not self._is_fresh(article.published_at):
             return "stale_result"
+        if stage == "official" and self._looks_like_official_background(article):
+            return "background_context"
         if any(
             fuzz.token_set_ratio(article.title, title) / 100.0 >= self.max_existing_title_overlap
             for title in existing_titles
@@ -880,14 +931,25 @@ class ActiveSeeker:
                 normalize_embeddings=True,
                 show_progress_bar=False,
             )[0]
-            threshold = (
-                self.min_semantic_event_match * 0.8
-                if stage == "official" and dynamic_identity is not None
-                else self.min_semantic_event_match
-            )
-            if float(np.dot(embedding, centroid)) < threshold:
+            # Ownership establishes who published a page, not whether it is
+            # about this event. Keep the event-materiality threshold identical
+            # for official and country candidates.
+            if float(np.dot(embedding, centroid)) < self.min_semantic_event_match:
                 return "event_mismatch"
         return ""
+
+    @staticmethod
+    def _looks_like_official_background(article: Article) -> bool:
+        """Reject first-party background material as a current perspective.
+
+        Official ownership is useful provenance, but annual reports, investor
+        material, galleries, and generic institutional pages are not direct
+        responses to the event being enriched. Date freshness is checked first
+        so an old page still reports ``stale_result`` rather than hiding the
+        more actionable date failure.
+        """
+        material = f"{article.title}\n{article.url}"
+        return bool(_OFFICIAL_BACKGROUND_PATTERN.search(material))
 
     def _article_mentions_target(self, article: Article, target: VoiceTarget) -> bool:
         text = f"{article.title}\n{article.content[:1200]}".casefold()
@@ -1147,12 +1209,11 @@ class ActiveSeeker:
 
     def _is_fresh(self, published_at: datetime | None) -> bool:
         if published_at is None:
-            # No publish date extractable from either the Tavily field or the
-            # URL path. The search was already date-bounded by the query's
-            # ``days: 3`` parameter, so trust Tavily's freshness rather than
-            # rejecting 100% of results (the 2026-07-22 incident: 237 fresh
-            # results all rejected as stale because published_date=None).
-            return True
+            # A provider query bound is not evidence about an individual page:
+            # official sites frequently return undated annual reports, PDFs,
+            # and evergreen background pages. Accepted supplements must carry
+            # a provider date or a date recovered from the URL path.
+            return False
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=self.result_max_age_hours)
         if published_at.tzinfo is None:
             published_at = published_at.replace(tzinfo=timezone.utc)
@@ -1577,7 +1638,11 @@ class ActiveSeeker:
         # (the URL path like /2026/07/20/ is clearly recent). Try the explicit
         # field first, then fall back to a URL-path date parse so the freshness
         # gate has something concrete to evaluate.
-        published_at = self._parse_published_at(result.get("published_at"))
+        published_at = self._parse_published_at(
+            result.get("published_at")
+            or result.get("published_date")
+            or result.get("date")
+        )
         if published_at is None:
             published_at = self._parse_url_date(url)
         return Article(
@@ -1595,6 +1660,8 @@ class ActiveSeeker:
         )
 
     def _parse_published_at(self, value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         if isinstance(value, str) and value.strip():
             try:
                 from dateutil import parser as date_parser
@@ -1605,33 +1672,90 @@ class ActiveSeeker:
                 pass
         return None
 
-    # Match common URL date patterns: /2026/07/20/, /2026-07-20/, /20260720/.
-    # Returns None when no date-like segment is found.
-    _URL_DATE_PATTERN = re.compile(r"/(?P<date>(?:19|20)\d{2})[-/]?(?P<month>[01]\d)[-/]?(?P<day>[0-3]\d)(?:[/-]|\b)")
+    # URL date fallbacks cover precise dates plus lower-precision publication
+    # paths used by official reports and newsroom archives. Lower-precision
+    # dates are represented by the first day of the known period; this is
+    # intentionally conservative for the 72-hour freshness gate.
+    _URL_FULL_DATE_PATTERN = re.compile(
+        r"(?<!\d)(?P<year>(?:19|20)\d{2})[-/_]"
+        r"(?P<month>0?[1-9]|1[0-2])[-/_]"
+        r"(?P<day>0?[1-9]|[12]\d|3[01])(?!\d)"
+    )
+    _URL_COMPACT_DATE_PATTERN = re.compile(
+        r"(?<!\d)(?P<year>(?:19|20)\d{2})"
+        r"(?P<month>0[1-9]|1[0-2])"
+        r"(?P<day>0[1-9]|[12]\d|3[01])(?!\d)"
+    )
+    _URL_QUARTER_PATTERNS = (
+        re.compile(
+            r"(?<!\d)(?P<year>(?:19|20)\d{2})[_-](?P<quarter>[1-4])Q(?!\d)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"(?<!\d)(?P<year>(?:19|20)\d{2})[_-]?Q(?P<quarter>[1-4])(?!\d)",
+            re.IGNORECASE,
+        ),
+    )
+    _URL_YEAR_MONTH_PATTERN = re.compile(
+        r"(?<!\d)(?P<year>(?:19|20)\d{2})(?:[/_-])"
+        r"(?P<month>0?[1-9]|1[0-2])(?=$|[/_.-])"
+    )
+    _URL_YEAR_MONTH_NAME_PATTERN = re.compile(
+        r"(?<!\d)(?P<year>(?:19|20)\d{2})(?:[/_-])"
+        r"(?P<month>[A-Za-z]{3,9})(?=$|[/_.-])",
+        re.IGNORECASE,
+    )
 
     def _parse_url_date(self, url: str | None) -> datetime | None:
         """Best-effort extraction of a publish date from a URL path.
 
         Tavily returns published_date=None for many outlets (NYT, CNN, Time,
-        northeastern.edu, …). Their URL paths almost always carry the date
-        (/2026/07/20/article-slug). Without this fallback the freshness gate
-        rejected 100% of results — see the 2026-07-22 incident where
-        accepted_count=0 despite 237 fresh results.
+        northeastern.edu, …). Their URL paths often carry at least a year and
+        month (/2026/07/20/article-slug, /2025/september/statement,
+        /2021/02/report, or /2023_4Q_business-report). The path is evidence;
+        the provider's explicit date remains authoritative when available.
         """
         if not url:
             return None
-        match = self._URL_DATE_PATTERN.search(url)
-        if not match:
-            return None
-        try:
-            return datetime(
-                int(match.group("date")),
+        path = urllib.parse.unquote(urllib.parse.urlparse(url).path)
+
+        def build_date(year: str, month: int = 1, day: int = 1) -> datetime | None:
+            try:
+                return datetime(int(year), month, day, tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                return None
+
+        match = self._URL_FULL_DATE_PATTERN.search(path) or self._URL_COMPACT_DATE_PATTERN.search(path)
+        if match:
+            return build_date(
+                match.group("year"),
                 int(match.group("month")),
                 int(match.group("day")),
-                tzinfo=timezone.utc,
             )
-        except ValueError:
-            return None
+
+        for pattern in self._URL_QUARTER_PATTERNS:
+            match = pattern.search(path)
+            if match:
+                quarter = int(match.group("quarter"))
+                return build_date(match.group("year"), (quarter - 1) * 3 + 1)
+
+        match = self._URL_YEAR_MONTH_NAME_PATTERN.search(path)
+        if match:
+            month = _MONTH_NAME_TO_NUMBER.get(match.group("month").casefold())
+            if month is not None:
+                return build_date(match.group("year"), month)
+
+        match = self._URL_YEAR_MONTH_PATTERN.search(path)
+        if match:
+            return build_date(match.group("year"), int(match.group("month")))
+
+        # A pure year path (for example /2025/annual-report/) is still useful
+        # evidence that the page is historical, even though it has only
+        # year-level precision.
+        for segment in path.split("/"):
+            if re.fullmatch(r"(?:19|20)\d{2}", segment):
+                return build_date(segment)
+        return None
 
     # ─── REGION CONFIG / TELEMETRY ───────────────────────────────────────────
 

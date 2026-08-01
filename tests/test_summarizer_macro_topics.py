@@ -513,3 +513,173 @@ def test_numeric_grounding_marks_conflicting_source_vote_counts(monkeypatch):
 
     assert "75–11" not in summary.summary
     assert summary.quality_status == "needs_review"
+
+
+def test_numeric_grounding_accepts_single_digit_cjk_suffix_against_english_evidence():
+    """The live Kyiv shape must not reject ``4人`` when sources say ``4 dead``."""
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/kyiv",
+                title="Russian attack on Kyiv kills 4, wounds 13",
+                source_name="The Hindu",
+                published_at=datetime.now(tz=timezone.utc),
+                content="The attack killed 4 people and wounded 13 others.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**俄罗斯袭击基辅造成4人死亡**\n\n袭击还造成13人受伤。",
+        quality_status="publishable",
+    )
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "4人" in summary.summary
+    assert "13人" in summary.summary
+    assert "unsupported_numeric_claim" not in summary.quality_flags
+
+
+def test_single_digit_grounding_requires_nearby_evidence_context():
+    assert Summarizer._bare_digits_in_evidence("4人", "The meeting took place in 2024.") is False
+    assert Summarizer._bare_digits_in_evidence("4人", "The attack killed 4 people.") is True
+
+
+def test_numeric_grounding_accepts_korean_cjk_scale_equivalence():
+    """Korean ``3천500`` and Chinese ``3千500`` must equal numeric 3,500."""
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/yonhap",
+                title="민주콩고 에볼라 확진자 3천500명 넘어",
+                source_name="Yonhap",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Confirmed Ebola cases in the Democratic Republic of Congo surpassed 3500.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**刚果（金）埃博拉确诊病例超3千500例**\n\n病例规模已超过3千500例。",
+        quality_status="publishable",
+    )
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "3千500" in summary.summary
+    assert "unsupported_numeric_claim" not in summary.quality_flags
+    assert summary.quality_status == "publishable"
+
+
+def test_numeric_grounding_fails_closed_for_live_rank_13_shape(monkeypatch):
+    """The published rank-13 placeholder and orphan ``1%。`` must disappear."""
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/ebola",
+                title="민주콩고 에볼라 확진자 3천500명 넘어…역대 2번째 규모",
+                source_name="Yonhap",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Confirmed Ebola cases surpassed 3500, the second-largest outbreak on record.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**刚果（金）埃博拉确诊病例超有关数字例，为历史第二大疫情**\n\n1%。",
+        quality_status="needs_review",
+    )
+    monkeypatch.setattr(summarizer, "_rewrite_grounded_summary", lambda *_args: None)
+
+    summarizer._enforce_numeric_grounding(summary)
+
+    assert "有关数字" not in summary.summary
+    assert "certain number" not in summary.summary.casefold()
+    assert "1%。" not in summary.summary
+    assert not summarizer._numeric_safety_violations(summary.summary)
+    assert summary.quality_status == "needs_review"
+
+
+def test_numeric_grounding_fails_closed_for_live_russia_ukraine_shapes(monkeypatch):
+    """The live casualty placeholder and ``7万人。`` fragment are not publishable."""
+    summarizer = Summarizer(_config())
+    cases = [
+        (
+            "https://example.com/kyiv",
+            "Russian attack on Kyiv kills 4, wounds 13",
+            "The attack killed 4 people and wounded 13 others.",
+            "**俄罗斯袭击基辅致有关数字死亡，数十人受伤**\n\n1%。",
+        ),
+        (
+            "https://example.com/losses",
+            "Ukraine says Russian losses rose by 1,470",
+            "Ukraine reported a daily increase of 1,470 and total losses of 1,446,150.",
+            "**乌克兰称俄军损失新增1470人**\n\n7万人。",
+        ),
+    ]
+
+    for url, title, content, raw_summary in cases:
+        cluster = ArticleCluster(
+            topic_category="World News",
+            articles=[
+                Article(
+                    url=url,
+                    title=title,
+                    source_name="Source",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content=content,
+                ),
+            ],
+        )
+        summary = ClusterSummary(cluster=cluster, summary=raw_summary, quality_status="publishable")
+        monkeypatch.setattr(summarizer, "_rewrite_grounded_summary", lambda *_args: None)
+
+        summarizer._enforce_numeric_grounding(summary)
+
+        assert "有关数字" not in summary.summary
+        assert "certain number" not in summary.summary.casefold()
+        if "7万人" in raw_summary:
+            assert "7万人" not in summary.summary
+        assert not summarizer._numeric_safety_violations(summary.summary)
+        assert summary.quality_status == "needs_review"
+
+
+def test_translated_numeric_grounding_fails_closed_for_live_fragment(monkeypatch):
+    """English output receives the same gate and cannot resurrect bad numbers."""
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/losses",
+                title="Ukraine says Russian losses rose by 1,470",
+                source_name="Source",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Ukraine reported a daily increase of 1,470 and total losses of 1,446,150.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**乌克兰称俄军损失新增1470人**\n\n乌克兰方面发布了损失统计。",
+        quality_status="publishable",
+    )
+    payload = (
+        '{"items":[{"index":0,"headline":"Russian losses reach certain number",'
+        '"body":"70,000.","short_topic_name":"Ukraine war",'
+        '"perspective_groups":[]}],"labels":{}}'
+    )
+    monkeypatch.setattr(litellm, "completion", lambda **_kwargs: _response(payload))
+
+    assert summarizer.translate_report_content([summary], hot_topics=[], focus_storylines=[]) is True
+    assert "certain number" not in (summary.summary_en or "").casefold()
+    assert "70,000." not in (summary.summary_en or "")
+    assert not summarizer._numeric_safety_violations(summary.summary_en or "")
+    assert summary.quality_status == "needs_review"

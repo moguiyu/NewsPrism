@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from newsprism.config import Config, SourceConfig
 from newsprism.service.clusterer import Clusterer
-from newsprism.types import Article
+from newsprism.types import Article, ArticleCluster
 
 
 def _config() -> Config:
@@ -63,6 +63,58 @@ def test_event_graph_merges_near_duplicate_angles():
     assert len(clusters) == 1
     assert clusters[0].is_multi_source is True
     assert len(clusters[0].sources) == 3
+
+
+def test_article_cluster_ignores_flagged_and_legacy_placeholder_urls():
+    real_articles = [
+        _article("Reuters", "Real event report", ["World News"], [1.0, 0.0]),
+        _article("The Guardian", "Real event analysis", ["World News"], [0.99, 0.01]),
+    ]
+    placeholders = [
+        Article(
+            url="placeholder:fr:event",
+            title="待补充：法国声音",
+            source_name="[法国声音待补]",
+            published_at=datetime.now(tz=timezone.utc),
+            content="",
+            embedding=[1.0, 0.0],
+            is_placeholder=False,
+        ),
+        Article(
+            url="placeholder:de:event",
+            title="待补充：德国声音",
+            source_name="[德国声音待补]",
+            published_at=datetime.now(tz=timezone.utc),
+            content="",
+            embedding=[1.0, 0.0],
+            is_placeholder=True,
+        ),
+    ]
+
+    cluster = ArticleCluster(topic_category="World", articles=real_articles + placeholders)
+
+    assert cluster.sources == ["Reuters", "The Guardian"]
+    assert cluster.is_multi_source is True
+
+
+def test_clusterer_drops_synthetic_placeholder_articles_before_clustering():
+    clusterer = Clusterer(_config())
+    real = _article("Reuters", "Real event report", ["World News"], [1.0, 0.0])
+    legacy_placeholder = Article(
+        url="placeholder:fr:event",
+        title="待补充：法国声音",
+        source_name="[法国声音待补]",
+        published_at=datetime.now(tz=timezone.utc),
+        content="",
+        embedding=[1.0, 0.0],
+        is_placeholder=False,
+    )
+
+    clusters = clusterer.cluster([real, legacy_placeholder])
+    assert len(clusters) == 1
+    assert clusters[0].articles == [real]
+    assert clusters[0].sources == ["Reuters"]
+    assert clusterer.cluster([legacy_placeholder]) == []
 
 
 def test_event_graph_keeps_related_follow_on_story_separate():

@@ -44,6 +44,7 @@ from newsprism.repo import (
 )
 from newsprism.runtime.publisher import TelegramPublisher
 from newsprism.runtime.renderer import HtmlRenderer
+from newsprism.runtime.publication_validator import validate_publication_contract
 from newsprism.service.clusterer import Clusterer
 from newsprism.service.llm_clusterer import LLMClusterer
 from newsprism.service.collector import Collector
@@ -62,9 +63,51 @@ from newsprism.service.history import (
 from newsprism.service.impact import ImpactAssessor
 from newsprism.service.seeker import ActiveSeeker
 from newsprism.service.summarizer import Summarizer
-from newsprism.types import Article, ArticleCluster, Cluster, ClusterSummary, raw_to_articles
+from newsprism.types import (
+    Article,
+    ArticleCluster,
+    Cluster,
+    ClusterSummary,
+    is_real_article,
+    raw_to_articles,
+)
 
 logger = logging.getLogger(__name__)
+
+
+_PUBLICATION_BLOCKED_STATUSES = {"needs_review", "seek_more_evidence", "suppress"}
+_PUBLICATION_REJECTION_PATTERNS = (
+    re.compile(r"有关数字|certain number", re.IGNORECASE),
+    re.compile(r"^\s*[\d,]+(?:\.\d+)?\s*(?:[%％]|万人|万|人|死者|dead|injured)?\s*[。.!?]?$", re.IGNORECASE),
+)
+
+
+_is_real_article = is_real_article
+
+
+def _cluster_has_real_article(cluster: ArticleCluster) -> bool:
+    return any(_is_real_article(article) for article in cluster.articles)
+
+
+def _summary_publication_rejection(summary: ClusterSummary) -> str | None:
+    """Fail closed on unresolved quality or visibly corrupted summary text."""
+    contract_issues = validate_publication_contract([summary])
+    if contract_issues:
+        return ";".join(issue.code for issue in contract_issues)
+
+    flags = {str(flag) for flag in (getattr(summary, "quality_flags", []) or [])}
+    if "human_approved" not in flags:
+        status = str(getattr(summary, "quality_status", "unknown") or "unknown")
+        if status in _PUBLICATION_BLOCKED_STATUSES:
+            return f"quality_status={status}"
+        if "unsupported_numeric_claim" in flags:
+            return "unsupported_numeric_claim"
+
+    for text in (getattr(summary, "summary", ""), getattr(summary, "summary_en", "") or ""):
+        for pattern in _PUBLICATION_REJECTION_PATTERNS:
+            if pattern.search(text):
+                return f"malformed_summary={pattern.pattern}"
+    return None
 
 try:
     from newsprism.repo import get_article_id_by_url
@@ -432,11 +475,19 @@ class Scheduler:
                     len(articles),
                     today.isoformat(),
                 )
+            real_article_count = sum(1 for article in articles if _is_real_article(article))
+            if real_article_count != len(articles):
+                logger.info(
+                    "Publication input: excluded %d placeholder/non-HTTP rows before clustering",
+                    len(articles) - real_article_count,
+                )
+                articles = [article for article in articles if _is_real_article(article)]
             if not articles:
                 logger.warning("No unclustered articles found — skipping %s", phase_name.lower())
                 return
 
             clusters = self.clusterer.cluster(articles)
+            clusters = [cluster for cluster in clusters if _cluster_has_real_article(cluster)]
             if not clusters:
                 logger.warning("No clusters formed — skipping %s", phase_name.lower())
                 return
@@ -501,9 +552,15 @@ class Scheduler:
             # Phase 2.5: Actively seek missing perspectives (impact status decides where)
             selected_clusters = self.seeker.enhance_clusters(selected_clusters)
             for cluster in selected_clusters:
+                # Seeker enrichment can append inline placeholders. Recompute
+                # source membership before signal/status is refreshed, while
+                # keeping those markers available to the renderer.
+                cluster.__post_init__()
                 # Seeker may have added articles → refresh the local signal/status.
                 self.impact_assessor.recompute_local(cluster)
                 for article in cluster.articles:
+                    if not _is_real_article(article):
+                        continue
                     if article.id is not None:
                         continue
                     article.id = insert_article(article)
@@ -513,7 +570,8 @@ class Scheduler:
             selected_clusters = [
                 cluster
                 for cluster in selected_clusters
-                if not (cluster.impact and cluster.impact.status == "suppress")
+                if _cluster_has_real_article(cluster)
+                and not (cluster.impact and cluster.impact.status == "suppress")
             ]
             self._persist_impact_evaluations(candidate_clusters, today)
             logger.info(
@@ -548,10 +606,27 @@ class Scheduler:
 
             # Filter out stale clusters and store freshness metadata
             kept_summaries: list[ClusterSummary] = []
-            stats = {"new": 0, "developing": 0, "stale": 0}
+            stats = {"new": 0, "developing": 0, "stale": 0, "rejected": 0}
 
             for cs, (cluster, summary, freshness) in zip(summaries, freshness_results):
                 stats[freshness.state] += 1
+
+                rejection_reason = _summary_publication_rejection(cs)
+                if rejection_reason:
+                    stats["rejected"] += 1
+                    logger.warning(
+                        "Skipping non-publishable summary: reason=%s headline=%s",
+                        rejection_reason,
+                        _cluster_storyline_headline(cs.cluster),
+                    )
+                    rejected_ids = [
+                        article.id
+                        for article in cs.cluster.articles
+                        if article.id and _is_real_article(article)
+                    ]
+                    if rejected_ids:
+                        mark_articles_clustered(rejected_ids)
+                    continue
 
                 if freshness.state == "stale":
                     logger.info("Skipping stale cluster: %s", cs.summary[:60])
@@ -594,8 +669,8 @@ class Scheduler:
                 kept_summaries.append(cs)
 
             logger.info(
-                "Freshness results: %d new, %d developing, %d stale (filtered)",
-                stats["new"], stats["developing"], stats["stale"],
+                "Freshness/publication results: %d new, %d developing, %d stale, %d rejected",
+                stats["new"], stats["developing"], stats["stale"], stats["rejected"],
             )
 
             base_plan = self.editorial_planner.base_plan(kept_summaries)
