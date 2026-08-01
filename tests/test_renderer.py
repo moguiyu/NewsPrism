@@ -1921,6 +1921,96 @@ def test_failed_target_remains_visible_with_two_real_perspectives(renderer, tmp_
     assert "未确认官方归属" in html
 
 
+def test_render_counts_real_articles_separately_from_placeholders_and_localizes_marker(renderer, tmp_path):
+    renderer.output_dir = tmp_path
+    organic = Article(
+        url="https://reuters.com/event",
+        title="Event report",
+        source_name="Reuters",
+        published_at=datetime.now(tz=timezone.utc),
+        content="A real event report with enough context for the summary.",
+        origin_region="us",
+    )
+    placeholder = Article(
+        url="placeholder:ua:event",
+        title="待补充：乌克兰声音",
+        source_name="[Ukraine声音待补]",
+        published_at=datetime.now(tz=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="ua",
+        origin_region="ua",
+        is_placeholder=True,
+        search_acceptance_status="failed",
+        search_acceptance_reason="candidate_pending_review",
+    )
+    summary = ClusterSummary(
+        cluster=ArticleCluster(topic_category="World News", articles=[organic, placeholder]),
+        summary="**Event report**\n\nA real event report with enough context for the summary.",
+        quality_status="publishable",
+    )
+
+    html_path = renderer.render([summary], date(2026, 8, 1), update_latest=False)
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+    card = payload["clusters"][0]
+
+    assert card["article_count"] == 1
+    assert card["real_article_count"] == 1
+    assert card["placeholder_count"] == 1
+    assert card["total_article_count"] == 2
+    assert card["sources"] == ["Reuters"]
+    assert card["organic_unique_sources"] == 1
+    assert card["organic_unique_regions"] == 1
+    placeholder_rows = [row for row in card["articles"] if row["is_placeholder"]]
+    assert placeholder_rows[0]["url"] is None
+    placeholder_source = next(
+        source for source in card["footer_sources"] if source["is_placeholder"]
+    )
+    assert placeholder_source["compact_label_en"] == "🔍[Ukraine voice pending]"
+
+
+def test_accepted_search_without_materiality_evidence_is_not_an_angle(renderer, tmp_path):
+    renderer.output_dir = tmp_path
+    organic = Article(
+        url="https://reuters.com/event",
+        title="Event report",
+        source_name="Reuters",
+        published_at=datetime.now(tz=timezone.utc),
+        content="A real event report with enough context for the summary.",
+    )
+    stale_contract = Article(
+        url="https://example.com/annual-report",
+        title="Annual report",
+        source_name="Example Official",
+        published_at=datetime.now(tz=timezone.utc),
+        content="A background document, not an event response.",
+        is_searched=True,
+        search_region="us",
+        source_kind="official_web",
+        is_official_source=True,
+        search_acceptance_status="accepted",
+    )
+    summary = ClusterSummary(
+        cluster=ArticleCluster(topic_category="Business", articles=[organic, stale_contract]),
+        summary="**Event report**\n\nA real event report with enough context for the summary.",
+        grouped_perspectives=[
+            PerspectiveGroup(sources=["Reuters"], perspective="Current event angle."),
+            PerspectiveGroup(sources=["Example Official"], perspective="Background context."),
+        ],
+        quality_status="publishable",
+    )
+
+    html_path = renderer.render([summary], date(2026, 8, 1), update_latest=False)
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+    card = payload["clusters"][0]
+
+    assert card["distinct_perspective_count"] == 1
+    assert card["source_groups"][0]["sources"][0]["source"] == "Reuters"
+    official = next(source for source in card["footer_sources"] if source["source"] == "Example Official")
+    assert official["counts_as_perspective"] is False
+    assert official["provenance_label_en"] == "Review only"
+
+
 def test_render_shared_storyline_tag_for_main_lane_same_key_clusters(renderer, tmp_path):
     """Issue #2 rec #4 fallback: when 2+ main-lane clusters share a
     storyline_key (they didn't claim a tab because of max_topic_tabs), each

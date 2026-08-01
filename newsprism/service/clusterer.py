@@ -26,7 +26,7 @@ import numpy as np
 
 from newsprism.config import Config
 from newsprism.service.embeddings import get_model as _get_model
-from newsprism.types import Article, ArticleCluster
+from newsprism.types import Article, ArticleCluster, is_real_article
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,10 @@ class Clusterer:
 
     def cluster(self, articles: list[Article]) -> list[ArticleCluster]:
         """Group articles into event clusters using graph connectivity."""
+        # Placeholder rows are audit/display markers, not news inputs.  Filter
+        # by both the persisted flag and the synthetic URL so legacy rows with
+        # a missing/false flag cannot form a real cluster.
+        articles = [article for article in articles if is_real_article(article)]
         if not articles:
             return []
 

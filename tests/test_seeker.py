@@ -55,6 +55,11 @@ def _cluster(status: str = "seek_more_evidence", composite: float = 0.6, hot: bo
     return cluster
 
 
+def _fresh_result(result: dict) -> dict:
+    """Mark a synthetic Tavily result as having current provider evidence."""
+    return {**result, "published_at": datetime.now(tz=timezone.utc).isoformat()}
+
+
 def test_region_config_only_keeps_major_regions():
     seeker = ActiveSeeker(_config())
     assert set(seeker.region_config) == {"us", "fr", "jp"}
@@ -247,6 +252,7 @@ def test_official_identity_resolution_restricts_event_search_to_resolved_domain(
             "url": "https://acmelabs.com/security-incident",
             "title": "Acme Labs security incident statement",
             "content": "Acme Labs disclosed the security incident. " * 10,
+            "published_at": datetime.now(tz=timezone.utc).isoformat(),
         }], None)
 
     identity = CandidateIdentity(
@@ -283,6 +289,7 @@ def test_reviewed_social_binding_avoids_unrestricted_official_event_search():
             "url": "https://x.com/exampleministry/status/123",
             "title": "Example Ministry policy statement",
             "content": "Example Ministry announced the policy change. " * 10,
+            "published_at": datetime.now(tz=timezone.utc).isoformat(),
         }], None)
 
     with patch.object(
@@ -312,6 +319,7 @@ def test_known_publisher_country_mismatch_is_rejected_not_left_pending():
         "url": "https://example.qa/france",
         "title": "France policy update",
         "content": "France policy reporting. " * 12,
+        "published_at": datetime.now(tz=timezone.utc).isoformat(),
     }
     identity = CandidateIdentity(
         source_type="country_editorial",
@@ -341,6 +349,7 @@ def test_thin_official_pdf_survives_after_entity_domain_is_resolved():
         "url": "https://fcc.gov/sites/default/files/robots-nsd.pdf",
         "title": "FCC robot national security determination",
         "content": "",
+        "published_at": datetime.now(tz=timezone.utc).isoformat(),
     }
 
     accepted, rejected = seeker._accept_results(
@@ -439,11 +448,9 @@ def test_freshness_gate_rejects_old():
     old = datetime.now(tz=timezone.utc) - timedelta(hours=200)
     assert seeker._is_fresh(fresh) is True
     assert seeker._is_fresh(old) is False
-    # Unknown publish date is now ACCEPTED (not rejected). Tavily frequently
-    # returns published_date=None even for fresh results — the search itself
-    # is date-bounded (days: 3), so trust that bound rather than dropping
-    # 100% of results. See the 2026-07-22 incident.
-    assert seeker._is_fresh(None) is True
+    # A date-bounded query is not page-level evidence. Undated official or
+    # background pages must not be accepted as current supplements.
+    assert seeker._is_fresh(None) is False
 
 
 def test_parse_url_date_extracts_date_from_common_url_patterns():
@@ -452,10 +459,137 @@ def test_parse_url_date_extracts_date_from_common_url_patterns():
     # Major outlets embed the date in the path.
     assert seeker._parse_url_date("https://www.cnn.com/2026/07/20/world/live-news/x").date().isoformat() == "2026-07-20"
     assert seeker._parse_url_date("https://news.northeastern.edu/2026/07/20/andy-burnham").date().isoformat() == "2026-07-20"
-    # No date-like segment → None (freshness gate falls back to query-bound trust).
+    # No date-like segment → None (freshness gate fails closed).
     assert seeker._parse_url_date("https://www.bbc.co.uk/news/uk-politics-12345678") is None
     assert seeker._parse_url_date("https://example.com/no-date-here") is None
     assert seeker._parse_url_date(None) is None
+
+
+def test_parse_url_date_supports_year_month_quarter_and_year_only_paths():
+    seeker = ActiveSeeker(_config())
+
+    assert seeker._parse_url_date("https://ustr.gov/press/2025/september/statement").date().isoformat() == "2025-09-01"
+    assert seeker._parse_url_date("https://images.samsung.com/ir/2023_4Q_BusinessReport.pdf").date().isoformat() == "2023-10-01"
+    assert seeker._parse_url_date("https://example.gov/archive/2021/02/report.pdf").date().isoformat() == "2021-02-01"
+    assert seeker._parse_url_date("https://example.gov/2025/annual-report").date().isoformat() == "2025-01-01"
+
+
+def test_undated_official_result_is_rejected_even_when_search_is_date_bounded():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("us", "Acme Labs", "company")
+    identity = CandidateIdentity(
+        source_type="official_web",
+        publisher_entity="Acme Labs",
+        publisher_region="us",
+        relationship="same_entity",
+    )
+    seeker._resolved_official_bindings["acmelabs", "us"] = {"acmelabs.com": identity}
+
+    accepted, rejected = seeker._accept_results(
+        _cluster(),
+        target,
+        [{
+            "url": "https://acmelabs.com/security-incident",
+            "title": "Acme Labs statement on the security incident",
+            "content": "Acme Labs disclosed the security incident. " * 10,
+        }],
+        None,
+        "official",
+    )
+
+    assert accepted == []
+    assert rejected == [("stale_result", "https://acmelabs.com/security-incident")]
+
+
+def test_current_dated_official_background_page_is_not_a_perspective():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("us", "Microsoft", "company")
+    identity = CandidateIdentity(
+        source_type="official_web",
+        publisher_entity="Microsoft",
+        publisher_region="us",
+        relationship="same_entity",
+    )
+    seeker._resolved_official_bindings["microsoft", "us"] = {"microsoft.com": identity}
+
+    accepted, rejected = seeker._accept_results(
+        _cluster(),
+        target,
+        [{
+            "url": "https://www.microsoft.com/investor-relations/annual-report/2025",
+            "title": "Microsoft Annual Report 2025",
+            "content": "Microsoft annual report and financial results. " * 10,
+            "published_date": datetime.now(tz=timezone.utc).isoformat(),
+        }],
+        None,
+        "official",
+    )
+
+    assert accepted == []
+    assert rejected == [("background_context", "https://www.microsoft.com/investor-relations/annual-report/2025")]
+
+
+def test_current_official_event_evidence_remains_accepted_and_marked():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("us", "FCC", "government_agency")
+    identity = CandidateIdentity(
+        source_type="official_web",
+        publisher_entity="FCC",
+        publisher_region="us",
+        relationship="same_entity",
+    )
+    seeker._resolved_official_bindings["fcc", "us"] = {"fcc.gov": identity}
+
+    accepted, rejected = seeker._accept_results(
+        _cluster(),
+        target,
+        [{
+            "url": "https://www.fcc.gov/2026/08/01/statement-on-spectrum-decision",
+            "title": "FCC statement on the spectrum decision",
+            "content": "The FCC issued a statement on the spectrum decision. " * 10,
+            "published_at": datetime.now(tz=timezone.utc).isoformat(),
+        }],
+        None,
+        "official",
+    )
+
+    assert rejected == []
+    assert len(accepted) == 1
+    assert accepted[0].source_kind == "official_web"
+    assert accepted[0].search_acceptance_reason == "current_event_perspective"
+
+
+def test_official_domain_does_not_relax_event_materiality_threshold():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("us", "Acme Labs", "company")
+    identity = CandidateIdentity(
+        source_type="official_web",
+        publisher_entity="Acme Labs",
+        publisher_region="us",
+        relationship="same_entity",
+    )
+    seeker._resolved_official_bindings["acmelabs", "us"] = {"acmelabs.com": identity}
+    article = _article(
+        "acmelabs.com",
+        "Acme Labs statement on an unrelated event",
+        url="https://acmelabs.com/2026/08/01/unrelated-event",
+    )
+    article.content = "Acme Labs published a statement about an unrelated event. " * 10
+
+    class _LowSimilarityModel:
+        def encode(self, *_args, **_kwargs):
+            return [[0.5, 0.8660254]]
+
+    with patch("newsprism.service.seeker.get_model", return_value=_LowSimilarityModel()):
+        reason = seeker._rejection_reason(
+            article,
+            target,
+            [],
+            [1.0, 0.0],
+            stage="official",
+        )
+
+    assert reason == "event_mismatch"
 
 
 def test_result_to_article_rejects_thin_content():
@@ -530,7 +664,7 @@ def test_recovery_target_drives_official_query_and_matching_domain_acceptance():
         accepted, rejected = seeker._accept_results(
             cluster,
             recovered,
-            [{"url": candidate.url, "title": candidate.title, "content": candidate.content}],
+            [_fresh_result({"url": candidate.url, "title": candidate.title, "content": candidate.content})],
             None,
             "official",
         )
@@ -565,7 +699,7 @@ def test_official_publisher_mismatch_is_rejected_even_when_event_matches():
         ),
     ):
         accepted, rejected = seeker._accept_results(_cluster(), target, [
-            {"url": article.url, "title": article.title, "content": article.content}
+            _fresh_result({"url": article.url, "title": article.title, "content": article.content})
         ], None, "official")
     assert accepted == []
     assert rejected == [("publisher_target_mismatch", article.url)]
@@ -595,7 +729,7 @@ def test_high_confidence_governmental_domain_bypasses_translated_label_mismatch(
         ),
     ):
         accepted, rejected = seeker._accept_results(_cluster(), target, [
-            {"url": article.url, "title": article.title, "content": article.content}
+            _fresh_result({"url": article.url, "title": article.title, "content": article.content})
         ], None, "official")
     assert rejected == []
     assert len(accepted) == 1
@@ -626,7 +760,7 @@ def test_high_confidence_governmental_domain_bypasses_acronym_mismatch():
         ),
     ):
         accepted, rejected = seeker._accept_results(_cluster(), target, [
-            {"url": article.url, "title": article.title, "content": article.content}
+            _fresh_result({"url": article.url, "title": article.title, "content": article.content})
         ], None, "official")
     assert rejected == []
     assert len(accepted) == 1
@@ -653,7 +787,7 @@ def test_high_confidence_same_entity_still_requires_governmental_domain():
         ),
     ):
         accepted, rejected = seeker._accept_results(_cluster(), target, [
-            {"url": article.url, "title": article.title, "content": article.content}
+            _fresh_result({"url": article.url, "title": article.title, "content": article.content})
         ], None, "official")
     assert accepted == []
     assert rejected == [("publisher_target_mismatch", article.url)]
@@ -681,7 +815,7 @@ def test_relationship_mismatch_is_rejected_even_with_high_confidence_and_gov_dom
         ),
     ):
         accepted, rejected = seeker._accept_results(_cluster(), target, [
-            {"url": article.url, "title": article.title, "content": article.content}
+            _fresh_result({"url": article.url, "title": article.title, "content": article.content})
         ], None, "official")
     assert accepted == []
     assert rejected == [("publisher_target_mismatch", article.url)]
@@ -769,7 +903,7 @@ def test_registry_alias_miss_on_governmental_domain_falls_through_not_hard_rejec
         ),
     ):
         accepted, rejected = seeker._accept_results(_cluster(), target, [
-            {"url": article.url, "title": article.title, "content": article.content}
+            _fresh_result({"url": article.url, "title": article.title, "content": article.content})
         ], None, "official")
     assert rejected == []
     assert len(accepted) == 1
@@ -802,7 +936,7 @@ def test_governmental_domain_tail_bypass_accepts_exact_match_without_confidence(
         ),
     ):
         accepted, rejected = seeker._accept_results(_cluster(), target, [
-            {"url": article.url, "title": article.title, "content": article.content}
+            _fresh_result({"url": article.url, "title": article.title, "content": article.content})
         ], None, "official")
     assert rejected == []
     assert len(accepted) == 1
@@ -816,6 +950,7 @@ def test_ambiguous_official_binding_is_queued_for_review():
         "url": "https://shared-government.example/statement",
         "title": "Example Ministry issues statement",
         "content": "Example Ministry issues a detailed statement. " * 10,
+        "published_at": datetime.now(tz=timezone.utc).isoformat(),
     }
 
     with patch.object(

@@ -116,6 +116,24 @@ def _short_name(value: str, max_chars: int) -> str:
     return compact or "焦点话题"
 
 
+def _storyline_float_config(
+    hot_cfg: dict[str, object],
+    namespaced_key: str,
+    legacy_key: str,
+    default: float,
+) -> float:
+    """Read a storyline setting with a namespaced key and migration alias.
+
+    The production YAML uses namespaced keys, while lightweight test configs
+    and older callers may still provide the unprefixed aliases. A present
+    namespaced value wins, including valid falsey values such as ``0.0``.
+    """
+    value = hot_cfg.get(namespaced_key)
+    if value is None:
+        value = hot_cfg.get(legacy_key, default)
+    return float(value)
+
+
 # Token-overlap bar for the "is the historical storyline name still relevant?"
 # check. Low overlap → the name is stale and a fresh name should be generated
 # from today's content (Issue #4 / Additional fix #3).
@@ -441,7 +459,19 @@ class StorylineStateMachine:
         key = cluster.storyline_key or cluster.macro_topic_key
         if not key:
             return []
-        related = [historical for historical in historical_clusters if historical.storyline_key == key]
+        current_text = _cluster_text(cluster)
+        current_name = getattr(cluster, "storyline_name", None)
+        if current_name and not _storyline_name_matches_content(str(current_name), current_text):
+            return []
+
+        related = []
+        for historical in historical_clusters:
+            if historical.storyline_key != key:
+                continue
+            historical_name = getattr(historical, "storyline_name", None)
+            if historical_name and not _storyline_name_matches_content(str(historical_name), current_text):
+                continue
+            related.append(historical)
         related.sort(key=lambda historical: (historical.report_date, historical.id or 0), reverse=True)
         return related
 
@@ -462,9 +492,24 @@ class StorylineResolver:
         self.similarity_fn = similarity_fn
         hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
         self.max_name_chars = int(hot_cfg.get("tab_name_max_chars", 10))
-        self.edge_confidence_threshold = float(hot_cfg.get("edge_confidence_threshold", 0.56))
-        self.candidate_similarity = float(hot_cfg.get("admission_similarity", 0.62))
-        self.history_similarity_threshold = float(hot_cfg.get("history_similarity_threshold", 0.48))
+        self.edge_confidence_threshold = _storyline_float_config(
+            hot_cfg,
+            "storyline_edge_confidence_threshold",
+            "edge_confidence_threshold",
+            0.56,
+        )
+        self.candidate_similarity = _storyline_float_config(
+            hot_cfg,
+            "storyline_admission_similarity",
+            "admission_similarity",
+            0.62,
+        )
+        self.history_similarity_threshold = _storyline_float_config(
+            hot_cfg,
+            "storyline_history_similarity_threshold",
+            "history_similarity_threshold",
+            0.48,
+        )
         # A storyline family must be internally coherent: the mean pairwise
         # centroid cosine across *all* its members must clear this bar. Union-find
         # over accepted edges otherwise chains unrelated clusters transitively
@@ -1074,10 +1119,17 @@ class StorylineResolver:
         profile: dict[str, object],
         history_match: dict[str, object] | None,
     ) -> None:
-        if history_match and history_match.get("storyline_key"):
+        historical_name = str((history_match or {}).get("storyline_name") or "")
+        current_text = str(profile.get("text") or profile.get("lead_title") or "")
+        history_matches_content = bool(
+            history_match
+            and history_match.get("storyline_key")
+            and _storyline_name_matches_content(historical_name, current_text)
+        )
+        if history_matches_content:
             storyline_key = str(history_match["storyline_key"])
             storyline_name = _short_name(
-                str(history_match.get("storyline_name") or storyline_key), self.max_name_chars
+                historical_name, self.max_name_chars
             )
             confidence = float(history_match.get("score", 0.0))
         else:

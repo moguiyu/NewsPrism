@@ -1,12 +1,13 @@
 """Tests for the merged history module: freshness, validation, storyline grouping."""
 from datetime import datetime, timezone
 
-from newsprism.config import Config
+from newsprism.config import Config, load_config
 from newsprism.service.history import (
     EventClusterValidator,
     FreshnessEvaluator,
     StorylineResolver,
     StorylineStateMachine,
+    _content_hash,
 )
 from newsprism.types import Article, ArticleCluster, Cluster, ImpactAssessment
 
@@ -96,6 +97,22 @@ def test_validator_noop_when_hot_topics_disabled():
 
 
 # ─── StorylineResolver ────────────────────────────────────────────────────────
+
+
+def test_resolver_uses_namespaced_values_from_real_config():
+    cfg = load_config("config/config.yaml")
+    cfg.output["hot_topics"].update(
+        {
+            "edge_confidence_threshold": 0.01,
+            "admission_similarity": 0.02,
+            "history_similarity_threshold": 0.03,
+        }
+    )
+    resolver = StorylineResolver(cfg, _StubSummarizer([]), lambda *_args: 0.0)
+
+    assert resolver.edge_confidence_threshold == 0.50
+    assert resolver.candidate_similarity == 0.64
+    assert resolver.history_similarity_threshold == 0.55
 
 
 def test_conflict_relation_requires_both_stories_to_name_same_conflict_pair():
@@ -579,6 +596,42 @@ def test_resolver_regenerates_name_on_same_domain_different_entity():
     assert "美联储宣布维持利率不" not in names
 
 
+def test_resolver_does_not_reuse_mismatched_singleton_history():
+    title = "英国央行维持利率3.75%不变"
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer([]),
+        similarity_fn=lambda _text, _historical: 0.66,
+    )
+    cluster = ArticleCluster(
+        topic_category="Business",
+        articles=[_article(title, [1.0, 0.0, 0.0])],
+    )
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="Business",
+            article_ids=[1],
+            summary="Federal Reserve holds interest rate",
+            perspectives={},
+            report_date="2026-07-30",
+            storyline_key="single-fed-rate",
+            storyline_name="美联储宣布维持利率不",
+            storyline_role="none",
+        )
+    ]
+
+    resolved = resolver.resolve(
+        [cluster],
+        historical,
+        datetime(2026, 7, 31, tzinfo=timezone.utc).date(),
+    )
+
+    assert resolved[0].storyline_key == f"single-{_content_hash(title)}"
+    assert resolved[0].storyline_key != "single-fed-rate"
+    assert resolved[0].storyline_name != "美联储宣布维持利率不"
+
+
 def test_resolver_uses_llm_name_for_new_family():
     resolver = StorylineResolver(
         _config(),
@@ -653,6 +706,36 @@ def test_state_machine_developing_with_history():
     historical = [_historical_cluster("prior", ["Reuters"])]
     historical[0].storyline_key = "k"
     assert machine.resolve_state(cluster, historical) == "developing"
+
+
+def test_state_machine_does_not_attach_mismatched_history_timeline():
+    cluster = ArticleCluster(
+        topic_category="Business",
+        articles=[_article("英国央行维持利率3.75%不变", [1.0, 0.0])],
+    )
+    cluster.storyline_key = "shared-rate-key"
+    cluster.storyline_name = "美联储宣布维持利率不"
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="Business",
+            article_ids=[1],
+            summary="Federal Reserve holds interest rate",
+            perspectives={},
+            report_date="2026-07-30",
+            storyline_key="shared-rate-key",
+            storyline_name="美联储宣布维持利率不",
+        )
+    ]
+
+    timeline = StorylineStateMachine().timeline_for_cluster(
+        cluster,
+        historical,
+        datetime(2026, 7, 31, tzinfo=timezone.utc).date(),
+    )
+
+    assert [event.event_type for event in timeline] == ["current"]
+    assert all(event.cluster_id is None for event in timeline)
 
 
 def test_state_machine_stabilized_with_strong_impact():

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.6.1 - 2026-08-01
+
+### Fixed
+
+- Prevented search-failure placeholders from becoming real article sources or
+  standalone published clusters, while preserving their failure provenance.
+- Added a publication contract gate for zero-real-source clusters,
+  non-publishable assessments, stale search evidence, and unsupported numeric
+  claims.
+- Hardened current-event search freshness and materiality checks, storyline
+  history/name reuse, numeric grounding fallbacks, and organic source metrics.
+- Preserved safe rendering for synthetic links and missing publication dates.
+
 ## v0.6.0 - 2026-07-29
 
 ### Added
