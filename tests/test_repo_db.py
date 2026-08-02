@@ -102,16 +102,18 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
             verdict="country_editorial",
             decision="pending_review",
             identity_evidence={"source_type": "country_editorial", "relationship": "uncertain"},
+            published_at=datetime(2026, 8, 2, 5, 30, tzinfo=timezone.utc),
         ),
         db_path=db_path,
     )
     assert review_id is not None
     with sqlite3.connect(db_path) as conn:
         candidate = conn.execute(
-            "SELECT domain, target_region, target_role, verdict, decision, identity_evidence FROM search_candidate_reviews"
+            "SELECT domain, target_region, target_role, verdict, decision, identity_evidence, published_at FROM search_candidate_reviews"
         ).fetchone()
     assert candidate[:5] == ("new-local.example", "cd", "company", "country_editorial", "pending_review")
     assert candidate[5] == '{"source_type":"country_editorial","relationship":"uncertain"}'
+    assert candidate[6] == "2026-08-02T05:30:00+00:00"
 
 
 def test_placeholder_metadata_round_trips_and_is_not_unclustered(tmp_path):
@@ -131,23 +133,36 @@ def test_placeholder_metadata_round_trips_and_is_not_unclustered(tmp_path):
         is_placeholder=True,
         search_acceptance_status="failed",
         search_acceptance_reason="candidate_pending_review",
+        search_stage_trace=[
+            {"stage": "official", "reason": "official_not_found"},
+            {"stage": "country", "reason": "candidate_pending_review"},
+        ],
     )
     article_id = insert_article(placeholder, db_path=db_path)
     assert article_id is not None
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
-            "SELECT is_placeholder, search_acceptance_status, search_acceptance_reason "
+            "SELECT is_placeholder, search_acceptance_status, search_acceptance_reason, search_stage_trace "
             "FROM articles WHERE id = ?",
             (article_id,),
         ).fetchone()
-    assert row == (1, "failed", "candidate_pending_review")
+    assert row == (
+        1,
+        "failed",
+        "candidate_pending_review",
+        '[{"stage":"official","reason":"official_not_found"},{"stage":"country","reason":"candidate_pending_review"}]',
+    )
 
     loaded = get_articles_by_ids([article_id], db_path=db_path)
     assert len(loaded) == 1
     assert loaded[0].is_placeholder is True
     assert loaded[0].search_acceptance_status == "failed"
     assert loaded[0].search_acceptance_reason == "candidate_pending_review"
+    assert loaded[0].search_stage_trace[-1] == {
+        "stage": "country",
+        "reason": "candidate_pending_review",
+    }
     assert get_unclustered_articles(max_age_hours=48, db_path=db_path) == []
 
 

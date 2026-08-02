@@ -22,7 +22,12 @@ DB_PATH = Path("data/newsprism.db")
 
 def init_db(db_path: Path = DB_PATH) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    # The scheduler and portal containers initialize the same bind-mounted DB
+    # concurrently after a deploy. Give the other initializer time to finish
+    # its short ALTER TABLE transaction instead of crashing and relying on a
+    # container restart.
+    with sqlite3.connect(db_path, timeout=30.0) as conn:
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA journal_mode=WAL")
 
         def _add_column(table: str, column: str, ddl: str) -> None:
@@ -61,6 +66,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 is_placeholder INTEGER NOT NULL DEFAULT 0,
                 search_acceptance_status TEXT,
                 search_acceptance_reason TEXT,
+                search_stage_trace TEXT NOT NULL DEFAULT '[]',
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -123,6 +129,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 decision TEXT NOT NULL,
                 reason TEXT NOT NULL DEFAULT '',
                 identity_evidence TEXT,
+                published_at TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(url, target_label, stage)
             );
@@ -340,6 +347,12 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 "search_acceptance_reason",
                 "search_acceptance_reason TEXT",
             )
+        if "search_stage_trace" not in article_columns:
+            _add_column(
+                "articles",
+                "search_stage_trace",
+                "search_stage_trace TEXT NOT NULL DEFAULT '[]'",
+            )
         # Older databases may contain synthetic rows created before the
         # placeholder flag existed, or rows written with the flag set false.
         # The URL scheme is unambiguous, so repair the persisted flag without
@@ -394,6 +407,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
             _add_column("search_candidate_reviews", "target_role", "target_role TEXT")
         if "identity_evidence" not in candidate_columns:
             _add_column("search_candidate_reviews", "identity_evidence", "identity_evidence TEXT")
+        if "published_at" not in candidate_columns:
+            _add_column("search_candidate_reviews", "published_at", "published_at TEXT")
 
         cursor = conn.execute("PRAGMA table_info(cluster_evaluations)")
         eval_columns = {row[1] for row in cursor.fetchall()}
@@ -444,9 +459,10 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                        is_searched, search_region, source_kind, platform, account_id,
                        is_official_source, origin_region, searched_provider,
                        is_placeholder, search_acceptance_status, search_acceptance_reason,
+                       search_stage_trace,
                        ownership_suppressed
                    )
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     article.url,
                     article.title,
@@ -466,6 +482,7 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                     1 if is_placeholder else 0,
                     article.search_acceptance_status,
                     article.search_acceptance_reason,
+                    json.dumps(article.search_stage_trace, ensure_ascii=False, separators=(",", ":")),
                     1 if getattr(article, "ownership_suppressed", False) else 0,
                 ),
             )
@@ -571,14 +588,16 @@ def insert_search_candidate_review(
             cur = conn.execute(
                 """INSERT INTO search_candidate_reviews (
                        url, domain, title, source_name, target_label, target_region,
-                       target_role, stage, verdict, decision, reason, identity_evidence, created_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+                       target_role, stage, verdict, decision, reason, identity_evidence,
+                       published_at, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
                 (
                     review.url, review.domain, review.title, review.source_name,
                     review.target_label, review.target_region, review.target_role, review.stage,
                     review.verdict, review.decision, review.reason,
                     json.dumps(review.identity_evidence, ensure_ascii=False, separators=(",", ":"))
                     if review.identity_evidence is not None else None,
+                    review.published_at.isoformat() if review.published_at else None,
                     review.created_at.isoformat() if review.created_at else None,
                 ),
             )
@@ -1256,6 +1275,11 @@ def _row_to_article(row: sqlite3.Row) -> Article:
             row["search_acceptance_reason"]
             if "search_acceptance_reason" in row.keys()
             else None
+        ),
+        search_stage_trace=(
+            json.loads(row["search_stage_trace"] or "[]")
+            if "search_stage_trace" in row.keys()
+            else []
         ),
     )
 
