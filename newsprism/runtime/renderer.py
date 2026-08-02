@@ -136,6 +136,7 @@ _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "thin_result": ("结果内容过少", "Result too thin"),
     "query_generation_failed": ("查询生成失败", "Query generation failed"),
     "entity_mismatch": ("实体不匹配", "Entity mismatch"),
+    "invalid_result_url": ("结果链接无效", "Invalid result URL"),
     "publisher_target_mismatch": ("发布者与目标不匹配", "Publisher does not match target"),
     "publisher_binding_unverified": ("未确认官方归属", "Official ownership unverified"),
     "official_binding_not_found": ("未找到可信官方渠道", "No verified official channel found"),
@@ -159,6 +160,28 @@ def _placeholder_failure_label(reason: str | None) -> tuple[str, str]:
         status = primary.removeprefix("http_") or "error"
         return (f"搜索服务错误（HTTP {status}）", f"Search service error (HTTP {status})")
     return _PLACEHOLDER_FAILURE_LABELS["unknown"]
+
+
+def _placeholder_stage_detail(
+    trace: list[dict[str, str]] | None,
+) -> tuple[str, str] | None:
+    """Render the attempted fallback chain instead of hiding it behind one reason."""
+    if not trace:
+        return None
+    stage_labels = {
+        "official": ("官方", "Official"),
+        "country": ("当地", "Local"),
+    }
+    zh_parts: list[str] = []
+    en_parts: list[str] = []
+    for item in trace:
+        stage = str(item.get("stage") or "").strip().lower()
+        reason = str(item.get("reason") or "unknown").strip().lower()
+        stage_zh, stage_en = stage_labels.get(stage, (stage or "搜索", stage.title() or "Search"))
+        reason_zh, reason_en = _placeholder_failure_label(reason)
+        zh_parts.append(f"{stage_zh}：{reason_zh}")
+        en_parts.append(f"{stage_en}: {reason_en}")
+    return "；".join(zh_parts), "; ".join(en_parts)
 
 
 # ── TEXT HELPERS ──────────────────────────────────────────────────────────────
@@ -653,6 +676,7 @@ class HtmlRenderer:
                     "is_placeholder": not _is_real_article(article),
                     "search_acceptance_status": getattr(article, "search_acceptance_status", None),
                     "search_acceptance_reason": getattr(article, "search_acceptance_reason", None),
+                    "search_stage_trace": getattr(article, "search_stage_trace", []),
                     "result_freshness_state": getattr(article, "result_freshness_state", None),
                     "search_evidence_role": getattr(article, "search_evidence_role", None),
                 }
@@ -730,8 +754,11 @@ class HtmlRenderer:
         if is_placeholder:
             compact_label = f"🔍{source_name}"
             compact_label_en = f"🔍{_placeholder_source_label_en(source_name)}"
-            provenance_label = placeholder_reason_zh
-            provenance_label_en = placeholder_reason_en
+            stage_detail = _placeholder_stage_detail(meta.get("search_stage_trace"))
+            provenance_label, provenance_label_en = stage_detail or (
+                placeholder_reason_zh,
+                placeholder_reason_en,
+            )
             url = None  # Nullify synthetic placeholder URL to prevent broken links in template
         return {
             "source": source_name,
@@ -740,6 +767,7 @@ class HtmlRenderer:
             "is_placeholder": is_placeholder,
             "search_acceptance_status": acceptance_status,
             "search_acceptance_reason": acceptance_reason,
+            "search_stage_trace": meta.get("search_stage_trace") or [],
             "placeholder_reason_zh": placeholder_reason_zh,
             "placeholder_reason_en": placeholder_reason_en,
             "search_region": search_region,
@@ -978,6 +1006,7 @@ class HtmlRenderer:
                 "published_at": article.published_at.strftime("%H:%M") if article.published_at else "",
                 "search_acceptance_status": getattr(article, "search_acceptance_status", "accepted" if article.is_searched else None),
                 "search_acceptance_reason": getattr(article, "search_acceptance_reason", ""),
+                "search_stage_trace": getattr(article, "search_stage_trace", []),
                 "result_freshness_state": getattr(article, "result_freshness_state", None),
                 "is_placeholder": not _is_real_article(article),
                 "is_real_article": _is_real_article(article),

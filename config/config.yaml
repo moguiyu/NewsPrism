@@ -118,6 +118,10 @@ output:
 # ─── ACTIVE SEARCH ────────────────────────────────────────────────────────────
 active_search:
   reviewed_bindings_file: data/search-source-bindings.yaml
+  # Enabled configured sources with independently controlled ownership stamps
+  # are already manually curated and may be reused as reviewed local-editorial
+  # domains. Newly discovered publishers still require search-review approval.
+  use_configured_country_sources: true
   telemetry_enabled: true
   result_max_age_hours: 72
   min_content_chars: 150
@@ -199,6 +203,41 @@ active_search:
       region: us
       entity: "Office of the U.S. Trade Representative"
       entity_aliases: ["美国贸易代表办公室", "美国贸易代表署", "USTR"]
+    openai.com:
+      verdict: official_web
+      region: us
+      entity: "OpenAI"
+      entity_aliases: ["OpenAI公司"]
+    abc.xyz:
+      verdict: official_web
+      region: us
+      entity: "Alphabet Inc."
+      entity_aliases: ["Alphabet", "谷歌母公司Alphabet"]
+    about.fb.com:
+      verdict: official_web
+      region: us
+      entity: "Meta Platforms"
+      entity_aliases: ["Meta", "Meta公司", "Facebook母公司Meta"]
+    microsoft.com:
+      verdict: official_web
+      region: us
+      entity: "Microsoft"
+      entity_aliases: ["微软", "Microsoft Corporation"]
+    ford.com:
+      verdict: official_web
+      region: us
+      entity: "Ford Motor Company"
+      entity_aliases: ["Ford", "福特", "福特汽车"]
+    ecb.europa.eu:
+      verdict: official_web
+      region: eu
+      entity: "European Central Bank"
+      entity_aliases: ["ECB", "欧洲央行", "欧央行", "欧洲中央银行"]
+    fifa.com:
+      verdict: official_web
+      region: ch
+      entity: "FIFA"
+      entity_aliases: ["国际足联", "Fédération Internationale de Football Association"]
   # Reviewed social ownership is account-scoped, never host-scoped:
   # official_account_bindings:
   #   x:

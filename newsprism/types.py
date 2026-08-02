@@ -56,6 +56,7 @@ class Article:
     is_placeholder: bool = False
     search_acceptance_status: str | None = None   # "accepted" | "failed" | None
     search_acceptance_reason: str | None = None   # short machine code, e.g. "http_401", "stale_result"
+    search_stage_trace: list[dict[str, str]] = field(default_factory=list)
 
 
 def is_placeholder_url(url: str | None) -> bool:
@@ -126,6 +127,7 @@ class SearchCandidateReview:
     target_role: str | None = None
     reason: str = ""
     identity_evidence: dict[str, Any] | None = None
+    published_at: datetime | None = None
     created_at: datetime | None = None
 
 

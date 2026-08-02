@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import numpy as np
+
 from newsprism.config import Config, SourceConfig
 from newsprism.service.locales import country_name, query_languages
 from newsprism.service.seeker import ActiveSeeker, CandidateIdentity, VoiceTarget
@@ -80,7 +82,46 @@ def test_unprofiled_country_uses_full_name_and_local_language_query():
     with patch.object(ActiveSeeker, "_localize_search_keyword", side_effect=lambda *args: f"local:{args[-1]}"):
         queries = seeker._build_search_queries(cluster, target, "Acme incident", "country")
     assert queries[0] == "local:fr"
+    assert "Acme Congo" in queries[-1]
     assert "Congo - Kinshasa" in queries[-1]
+
+
+def test_country_query_is_scoped_to_each_named_actor():
+    seeker = ActiveSeeker(_config())
+    cluster = _cluster()
+    alphabet = VoiceTarget(region="us", label="Alphabet", role="company")
+    microsoft = VoiceTarget(region="us", label="Microsoft", role="company")
+
+    alphabet_query = seeker._build_search_queries(
+        cluster, alphabet, "AI infrastructure spending", "country"
+    )[-1]
+    microsoft_query = seeker._build_search_queries(
+        cluster, microsoft, "AI infrastructure spending", "country"
+    )[-1]
+
+    assert alphabet_query.startswith("Alphabet ")
+    assert microsoft_query.startswith("Microsoft ")
+    assert alphabet_query != microsoft_query
+
+
+def test_deterministic_keyword_fallback_uses_headline_when_llm_fails():
+    seeker = ActiveSeeker(_config())
+    cluster = _cluster()
+    cluster.articles[0].title = "Google Gemini Spark expands worldwide"
+
+    with patch("newsprism.service.seeker.litellm.completion", side_effect=RuntimeError("bad json")):
+        keyword = seeker._analyze_search_keyword(
+            cluster, [VoiceTarget("us", "Google", "company")]
+        )
+
+    assert keyword == "Google Gemini Spark expands worldwide"
+
+
+def test_result_url_canonicalization_unwraps_real_redirect_and_rejects_opaque_token():
+    assert ActiveSeeker._canonical_result_url(
+        "/goto?url=https%3A%2F%2Fwww.ford.com%2Fcompany"
+    ) == "https://www.ford.com/company"
+    assert ActiveSeeker._canonical_result_url("/goto?url=CAESopaque-token") == ""
 
 
 def test_should_enrich_on_seek_more_evidence():
@@ -263,10 +304,11 @@ def test_official_identity_resolution_restricts_event_search_to_resolved_domain(
     )
     with patch.object(ActiveSeeker, "_search_tavily", side_effect=search), \
          patch.object(ActiveSeeker, "_verify_candidate", return_value=identity):
-        article, reason = seeker._search_target(cluster, target, "security incident", None)
+        article, reason, trace = seeker._search_target(cluster, target, "security incident", None)
 
     assert reason is None
     assert article is not None and article.is_official_source
+    assert trace[-1] == {"stage": "official", "reason": "accepted"}
     assert calls[0] == ("Acme Labs official website", (), "identity_resolution")
     assert calls[1][1] == ("acmelabs.com",)
 
@@ -297,12 +339,13 @@ def test_reviewed_social_binding_avoids_unrestricted_official_event_search():
         "_resolve_official_domains",
         return_value=([], "official_binding_not_found"),
     ), patch.object(ActiveSeeker, "_search_tavily", side_effect=search):
-        article, reason = seeker._search_target(
+        article, reason, trace = seeker._search_target(
             cluster, target, "policy change", None
         )
 
     assert reason is None
     assert article is not None and article.is_official_source
+    assert trace[-1] == {"stage": "official", "reason": "accepted"}
     assert calls == [
         (
             "site:x.com/exampleministry policy change",
@@ -380,10 +423,11 @@ def test_official_search_precedes_country_fallback_and_unreviewed_local_source_s
 
     with patch.object(ActiveSeeker, "_search_tavily", side_effect=search), \
          patch.object(ActiveSeeker, "_verify_candidate", return_value="country_editorial"):
-        article, reason = seeker._search_target(cluster, target, "Acme breach", None)
+        article, reason, trace = seeker._search_target(cluster, target, "Acme breach", None)
 
     assert article is None
     assert reason == "candidate_pending_review"
+    assert [item["stage"] for item in trace] == ["official", "country"]
     assert calls[0] == "Acme Labs official website"
     assert len(calls) >= 2
 
@@ -407,10 +451,100 @@ def test_reviewed_local_source_can_be_used_as_country_fallback():
     }
     with patch.object(ActiveSeeker, "_search_tavily", return_value=([result], None)), \
          patch.object(ActiveSeeker, "_verify_candidate", return_value="country_editorial"):
-        article, reason = seeker._search_target(cluster, target, "Acme breach", None)
+        article, reason, trace = seeker._search_target(cluster, target, "Acme breach", None)
     assert reason is None
     assert article is not None and article.origin_region == "us"
     assert article.is_official_source is False
+    assert trace[-1] == {"stage": "country", "reason": "accepted"}
+
+
+def test_independent_configured_source_is_an_operational_country_fallback():
+    cfg = _config()
+    cfg.sources.append(
+        SourceConfig(
+            "NPR",
+            "NPR",
+            "https://www.npr.org",
+            None,
+            "rss",
+            1.0,
+            "en",
+            region="us",
+            tier="editorial",
+            ownership="independent_nonprofit",
+        )
+    )
+    seeker = ActiveSeeker(cfg)
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    target = VoiceTarget("us", "Acme Labs", "company")
+    result = _fresh_result({
+        "url": "https://www.npr.org/acme-incident",
+        "title": "US reporting on the Acme Labs incident",
+        "content": "Current reporting about the same Acme Labs security incident. " * 10,
+    })
+    calls: list[tuple[str, ...]] = []
+
+    def search(_target, _query, include_domains=None, request_type="search"):
+        calls.append(tuple(include_domains or []))
+        return ([], None) if request_type == "identity_resolution" else ([result], None)
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search), \
+         patch.object(ActiveSeeker, "_verify_candidate", return_value="reject"):
+        article, reason, trace = seeker._search_target(
+            cluster, target, "Acme security incident", None
+        )
+
+    assert reason is None
+    assert article is not None and article.origin_region == "us"
+    assert ("npr.org",) in calls
+    assert trace[-1] == {"stage": "country", "reason": "accepted"}
+
+
+def test_country_stage_uses_event_match_instead_of_exact_translated_entity_text():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("eu", "欧洲央行", "organization")
+    local_article = _article(
+        "local",
+        "ECB responds to inflation data",
+        region="eu",
+        url="https://local.example/ecb",
+    )
+    local_article.content = "European Central Bank response to current inflation data. " * 8
+
+    assert seeker._rejection_reason(
+        local_article, target, [], None, stage="official"
+    ) == "entity_mismatch"
+    class _AlignedModel:
+        @staticmethod
+        def encode(*_args, **_kwargs):
+            return [[1.0, 0.0]]
+
+    with patch("newsprism.service.seeker.get_model", return_value=_AlignedModel()):
+        assert seeker._rejection_reason(
+            local_article, target, [], np.array([1.0, 0.0]), stage="country"
+        ) == ""
+
+
+def test_official_binding_alias_resolves_translated_ecb_target_without_discovery():
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "ecb.europa.eu": {
+            "verdict": "official_web",
+            "region": "eu",
+            "entity": "European Central Bank",
+            "entity_aliases": ["欧洲央行", "欧央行", "ECB"],
+        }
+    }
+    seeker = ActiveSeeker(cfg)
+
+    domains, reason = seeker._resolve_official_domains(
+        VoiceTarget("eu", "欧洲央行", "organization")
+    )
+
+    assert reason is None
+    assert domains == ["ecb.europa.eu"]
 
 
 def test_unverified_candidate_is_not_accepted_as_official_or_country_voice():
@@ -428,7 +562,7 @@ def test_unverified_candidate_is_not_accepted_as_official_or_country_voice():
     }
     with patch.object(ActiveSeeker, "_search_tavily", return_value=([result], None)), \
          patch.object(ActiveSeeker, "_verify_candidate", return_value="reject"):
-        article, reason = seeker._search_target(cluster, target, "Acme breach", None)
+        article, reason, _trace = seeker._search_target(cluster, target, "Acme breach", None)
     assert article is None
     assert "not_related_country_source" in (reason or "")
 
@@ -626,7 +760,7 @@ def test_country_target_skips_official_stage_and_never_labels_broadcaster_offici
                  source_type="official_web", publisher_entity="RFI", relationship="same_entity"
              ),
          ):
-        article, reason = seeker._search_target(cluster, target, "Bordeaux wildfire", None)
+        article, reason, _trace = seeker._search_target(cluster, target, "Bordeaux wildfire", None)
 
     assert article is None
     assert calls

@@ -37,7 +37,13 @@ from newsprism.service.locales import (
     language_name,
     query_languages,
 )
-from newsprism.types import Article, ArticleCluster, SearchCandidateReview, SearchRequestEvent
+from newsprism.types import (
+    OWNERSHIP_GATE_ALLOW,
+    Article,
+    ArticleCluster,
+    SearchCandidateReview,
+    SearchRequestEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +92,7 @@ class CandidateIdentity:
 
 
 _ACTOR_ROLES = {
-    "company", "government", "government_agency", "ministry", "party", "organization",
+    "company", "government", "government_agency", "ministry", "party", "organization", "person",
 }
 _MATERIAL_EVENT_ROLES = {
     "principal",
@@ -209,6 +215,21 @@ class ActiveSeeker:
             for domain, spec in (verdicts or {}).items()
             if isinstance(spec, dict)
         }
+        if bool(search_cfg.get("use_configured_country_sources", True)):
+            for source in cfg.sources:
+                if source.ownership not in OWNERSHIP_GATE_ALLOW:
+                    continue
+                domain = self._registrable_domain(source.url)
+                if not domain:
+                    continue
+                self.source_verdicts.setdefault(
+                    domain,
+                    {
+                        "verdict": "country_editorial",
+                        "region": source.region,
+                        "source": source.name,
+                    },
+                )
         account_bindings = search_cfg.get("official_account_bindings", {}) if isinstance(search_cfg, dict) else {}
         self.official_account_bindings = {
             str(platform).casefold(): {
@@ -220,7 +241,9 @@ class ActiveSeeker:
             if isinstance(accounts, dict)
         }
         self.source_regions = {source.name: source.region for source in cfg.sources}
-        self._search_cache: dict[tuple[str, str, tuple[str, ...]], list[dict[str, Any]]] = {}
+        self._search_cache: dict[
+            tuple[str, str, str, tuple[str, ...]], list[dict[str, Any]]
+        ] = {}
         self._resolved_official_bindings: dict[
             tuple[str, str], dict[str, CandidateIdentity]
         ] = {}
@@ -425,8 +448,9 @@ class ActiveSeeker:
         )
         official_sources = [article.source_name for article in cluster.articles if article.is_official_source]
         prompt = (
-            "Extract only named organizations whose direct response would clarify this exact news event. "
-            "Do not return countries, people, products, facilities, locations, comparison-only entities, "
+            "Extract only named actors whose direct response would clarify this exact news event. "
+            "A principal public official or decision-maker may use kind=person. "
+            "Do not return countries, incidental people, products, facilities, locations, comparison-only entities, "
             "merely damaged businesses, media, or inferred formal names. "
             "Return JSON only: {\"targets\":[{\"label\":\"Microsoft\",\"country\":\"us\","
             "\"kind\":\"company\",\"event_role\":\"decision_maker\","
@@ -555,10 +579,24 @@ class ActiveSeeker:
             )
             content = (response.choices[0].message.content or "").strip()
             parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
-            return str(parsed.get("keyword") or "").strip()[:160]
+            keyword = str(parsed.get("keyword") or "").strip()[:160]
+            return keyword or self._fallback_search_keyword(cluster)
         except Exception as exc:
-            logger.debug("Search target analysis failed for '%s': %s", cluster.topic_category, exc)
-            return ""
+            fallback = self._fallback_search_keyword(cluster)
+            logger.info(
+                "Search target analysis failed for '%s'; using deterministic headline fallback: %s",
+                cluster.topic_category,
+                exc,
+            )
+            return fallback
+
+    @staticmethod
+    def _fallback_search_keyword(cluster: ArticleCluster) -> str:
+        for article in cluster.articles:
+            title = re.sub(r"\s+", " ", str(article.title or "")).strip()
+            if title:
+                return title[:160]
+        return re.sub(r"\s+", " ", str(cluster.topic_category or "")).strip()[:160]
 
     # ─── ENRICHMENT ──────────────────────────────────────────────────────────
 
@@ -571,7 +609,9 @@ class ActiveSeeker:
             if not keyword:
                 cluster.articles.append(self._placeholder_article(cluster, target, "query_generation_failed"))
                 continue
-            article, fail_reason = self._search_target(cluster, target, keyword, centroid)
+            article, fail_reason, stage_trace = self._search_target(
+                cluster, target, keyword, centroid
+            )
             if article is not None:
                 cluster.articles.append(article)
                 if article.source_name not in cluster.sources:
@@ -594,7 +634,12 @@ class ActiveSeeker:
                 continue
             # Synthesize a flat inline placeholder so the reader sees that this
             # region's perspective was targeted but unavailable — never silent.
-            placeholder = self._placeholder_article(cluster, target, fail_reason or "unknown")
+            placeholder = self._placeholder_article(
+                cluster,
+                target,
+                fail_reason or "unknown",
+                stage_trace=stage_trace,
+            )
             cluster.articles.append(placeholder)
             # Do NOT add the placeholder source_name to cluster.sources — it must
             # not count toward is_multi_source or appear in perspective grouping.
@@ -612,7 +657,7 @@ class ActiveSeeker:
         target: VoiceTarget,
         keyword: str,
         centroid: np.ndarray | None,
-    ) -> tuple[Article | None, str | None]:
+    ) -> tuple[Article | None, str | None, list[dict[str, str]]]:
         """Return (accepted_article, failure_reason).
 
         failure_reason is set only when no article was accepted, so the caller
@@ -620,6 +665,7 @@ class ActiveSeeker:
         """
         stages = ("country",) if target.role == "country" else ("official", "country")
         last_reason: str | None = None
+        stage_trace: list[dict[str, str]] = []
         for stage in stages:
             include_domains: list[str] = []
             stage_queries = self._build_search_queries(cluster, target, keyword, stage)[
@@ -631,9 +677,11 @@ class ActiveSeeker:
                     "http_401", "http_402", "http_403", "http_429", "network",
                     "request_budget_exhausted",
                 }:
-                    return None, resolve_reason
+                    stage_trace.append({"stage": stage, "reason": resolve_reason})
+                    return None, resolve_reason, stage_trace
                 if not include_domains and not self._reviewed_social_searches(target, keyword):
                     last_reason = resolve_reason or "official_not_found"
+                    stage_trace.append({"stage": stage, "reason": last_reason})
                     continue
             elif stage == "country":
                 include_domains = self._reviewed_country_domains(target.region)
@@ -664,7 +712,8 @@ class ActiveSeeker:
                 if search_fail:
                     # Provider-level failure means no reliable conclusion about
                     # this missing voice; do not disguise it as no result.
-                    return None, search_fail
+                    stage_trace.append({"stage": stage, "reason": search_fail})
+                    return None, search_fail, stage_trace
                 accepted, rejections = self._accept_results(
                     cluster, target, results, centroid, stage
                 )
@@ -680,17 +729,21 @@ class ActiveSeeker:
                     rejection_count=len(rejections) or None,
                 )
                 if accepted:
-                    return accepted[0], None
+                    stage_trace.append({"stage": stage, "reason": "accepted"})
+                    accepted[0].search_stage_trace = list(stage_trace)
+                    return accepted[0], None, stage_trace
                 if rejections:
                     reasons = {reason for reason, _ in rejections}
                     if "coverage_satisfied" in reasons:
-                        return None, "coverage_satisfied"
+                        stage_trace.append({"stage": stage, "reason": "coverage_satisfied"})
+                        return None, "coverage_satisfied", stage_trace
                     last_reason = self._primary_failure_reason(reasons)
                 elif not results:
                     last_reason = "official_not_found" if stage == "official" else "country_fallback_not_found"
                 else:
                     last_reason = "candidate_unverified"
-        return None, last_reason
+            stage_trace.append({"stage": stage, "reason": last_reason or "unknown"})
+        return None, last_reason, stage_trace
 
     @staticmethod
     def _primary_failure_reason(reasons: set[str]) -> str:
@@ -703,6 +756,7 @@ class ActiveSeeker:
             "event_mismatch",
             "background_context",
             "entity_mismatch",
+            "invalid_result_url",
             "stale_result",
             "duplicate_of_existing",
             "thin_result",
@@ -714,6 +768,7 @@ class ActiveSeeker:
         cluster: ArticleCluster,
         target: VoiceTarget,
         reason: str,
+        stage_trace: list[dict[str, str]] | None = None,
     ) -> Article:
         """Synthesize an inline placeholder Article for a missing perspective.
 
@@ -739,6 +794,7 @@ class ActiveSeeker:
         article.is_placeholder = True
         article.search_acceptance_status = "failed"
         article.search_acceptance_reason = reason
+        article.search_stage_trace = list(stage_trace or [])
         return article
 
     def _accept_results(
@@ -760,14 +816,24 @@ class ActiveSeeker:
                 allow_thin=stage == "official",
             )
             if article is None:
-                rejections.append(("thin_result", str(result.get("url"))))
+                reason = (
+                    "invalid_result_url"
+                    if not self._canonical_result_url(str(result.get("url") or ""))
+                    else "thin_result"
+                )
+                self._record_raw_candidate_rejection(result, target, stage, reason)
+                rejections.append((reason, str(result.get("provider_url") or result.get("url"))))
                 continue
             if article.url in existing_by_url:
                 existing = existing_by_url[article.url]
                 if self._existing_article_satisfies_target(existing, target, stage):
-                    rejections.append(("coverage_satisfied", article.url))
+                    reason = "coverage_satisfied"
                 else:
-                    rejections.append(("duplicate_of_existing", article.url))
+                    reason = "duplicate_of_existing"
+                self._record_candidate_review(
+                    article, target, stage, CandidateIdentity(), "rejected", reason
+                )
+                rejections.append((reason, article.url))
                 continue
             reason = self._rejection_reason(
                 article,
@@ -777,6 +843,9 @@ class ActiveSeeker:
                 stage=stage,
             )
             if reason:
+                self._record_candidate_review(
+                    article, target, stage, CandidateIdentity(), "rejected", reason
+                )
                 rejections.append((reason, article.url))
                 continue
             dynamic_identity = self._dynamic_official_identity(article.url, target)
@@ -912,6 +981,7 @@ class ActiveSeeker:
         dynamic_identity = self._dynamic_official_identity(article.url, target)
         if (
             target.role != "country"
+            and (stage != "country" or centroid is None)
             and not self._article_mentions_target(article, target)
             and not (stage == "official" and dynamic_identity is not None)
         ):
@@ -952,8 +1022,20 @@ class ActiveSeeker:
         return bool(_OFFICIAL_BACKGROUND_PATTERN.search(material))
 
     def _article_mentions_target(self, article: Article, target: VoiceTarget) -> bool:
-        text = f"{article.title}\n{article.content[:1200]}".casefold()
-        return target.label.casefold() in text
+        text = self._identity_text(f"{article.title}\n{article.content[:1200]}")
+        aliases = [target.label]
+        evidence = str(target.evidence_text or "").strip()
+        if evidence and len(evidence) <= 120:
+            aliases.append(evidence)
+        for spec in self.source_verdicts.values():
+            names = [str(spec.get("entity") or ""), *(spec.get("entity_aliases") or [])]
+            normalized_names = {self._identity_text(name) for name in names if str(name).strip()}
+            if self._identity_text(target.label) in normalized_names:
+                aliases.extend(names)
+        return any(
+            (normalized := self._identity_text(alias)) and normalized in text
+            for alias in aliases
+        )
 
     def _verify_candidate(self, article: Article, target: VoiceTarget, stage: str) -> CandidateIdentity:
         """Fail closed unless the candidate is clearly official or local editorial.
@@ -1201,11 +1283,47 @@ class ActiveSeeker:
                     decision=decision,
                     reason=reason,
                     identity_evidence=identity.as_dict(),
+                    published_at=article.published_at,
                 ),
                 db_path=self.telemetry_db_path,
             )
         except Exception as exc:
             logger.debug("Search candidate telemetry write failed: %s", exc)
+
+    def _record_raw_candidate_rejection(
+        self,
+        result: dict[str, Any],
+        target: VoiceTarget,
+        stage: str,
+        reason: str,
+    ) -> None:
+        if not self.telemetry_enabled:
+            return
+        raw_url = str(result.get("provider_url") or result.get("url") or "").strip()
+        if not raw_url:
+            return
+        published_at = self._parse_published_at(
+            result.get("published_at") or result.get("published_date") or result.get("date")
+        )
+        if published_at is None:
+            published_at = self._parse_url_date(raw_url)
+        article = Article(
+            url=raw_url,
+            title=str(result.get("title") or "").strip() or "Untitled search result",
+            source_name=str(result.get("source_name") or "search-result"),
+            published_at=published_at,
+            content=str(result.get("content") or ""),
+            is_searched=True,
+            search_region=target.region,
+        )
+        self._record_candidate_review(
+            article,
+            target,
+            stage,
+            CandidateIdentity(),
+            "rejected",
+            reason,
+        )
 
     def _is_fresh(self, published_at: datetime | None) -> bool:
         if published_at is None:
@@ -1249,7 +1367,10 @@ class ActiveSeeker:
         for domain, spec in self.source_verdicts.items():
             if str(spec.get("verdict") or "") != "official_web":
                 continue
-            if self._identity_text(str(spec.get("entity") or "")) != key[0]:
+            alias_names = [str(spec.get("entity") or ""), *(spec.get("entity_aliases") or [])]
+            if key[0] not in {
+                self._identity_text(str(alias)) for alias in alias_names if str(alias).strip()
+            }:
                 continue
             region = str(spec.get("region") or "").strip().lower()
             if region and region != target.region:
@@ -1398,7 +1519,8 @@ class ActiveSeeker:
         if stage == "official":
             english_query = f"{target.label} official statement {keyword}"
         else:
-            english_query = f"{keyword} {country_name(target.region)} local news"
+            target_prefix = f"{target.label} " if target.role != "country" else ""
+            english_query = f"{target_prefix}{keyword} {country_name(target.region)} local news"
         languages = query_languages(target.region, config.language if config else None)
         if not languages:
             # ISO country names are complete via Babel, while the language list
@@ -1470,7 +1592,12 @@ class ActiveSeeker:
         )
         region = target_obj.region
         normalized_domains = tuple(sorted(set(include_domains or [])))
-        cache_key = (region, query, normalized_domains)
+        cache_key = (
+            region,
+            self._identity_text(target_obj.label),
+            query,
+            normalized_domains,
+        )
         if cache_key in self._search_cache:
             return self._search_cache[cache_key], None
         if self._provider_failure_reason:
@@ -1582,11 +1709,13 @@ class ActiveSeeker:
                 self._active_key_idx = key_idx
                 results: list[dict[str, Any]] = []
                 for result in data.get("results", []):
-                    url = result.get("url", "")
+                    provider_url = str(result.get("url") or "")
+                    url = self._canonical_result_url(provider_url)
                     source_domain = urllib.parse.urlparse(url).netloc.replace("www.", "")
                     results.append(
                         {
                             "url": url,
+                            "provider_url": provider_url,
                             "title": result.get("title"),
                             "content": result.get("raw_content") or result.get("content", ""),
                             "published_at": result.get("published_date") or result.get("published_at"),
@@ -1625,7 +1754,7 @@ class ActiveSeeker:
         region: str,
         allow_thin: bool = False,
     ) -> Article | None:
-        url = result.get("url")
+        url = self._canonical_result_url(str(result.get("url") or ""))
         title = (result.get("title") or "").strip()
         content = (result.get("content") or "").strip()
         if not url or not title or (not allow_thin and len(content) < self.min_content_chars):
@@ -1658,6 +1787,27 @@ class ActiveSeeker:
             origin_region=origin_region,
             searched_provider=str(result.get("searched_provider") or "tavily_search"),
         )
+
+    @staticmethod
+    def _canonical_result_url(value: str) -> str:
+        """Keep real HTTP(S) destinations and unwrap transparent redirect URLs."""
+        raw = str(value or "").strip()
+        parsed = urllib.parse.urlparse(raw)
+        if parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
+            redirect_values = urllib.parse.parse_qs(parsed.query).get("url", [])
+            if redirect_values:
+                destination = urllib.parse.unquote(redirect_values[0]).strip()
+                target = urllib.parse.urlparse(destination)
+                if target.scheme.lower() in {"http", "https"} and target.netloc:
+                    return destination
+            return raw
+        redirect_values = urllib.parse.parse_qs(parsed.query).get("url", [])
+        if redirect_values:
+            destination = urllib.parse.unquote(redirect_values[0]).strip()
+            target = urllib.parse.urlparse(destination)
+            if target.scheme.lower() in {"http", "https"} and target.netloc:
+                return destination
+        return ""
 
     def _parse_published_at(self, value: Any) -> datetime | None:
         if isinstance(value, datetime):

@@ -295,15 +295,18 @@ def test_voice_needs_are_normalized_and_preserved_on_recompute():
             {"label": " Acme Labs ", "country": "US", "kind": "company"},
             {"label": "acme labs", "country": "us", "kind": "company"},
             {"label": "France", "country": "fr", "kind": "country"},
+            {"label": "Donald Trump", "country": "us", "kind": "person"},
             {"label": "", "country": "us", "kind": "company"},
         ],
     )
     cluster.impact = assessor._build_assessment(cluster, item, assessor.weights())
 
     assert [(need.label, need.country, need.kind) for need in cluster.impact.voice_needs] == [
-        ("Acme Labs", "us", "company")
+        ("Acme Labs", "us", "company"),
+        ("Donald Trump", "us", "person"),
     ]
     assessor.recompute_local(cluster)
     assert [(need.label, need.country, need.kind) for need in cluster.impact.voice_needs] == [
-        ("Acme Labs", "us", "company")
+        ("Acme Labs", "us", "company"),
+        ("Donald Trump", "us", "person"),
     ]

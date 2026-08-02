@@ -1827,7 +1827,11 @@ def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer
     )
     placeholder.is_placeholder = True
     placeholder.search_acceptance_status = "failed"
-    placeholder.search_acceptance_reason = "http_401"
+    placeholder.search_acceptance_reason = "entity_mismatch"
+    placeholder.search_stage_trace = [
+        {"stage": "official", "reason": "stale_result"},
+        {"stage": "country", "reason": "entity_mismatch"},
+    ]
     cluster = ArticleCluster(topic_category="World News", articles=[organic, placeholder])
     summary = ClusterSummary(
         cluster=cluster,
@@ -1844,14 +1848,15 @@ def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer
     placeholder_rows = [a for a in articles if a.get("is_placeholder")]
     assert len(placeholder_rows) == 1
     assert placeholder_rows[0]["search_acceptance_status"] == "failed"
-    assert placeholder_rows[0]["search_acceptance_reason"] == "http_401"
+    assert placeholder_rows[0]["search_acceptance_reason"] == "entity_mismatch"
+    assert placeholder_rows[0]["search_stage_trace"] == placeholder.search_stage_trace
 
     # Rendered HTML includes the placeholder source name + the 🇫🇷 flag +
     # the search marker + the failure-detail label, flat (no card/lift).
     assert "[France视角待补]" in html
     assert "🇫🇷" in html
     assert "🔍" in html
-    assert "鉴权失败" in html  # bilingual short label from _placeholder_failure_label
+    assert "官方：结果过旧；当地：实体不匹配" in html
 
     # A normal perspective list must not hide the failed-target marker.
     footer_sources = renderer._build_footer_sources(summary, preferred_sources=["Reuters"])
