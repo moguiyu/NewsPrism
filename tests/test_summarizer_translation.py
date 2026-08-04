@@ -86,3 +86,34 @@ def test_normalize_perspective_groups_does_not_invent_missing_source_angles():
     covered = {source for group in groups for source in group.sources}
     assert covered == {"Reuters"}
     assert all("差异化视角" not in group.perspective for group in groups)
+
+
+def test_translate_report_content_translates_full_family_name(monkeypatch):
+    summarizer = Summarizer(_config())
+    summary = _summary("美军空袭伊朗", "美国对伊朗目标发动空袭。", [])
+    hot_topics = [
+        {
+            "macro_topic_key": "k",
+            "macro_topic_name": "中东战事",
+            "macro_topic_name_full": "中东战事升级：多国卷入新一轮冲突",
+            "storyline_name": "中东战事",
+            "storyline_name_full": "中东战事升级：多国卷入新一轮冲突",
+        }
+    ]
+    payload = (
+        '{"items": [{"index": 0, "headline": "US strikes Iran", "body": "The US struck Iranian targets.", '
+        '"short_topic_name": "Middle East", "perspective_groups": []}], '
+        '"labels": {"中东战事": "Middle East war", '
+        '"中东战事升级：多国卷入新一轮冲突": "Middle East war escalation: new round of conflict"}}'
+    )
+
+    def fake_completion(**kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=payload))])
+
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    ok = summarizer.translate_report_content([summary], hot_topics=hot_topics)
+
+    assert ok is True
+    assert hot_topics[0]["macro_topic_name_en"] == "Middle East war"
+    assert hot_topics[0]["macro_topic_name_full_en"] == "Middle East war escalation: new round of conflict"
+    assert hot_topics[0]["storyline_name_full_en"] == "Middle East war escalation: new round of conflict"

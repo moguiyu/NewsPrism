@@ -402,3 +402,31 @@ def test_display_dedup_keeps_positive_over_main_duplicate():
     _h, _f, regular, pos = resolve_display_duplicates([], [], [main], [positive])
     assert len(pos) == 1 and pos[0].cluster.topic_category == "positive twin"
     assert regular == []
+
+
+def test_base_plan_keeps_full_storyline_name_for_body_headers():
+    """Navigation tabs stay capped at tab_name_max_chars; the full-length
+    family label is carried for in-body headers (overview + topic stage)."""
+    cfg = _config(max_clusters=3)
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 3,
+        "min_items_per_topic": 3,
+        "tab_name_max_chars": 10,
+    }
+    long_name = "欧盟宣布扩大实施人工智能法透明度新规"
+    summaries = [
+        _storyline_summary("small group core", 0.95, "small-topic", role="core"),
+        _storyline_summary("small group follow", 0.90, "small-topic"),
+    ]
+    for summary in summaries:
+        summary.cluster.storyline_name = long_name
+        summary.cluster.macro_topic_name = long_name
+
+    plan = EditorialPlanner(cfg).base_plan(summaries)
+
+    assert len(plan.hot_topics) == 1
+    tab = plan.hot_topics[0]
+    assert tab["macro_topic_name"] == "欧盟宣布扩大实施人工"  # capped at 10
+    assert tab["macro_topic_name_full"] == long_name            # full for body
+    assert tab["storyline_name_full"] == long_name

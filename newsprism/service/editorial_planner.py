@@ -283,6 +283,11 @@ def select_hot_topic_families(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary]]:
     hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
     max_name_chars = hot_cfg.get("tab_name_max_chars", 10)
+    # Full-length family label for in-body headers (overview + topic stage).
+    # Navigation tabs stay capped at tab_name_max_chars; body copy shows the
+    # complete storyline title. The cap only guards against pathological
+    # titles, not editorial truncation.
+    max_name_full_chars = int(hot_cfg.get("tab_name_full_max_chars", 60))
     max_topic_tabs = hot_cfg.get("max_topic_tabs", 3)
     min_items_per_topic = hot_cfg.get("min_items_per_topic", 5)
     main_limit = cfg.clustering.get("max_clusters_per_report", 20)
@@ -339,13 +344,20 @@ def select_hot_topic_families(
             members[0],
             max_name_chars,
         )
+        family_name_full = _normalize_storyline_name(
+            members[0].storyline_name or members[0].macro_topic_name,
+            members[0],
+            max_name_full_chars,
+        )
         hot_topics.append(
             {
                 "dom_id": f"hot-topic-{position}",
                 "macro_topic_key": key,
                 "macro_topic_name": family_name,
+                "macro_topic_name_full": family_name_full,
                 "storyline_key": key,
                 "storyline_name": family_name,
+                "storyline_name_full": family_name_full,
                 "topic_icon_key": group_icons.get(key, _DEFAULT_HOT_TOPIC_ICON_KEY),
                 "anchor_labels": list(members[0].storyline_anchor_labels) if members else [],
                 "member_count": len(members),

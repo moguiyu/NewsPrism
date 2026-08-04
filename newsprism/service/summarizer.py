@@ -354,6 +354,11 @@ class Summarizer:
             family_name = str(family.get("macro_topic_name") or family.get("storyline_name") or "").strip()
             if family_name:
                 labels.add(family_name)
+            family_name_full = str(
+                family.get("macro_topic_name_full") or family.get("storyline_name_full") or ""
+            ).strip()
+            if family_name_full:
+                labels.add(family_name_full)
 
         try:
             label_map: dict[str, str] = {}
@@ -373,6 +378,12 @@ class Summarizer:
                 if family_name and family_name in label_map:
                     family["macro_topic_name_en"] = label_map[family_name]
                     family["storyline_name_en"] = label_map[family_name]
+                family_name_full = str(
+                    family.get("macro_topic_name_full") or family.get("storyline_name_full") or ""
+                ).strip()
+                if family_name_full and family_name_full in label_map:
+                    family["macro_topic_name_full_en"] = label_map[family_name_full]
+                    family["storyline_name_full_en"] = label_map[family_name_full]
             for family in focus_storylines:
                 family_name = str(family.get("storyline_name") or "").strip()
                 if family_name and family_name in label_map:
@@ -753,6 +764,8 @@ class Summarizer:
         for family in hot_topics:
             family.pop("macro_topic_name_en", None)
             family.pop("storyline_name_en", None)
+            family.pop("macro_topic_name_full_en", None)
+            family.pop("storyline_name_full_en", None)
         for family in focus_storylines:
             family.pop("storyline_name_en", None)
 

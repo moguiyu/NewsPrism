@@ -113,6 +113,11 @@ output:
     cluster_validation_outlier_similarity: 0.58
     cluster_validation_outlier_title_overlap: 0.05
     tab_name_max_chars: 10
+    # Full-length family label for in-body headers (overview + topic stage).
+    # Navigation tabs stay capped at tab_name_max_chars; body copy shows the
+    # complete storyline title. The cap only guards against pathological
+    # titles, not editorial truncation.
+    tab_name_full_max_chars: 60
     icon_allowlist: ["globe", "war", "trade", "chip", "ai", "energy"]
 
 # ─── ACTIVE SEARCH ────────────────────────────────────────────────────────────
@@ -132,6 +137,18 @@ active_search:
   max_requests_per_run: 40          # provider-wide safety budget; failures stay visible
   max_existing_title_overlap: 0.82
   min_semantic_event_match: 0.58
+  # Country-stage acceptance: Tavily is already time-bounded (days=3), but it
+  # frequently omits published_date, and URL-path dates are not always
+  # recoverable. Treat undated results as passable in the country stage (they
+  # still must clear semantic event match + reviewed country-editorial domain);
+  # genuinely dated-stale results stay rejected. Official-stage pages remain
+  # strict: undated official pages are usually background material.
+  country_allow_undated: true
+  # When an entity's own coverage can't be found (no result, entity_mismatch,
+  # or only dated-stale results), fall back to an entity-free country query
+  # ("<event keyword> <country> local news") so at least one voice from that
+  # country appears. Reviewed country-editorial domains only.
+  country_entity_free_fallback: true
   # The impact evaluator extracts each named party from the event, so active
   # search can discover sources outside the normal intake. Candidates are
   # verified first-party voices or independently operated local editorial

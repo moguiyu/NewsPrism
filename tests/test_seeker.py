@@ -1144,3 +1144,134 @@ def test_country_name_voice_need_cannot_become_actor_target():
     assert seeker._missing_voice_targets(cluster) == [
         VoiceTarget(region="fr", label="Example Ministry", role="ministry")
     ]
+
+
+# ─── Country-stage relaxation (undated results + entity-free fallback) ───────
+
+def test_country_stage_accepts_undated_reviewed_source():
+    """Undated Tavily results are not proof of staleness in the country stage:
+    the provider query is already time-bounded (days=3). A reviewed
+    country-editorial domain that matches the event still passes."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "local-paper.example": {"verdict": "country_editorial", "region": "us"},
+    }
+    seeker = ActiveSeeker(cfg)
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    result = {
+        "url": "https://local-paper.example/acme",
+        "title": "Acme Labs responds to incident",
+        "content": "Acme Labs response and details. " * 10,
+        # no published_at / published_date / date → undated result
+    }
+    with patch.object(ActiveSeeker, "_search_tavily", return_value=([result], None)), \
+         patch.object(ActiveSeeker, "_verify_candidate", return_value="country_editorial"):
+        article, reason, trace = seeker._search_target(cluster, target, "Acme breach", None)
+    assert reason is None
+    assert article is not None and article.origin_region == "us"
+    assert trace[-1] == {"stage": "country", "reason": "accepted"}
+
+
+def test_country_stage_undated_relaxation_can_be_disabled():
+    cfg = _config()
+    cfg.active_search["country_allow_undated"] = False
+    seeker = ActiveSeeker(cfg)
+    target = VoiceTarget("us", "Acme Labs", "company")
+    article = _article("local", "Acme Labs responds", region="us")
+    article.published_at = None
+    assert seeker._rejection_reason(article, target, [], None, stage="country") == "stale_result"
+
+
+def test_official_stage_still_rejects_undated():
+    """The official stage keeps the strict rule: undated official pages are
+    usually background material (fact sheets, evergreen pages)."""
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("us", "Acme Labs", "company")
+    article = _article("local", "Acme Labs responds", region="us")
+    article.published_at = None
+    assert seeker._rejection_reason(article, target, [], None, stage="official") == "stale_result"
+    # Same undated article passes the country stage (entity is mentioned).
+    assert seeker._rejection_reason(article, target, [], None, stage="country") == ""
+
+
+def test_country_query_can_drop_entity_for_fallback():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("us", "Acme Labs", "company")
+    cluster = _cluster()
+    scoped = seeker._build_search_queries(cluster, target, "security incident", "country")
+    entity_free = seeker._build_search_queries(
+        cluster, target, "security incident", "country", entity_scoped=False
+    )
+    assert scoped and all("Acme" in query for query in scoped)
+    assert entity_free and all("Acme" not in query for query in entity_free)
+    assert "United States" in entity_free[0]
+
+
+def test_entity_free_country_fallback_runs_after_entity_scoped_failure():
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "local-paper.example": {"verdict": "country_editorial", "region": "us"},
+    }
+    seeker = ActiveSeeker(cfg)
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    good = _fresh_result({
+        "url": "https://local-paper.example/incident",
+        "title": "US local coverage of the Acme Labs security incident",
+        "content": "Current reporting about the Acme Labs security incident in the US. " * 10,
+    })
+    calls: list[tuple[str, str]] = []
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append((query, request_type))
+        if request_type == "identity_resolution":
+            return ([], None)
+        if request_type == "search_country_fallback":
+            return ([good], None)
+        return ([], None)  # entity-scoped country queries find nothing
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search), \
+         patch.object(ActiveSeeker, "_verify_candidate", return_value="reject"):
+        article, reason, trace = seeker._search_target(
+            cluster, target, "security incident", None
+        )
+
+    assert reason is None
+    assert article is not None and article.origin_region == "us"
+    assert trace[-1] == {"stage": "country", "reason": "accepted"}
+    fallback_queries = [query for query, request_type in calls if request_type == "search_country_fallback"]
+    assert fallback_queries, "entity-free country fallback query was never issued"
+    assert "Acme" not in fallback_queries[0]
+
+
+def test_entity_free_country_fallback_can_be_disabled():
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "local-paper.example": {"verdict": "country_editorial", "region": "us"},
+    }
+    cfg.active_search["country_entity_free_fallback"] = False
+    seeker = ActiveSeeker(cfg)
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    calls: list[str] = []
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append(request_type)
+        return ([], None)
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search):
+        _article, reason, _trace = seeker._search_target(
+            cluster, target, "security incident", None
+        )
+    assert reason == "country_fallback_not_found"
+    assert "search_country_fallback" not in calls
