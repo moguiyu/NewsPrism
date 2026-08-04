@@ -1768,6 +1768,64 @@ class TestHotTopics:
         assert payload["day_links"][0]["href"] == "/p/1/"
 
 
+def test_render_hot_topic_full_name_in_body_but_short_in_nav(renderer, tmp_path):
+    """Navigation tabs stay capped at tab_name_max_chars; the overview and
+    hot-topic-stage headers show the complete storyline title."""
+    renderer.output_dir = tmp_path
+
+    full_name = "美伊紧张局势全面升级，特朗普威胁斩首行动与谈判博弈"
+    hot_summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[
+                Article(
+                    url="https://bbc.com/hot-full",
+                    title="US-Iran escalation",
+                    source_name="BBC",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Conflict coverage",
+                )
+            ],
+        ),
+        summary="**美军打击伊朗目标**\n\n英国持续关注中东紧张局势。",
+        perspectives={},
+        storyline_key="us-iran",
+        storyline_name="美伊冲突",
+        storyline_role="core",
+        macro_topic_key="us-iran",
+        macro_topic_name="美伊冲突",
+    )
+
+    html_path = renderer.render(
+        [],
+        datetime.now(tz=timezone.utc).date(),
+        hot_topics=[
+            {
+                "dom_id": "hot-topic-1",
+                "macro_topic_key": "us-iran",
+                "macro_topic_name": "美伊冲突",
+                "macro_topic_name_full": full_name,
+                "storyline_key": "us-iran",
+                "storyline_name": "美伊冲突",
+                "storyline_name_full": full_name,
+                "topic_icon_key": "war",
+                "summaries": [hot_summary],
+            }
+        ],
+    )
+    html = html_path.read_text(encoding="utf-8")
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+    assert payload["hot_topics"][0]["macro_topic_name"] == "美伊冲突"
+    assert payload["hot_topics"][0]["macro_topic_name_full"] == full_name
+    assert payload["hot_topics"][0]["storyline_name_full"] == full_name
+    # Body headers (overview item + hot-topic stage header) show the full name.
+    assert html.count(full_name) >= 2
+    # Navigation tab keeps the short name.
+    assert 'class="cat-tab hot-tab"' in html
+    assert "美伊冲突" in html
+
+
 def test_render_copies_fonts_to_output(tmp_path):
     """Renderer copies static/fonts/ to output/fonts/ on render."""
     static_fonts = Path(__file__).resolve().parent.parent / "newsprism" / "static" / "fonts"

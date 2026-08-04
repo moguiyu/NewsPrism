@@ -2664,7 +2664,7 @@
         {% for hot in hot_topics %}
         <article class="overview-item">
           <div>
-            <button class="overview-title" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</button>
+            <button class="overview-title" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name_full or hot.macro_topic_name, hot.macro_topic_name_full_en or hot.macro_topic_name_en or hot.macro_topic_name_full or hot.macro_topic_name) }}</button>
             <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
             <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
             <div class="overview-anchors">
@@ -2805,7 +2805,7 @@
       {% for hot in hot_topics %}
       <div class="hot-topic-block" data-hot-id="{{ hot.dom_id }}" style="display:none;">
         <div class="hot-topic-header">
-          <div class="cat-label"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span> {{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</div>
+          <div class="cat-label"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span> {{ bilingual_text(hot.macro_topic_name_full or hot.macro_topic_name, hot.macro_topic_name_full_en or hot.macro_topic_name_en or hot.macro_topic_name_full or hot.macro_topic_name) }}</div>
           <div class="hot-topic-counter">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
         </div>
         <div class="cards">

@@ -206,6 +206,19 @@ class ActiveSeeker:
         self.hot_composite_trigger = float(search_cfg.get("hot_composite_trigger", 0.55))
         self.max_queries_per_stage = max(1, int(search_cfg.get("max_queries_per_stage", 2)))
         self.max_requests_per_run = max(1, int(search_cfg.get("max_requests_per_run", 40)))
+        # Country-stage acceptance: Tavily is already time-bounded (days=3) but
+        # frequently omits published_date and URL-path dates aren't always
+        # recoverable. Undated country-editorial results still must clear the
+        # semantic event-match gate and the reviewed country-domain registry;
+        # dated-stale results stay rejected. Official-stage pages remain strict
+        # because undated official pages are usually background material.
+        self.country_allow_undated = bool(search_cfg.get("country_allow_undated", True))
+        # When an entity's own coverage can't be found (no result, mismatch, or
+        # only dated-stale results), fall back to an entity-free country query
+        # so at least one voice from that country appears. Reviewed domains only.
+        self.country_entity_free_fallback = bool(
+            search_cfg.get("country_entity_free_fallback", True)
+        )
 
         profiles = search_cfg.get("search_profiles", {}) if isinstance(search_cfg, dict) else {}
         self.region_config = self._build_region_config(profiles)
@@ -686,28 +699,50 @@ class ActiveSeeker:
             elif stage == "country":
                 include_domains = self._reviewed_country_domains(target.region)
 
-            searches: list[tuple[str, list[str]]] = []
+            searches: list[tuple[str, list[str], str]] = []
             if stage != "official" or include_domains:
                 searches.extend(
-                    (query, include_domains) for query in stage_queries
+                    (query, include_domains, f"search_{stage}")
+                    for query in stage_queries
                 )
             if stage == "official":
-                searches.extend(self._reviewed_social_searches(target, keyword))
+                searches.extend(
+                    (query, domains, "search_official")
+                    for query, domains in self._reviewed_social_searches(target, keyword)
+                )
             if stage == "country":
                 # A broad result set is discovery-only. Unknown publishers stay
                 # pending; only reviewed country bindings can be published.
                 discovery_query = stage_queries[0] if stage_queries else keyword
                 if include_domains:
-                    searches.append((discovery_query, []))
+                    searches.append((discovery_query, [], "search_country"))
                 else:
-                    searches = [(discovery_query, [])]
+                    searches = [(discovery_query, [], "search_country")]
+                # Entity-free fallback: an entity may have no fresh coverage
+                # (no result, entity_mismatch, or only dated-stale results).
+                # Retry the event + country without the entity constraint so
+                # at least one voice from that country appears. Reviewed
+                # country-editorial domains only; one extra bounded query.
+                if (
+                    self.country_entity_free_fallback
+                    and target.role != "country"
+                    and include_domains
+                    and stage_queries
+                ):
+                    entity_free = self._build_search_queries(
+                        cluster, target, keyword, stage, entity_scoped=False
+                    )[:1]
+                    if entity_free:
+                        searches.append(
+                            (entity_free[0], include_domains, "search_country_fallback")
+                        )
 
-            for query, restricted_domains in searches:
+            for query, restricted_domains, request_type in searches:
                 results, search_fail = self._search_tavily(
                     target,
                     query,
                     include_domains=restricted_domains,
-                    request_type=f"search_{stage}",
+                    request_type=request_type,
                 )
                 if search_fail:
                     # Provider-level failure means no reliable conclusion about
@@ -986,7 +1021,10 @@ class ActiveSeeker:
             and not (stage == "official" and dynamic_identity is not None)
         ):
             return "entity_mismatch"
-        if not self._is_fresh(article.published_at):
+        if not self._is_fresh(
+            article.published_at,
+            allow_undated=bool(stage == "country" and self.country_allow_undated),
+        ):
             return "stale_result"
         if stage == "official" and self._looks_like_official_background(article):
             return "background_context"
@@ -1325,13 +1363,16 @@ class ActiveSeeker:
             reason,
         )
 
-    def _is_fresh(self, published_at: datetime | None) -> bool:
+    def _is_fresh(self, published_at: datetime | None, allow_undated: bool = False) -> bool:
         if published_at is None:
             # A provider query bound is not evidence about an individual page:
             # official sites frequently return undated annual reports, PDFs,
             # and evergreen background pages. Accepted supplements must carry
-            # a provider date or a date recovered from the URL path.
-            return False
+            # a provider date or a date recovered from the URL path. In the
+            # country stage, an undated result is not proof of staleness
+            # (Tavily itself is time-bounded to `days=3`), so the caller may
+            # allow it through; dated-stale results are still rejected there.
+            return allow_undated
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=self.result_max_age_hours)
         if published_at.tzinfo is None:
             published_at = published_at.replace(tzinfo=timezone.utc)
@@ -1514,12 +1555,19 @@ class ActiveSeeker:
         target: VoiceTarget,
         keyword: str,
         stage: str,
+        entity_scoped: bool = True,
     ) -> list[str]:
         config = self.region_config.get(target.region)
         if stage == "official":
             english_query = f"{target.label} official statement {keyword}"
         else:
-            target_prefix = f"{target.label} " if target.role != "country" else ""
+            # Country stage: keep the entity in the query when scoped so the
+            # result talks about the same actor; drop it for the entity-free
+            # fallback so the country's editorial voice can cover the event
+            # even when the entity itself has no fresh coverage.
+            target_prefix = (
+                f"{target.label} " if (target.role != "country" and entity_scoped) else ""
+            )
             english_query = f"{target_prefix}{keyword} {country_name(target.region)} local news"
         languages = query_languages(target.region, config.language if config else None)
         if not languages:

@@ -101,6 +101,12 @@ _HOT_TOPIC_ICON_MAP: dict[str, str] = {
     "energy": "⚡",
 }
 
+# Full-length hot-topic family label for in-body headers (overview + topic
+# stage). Navigation tabs stay capped at tab_name_max_chars (10); body copy
+# shows the complete storyline title. Matches editorial_planner's default
+# tab_name_full_max_chars; the cap only guards against pathological titles.
+_HOT_TOPIC_FULL_NAME_MAX_CHARS = 60
+
 _INVALID_PERSPECTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"无关"),
     re.compile(r"不相关"),
@@ -1295,6 +1301,17 @@ class HtmlRenderer:
                 family_name_en,
                 [summary for summary in family_summaries if isinstance(summary, ClusterSummary)],
             )
+            # Full-length family label for in-body headers. Navigation tabs
+            # keep the capped topic_name; overview + topic-stage headers show
+            # the complete storyline title. Same repair logic, wider cap.
+            family_name_full = family.get("macro_topic_name_full")
+            family_name_full_en = family.get("macro_topic_name_full_en")
+            topic_name_full, topic_name_full_en = _repair_hot_topic_label(
+                family_name_full if isinstance(family_name_full, str) else None,
+                family_name_full_en if isinstance(family_name_full_en, str) else None,
+                [summary for summary in family_summaries if isinstance(summary, ClusterSummary)],
+                max_chars=_HOT_TOPIC_FULL_NAME_MAX_CHARS,
+            )
             icon_key = family.get("topic_icon_key") if isinstance(family.get("topic_icon_key"), str) else "globe"
             if icon_key not in _HOT_TOPIC_ICON_MAP:
                 icon_key = "globe"
@@ -1344,9 +1361,13 @@ class HtmlRenderer:
                     "macro_topic_key": family.get("macro_topic_key", f"hot-topic-{i}"),
                     "macro_topic_name": topic_name,
                     "macro_topic_name_en": topic_name_en,
+                    "macro_topic_name_full": topic_name_full,
+                    "macro_topic_name_full_en": topic_name_full_en,
                     "storyline_key": family.get("storyline_key", family.get("macro_topic_key", f"hot-topic-{i}")),
                     "storyline_name": topic_name,
                     "storyline_name_en": topic_name_en,
+                    "storyline_name_full": topic_name_full,
+                    "storyline_name_full_en": topic_name_full_en,
                     "topic_icon_key": icon_key,
                     "topic_icon": _HOT_TOPIC_ICON_MAP.get(icon_key, _HOT_TOPIC_ICON_MAP["globe"]),
                     "anchor_labels": list(family.get("anchor_labels", [])),
@@ -1365,9 +1386,13 @@ class HtmlRenderer:
                     "macro_topic_key": family.get("macro_topic_key", f"hot-topic-{i}"),
                     "macro_topic_name": topic_name,
                     "macro_topic_name_en": topic_name_en,
+                    "macro_topic_name_full": topic_name_full,
+                    "macro_topic_name_full_en": topic_name_full_en,
                     "storyline_key": family.get("storyline_key", family.get("macro_topic_key", f"hot-topic-{i}")),
                     "storyline_name": family.get("storyline_name", topic_name),
                     "storyline_name_en": str(family.get("storyline_name_en") or topic_name_en or "").strip() or None,
+                    "storyline_name_full": topic_name_full,
+                    "storyline_name_full_en": topic_name_full_en,
                     "topic_icon_key": icon_key,
                     "anchor_labels": list(family.get("anchor_labels", [])),
                     "member_count": len(member_json),
