@@ -578,10 +578,27 @@ class StorylineResolver:
     ) -> dict[int, dict[str, object]]:
         matches: dict[int, dict[str, object]] = {}
         for profile in profiles:
+            current_conflicts = self._conflict_signatures_for_text(str(profile["text"]))
             best_score = 0.0
             best_match: dict[str, object] | None = None
             for historical in historical_clusters:
                 if not historical.storyline_key:
+                    continue
+                historical_conflicts = self._conflict_signatures_for_text(
+                    " ".join(
+                        str(value or "")
+                        for value in (
+                            historical.storyline_name,
+                            historical.topic_category,
+                            historical.summary,
+                        )
+                    )
+                )
+                # A conflict-family key must not become a generic "missile" or
+                # "war" magnet across scripts.  Historical continuity remains
+                # permissive for ordinary storylines, but a known conflict has
+                # a concrete party-pair contract that the new event must meet.
+                if historical_conflicts and not (historical_conflicts & current_conflicts):
                     continue
                 similarity = self.similarity_fn(str(profile["text"]), historical)
                 if similarity < self.history_similarity_threshold:
@@ -749,6 +766,14 @@ class StorylineResolver:
         "israel_lebanon": (("israel", "lebanon"), ("以色列", "黎巴嫩")),
     }
 
+    def _conflict_signatures_for_text(self, text: str) -> set[str]:
+        text_lower = text.lower()
+        return {
+            conflict_id
+            for conflict_id, aliases in self._CONFLICT_SIGNATURES.items()
+            if any(all(part in text_lower for part in alias) for alias in aliases)
+        }
+
     def _shares_conflict_keyword(self, candidate: dict[str, object]) -> bool:
         """True only when both clusters identify the same conflict pair."""
         signatures: list[set[str]] = []
@@ -758,14 +783,7 @@ class StorylineResolver:
             for article in (getattr(cluster, "articles", []) or [])[:3]:
                 text += " " + (getattr(article, "title", "") or "")
                 text += " " + (getattr(article, "content", "") or "")[:300]
-            text_lower = text.lower()
-            signatures.append(
-                {
-                    conflict_id
-                    for conflict_id, aliases in self._CONFLICT_SIGNATURES.items()
-                    if any(all(part in text_lower for part in alias) for alias in aliases)
-                }
-            )
+            signatures.append(self._conflict_signatures_for_text(text))
         return len(signatures) == 2 and bool(signatures[0] & signatures[1])
 
     def _build_components(self, node_count: int, edges: list[dict[str, object]]) -> dict[int, list[int]]:
@@ -909,7 +927,7 @@ class StorylineResolver:
                 groups[str(cluster.storyline_key)].append(idx)
 
         for key, members in groups.items():
-            if len(members) < 3:
+            if len(members) < 2:
                 continue
             if _is_conflict_group(members):
                 continue  # conflict-glued family — keep as-is

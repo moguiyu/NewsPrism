@@ -204,32 +204,37 @@ class Collector:
 
     def _collect_source(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
         """Try each collection method in order, return first success."""
+        attempt_outcomes: list[str] = []
 
         # 1. newsnow API — best option for Chinese sources
         if src.newsnow_id:
             articles = self._try_newsnow(src, max_age_hours)
             if articles:
                 return articles
-            logger.warning("[%s] newsnow failed, falling back", src.name)
+            attempt_outcomes.append("newsnow:error" if articles is None else "newsnow:no_eligible_articles")
+            logger.info("[%s] newsnow returned no eligible articles; trying fallback", src.name)
 
         # 2. Primary RSS
         if src.rss_url:
             articles = self._try_rss(src, src.rss_url, max_age_hours)
             if articles:
                 return articles
-            logger.warning("[%s] Primary RSS failed", src.name)
+            attempt_outcomes.append("rss:error" if articles is None else "rss:no_eligible_articles")
+            logger.info("[%s] Primary RSS returned no eligible articles; trying fallback", src.name)
 
         # 3. RSS fallback (FeedX mirror etc.)
         if src.rss_fallback:
             articles = self._try_rss(src, src.rss_fallback, max_age_hours)
             if articles:
                 return articles
+            attempt_outcomes.append("rss_fallback:error" if articles is None else "rss_fallback:no_eligible_articles")
 
         # 4. RSSHub (self-hosted preferred)
         if src.rsshub_url:
             articles = self._try_rss(src, src.rsshub_url, max_age_hours)
             if articles:
                 return articles
+            attempt_outcomes.append("rsshub:error" if articles is None else "rsshub:no_eligible_articles")
 
         # 5. Wallstreetcn JSON API (no RSS; newsnow should handle this but keep as safety net)
         _wscn_host = urlparse(src.url).hostname or ""
@@ -240,17 +245,20 @@ class Collector:
         if src.type == "scrape" or src.scrape_index_url:
             return self._collect_scrape(src, max_age_hours)
 
-        logger.warning("[%s] All collection methods failed", src.name)
+        if any(outcome.endswith(":error") for outcome in attempt_outcomes):
+            logger.warning("[%s] Collection attempts had errors: %s", src.name, ",".join(attempt_outcomes))
+        else:
+            logger.info("[%s] No eligible articles in collection window: %s", src.name, ",".join(attempt_outcomes))
         return []
 
     # ─── NEWSNOW ─────────────────────────────────────────────────────────────
 
-    def _try_newsnow(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
+    def _try_newsnow(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle] | None:
         try:
             return self._fetch_newsnow(src, max_age_hours)
         except Exception as exc:
-            logger.debug("[%s] newsnow error: %s", src.name, exc)
-            return []
+            logger.warning("[%s] newsnow request error: %s", src.name, exc)
+            return None
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=15))
     def _fetch_newsnow(self, src: SourceConfig, max_age_hours: int) -> list[RawArticle]:
@@ -341,12 +349,12 @@ class Collector:
 
     # ─── RSS ─────────────────────────────────────────────────────────────────
 
-    def _try_rss(self, src: SourceConfig, feed_url: str, max_age_hours: int) -> list[RawArticle]:
+    def _try_rss(self, src: SourceConfig, feed_url: str, max_age_hours: int) -> list[RawArticle] | None:
         try:
             return self._fetch_rss(src, feed_url, max_age_hours)
         except Exception as exc:
-            logger.debug("[%s] RSS %s failed: %s", src.name, feed_url, exc)
-            return []
+            logger.warning("[%s] RSS request error for %s: %s", src.name, feed_url, exc)
+            return None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
     def _fetch_rss(self, src: SourceConfig, feed_url: str, max_age_hours: int) -> list[RawArticle]:

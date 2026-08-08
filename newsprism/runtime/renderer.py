@@ -303,6 +303,10 @@ _MILITARY_ESCALATION_RE = re.compile(
     r"strike|attack|drone|missile|military|border|Belarus|Zaporizhzhia)",
     re.IGNORECASE,
 )
+_NON_RU_UA_CONFLICT_RE = re.compile(
+    r"(美以伊|伊朗|以色列|加沙|哈马斯|Iran|Israeli?|Gaza|Hamas)",
+    re.IGNORECASE,
+)
 
 
 def _is_public_chinese_hot_topic_name(name: str) -> bool:
@@ -341,9 +345,51 @@ def _is_russia_ukraine_military_escalation(text: str) -> bool:
     )
 
 
-def _topic_name_relates_to_russia_ukraine(name: str) -> bool:
-    """True when the topic name itself mentions Russia or Ukraine entities."""
-    return bool(_RUSSIA_RE.search(name) or _UKRAINE_RE.search(name))
+def _specific_hot_topic_label(
+    summaries: list[ClusterSummary],
+    max_chars: int,
+) -> tuple[str, str | None]:
+    """Return the narrowest reader-facing label available for a family."""
+    for summary in summaries:
+        candidate = _normalize_hot_topic_name(
+            summary.short_topic_name or _fallback_short_topic_name(summary, max_chars),
+            summary,
+            max_chars,
+        )
+        if _is_public_chinese_hot_topic_name(candidate):
+            candidate_en = str(getattr(summary, "short_topic_name_en", "") or "").strip() or None
+            return candidate, candidate_en
+    return _normalize_hot_topic_name(None, summaries[0] if summaries else None, max_chars), None
+
+
+def _disambiguate_hot_topic_label(
+    label: str,
+    label_en: str | None,
+    storyline_name: str | None,
+    summaries: list[ClusterSummary],
+    used_labels: set[str],
+    max_chars: int,
+) -> tuple[str, str | None]:
+    """Keep separately keyed hot-topic tabs visibly distinct.
+
+    Duplicate labels are a presentation defect: readers cannot tell which tab
+    they are opening. Prefer the planner's original storyline label, then an
+    event-specific short label, before falling back to the lead headline.
+    """
+    candidates = [
+        (
+            _normalize_hot_topic_name(storyline_name, summaries[0] if summaries else None, max_chars),
+            None,
+        ),
+        _specific_hot_topic_label(summaries, max_chars),
+    ]
+    for candidate, candidate_en in candidates:
+        if candidate and candidate.casefold() not in used_labels:
+            return candidate, candidate_en
+
+    lead = _fallback_short_topic_name(summaries[0], max_chars) if summaries else label
+    expanded = f"{label}：{lead}".strip("：")
+    return expanded, label_en
 
 
 def _repair_hot_topic_label(
@@ -358,25 +404,21 @@ def _repair_hot_topic_label(
     is_ru_ua_escalation = _is_russia_ukraine_military_escalation(family_text)
     is_stale_refinery_label = bool(_REFINERY_RE.search(f"{topic_name}\n{topic_name_en or ''}"))
 
-    # When the family content is genuinely Russia-Ukraine military escalation,
-    # repair the label unless it already mentions Russia or Ukraine. Previously
-    # this only fired for non-Chinese or stale-refinery labels — but a
-    # wrong-but-valid-Chinese label like "美以伊局势" (US-Israel-Iran) would pass
-    # through unchecked, producing a tab named after one conflict containing
-    # stories about another.
+    # A generic Russia-Ukraine family must not retain a label for a different
+    # conflict.  Do not, however, replace a valid narrow label such as
+    # "特朗普拒供导弹": two distinct Russia-Ukraine storylines would otherwise
+    # collapse into duplicate tabs named "俄乌军事升级".
     if is_ru_ua_escalation and (
-        is_stale_refinery_label or not _topic_name_relates_to_russia_ukraine(topic_name)
+        is_stale_refinery_label or _NON_RU_UA_CONFLICT_RE.search(topic_name)
     ):
-        return "俄乌军事升级", "Russia-Ukraine military escalation"
+        return _specific_hot_topic_label(summaries, max_chars)
 
     if _is_public_chinese_hot_topic_name(topic_name):
         return topic_name, topic_name_en
 
-    for summary in summaries:
-        candidate = summary.short_topic_name or _fallback_short_topic_name(summary, max_chars)
-        candidate = _normalize_hot_topic_name(candidate, summary, max_chars)
-        if _is_public_chinese_hot_topic_name(candidate):
-            return candidate, topic_name_en
+    candidate, candidate_en = _specific_hot_topic_label(summaries, max_chars)
+    if _is_public_chinese_hot_topic_name(candidate):
+        return candidate, candidate_en or topic_name_en
 
     return topic_name, topic_name_en
 
@@ -1288,6 +1330,8 @@ class HtmlRenderer:
 
         hot_topics_ctx: list[dict] = []
         hot_topics_json: list[dict] = []
+        used_hot_topic_labels: set[str] = set()
+        used_hot_topic_full_labels: set[str] = set()
         for i, family in enumerate(hot_topics, 1):
             family_summaries = family.get("summaries", [])
             if not isinstance(family_summaries, list):
@@ -1312,6 +1356,28 @@ class HtmlRenderer:
                 [summary for summary in family_summaries if isinstance(summary, ClusterSummary)],
                 max_chars=_HOT_TOPIC_FULL_NAME_MAX_CHARS,
             )
+            typed_summaries = [summary for summary in family_summaries if isinstance(summary, ClusterSummary)]
+            storyline_name = family.get("storyline_name") if isinstance(family.get("storyline_name"), str) else None
+            if topic_name.casefold() in used_hot_topic_labels:
+                topic_name, topic_name_en = _disambiguate_hot_topic_label(
+                    topic_name,
+                    topic_name_en,
+                    storyline_name,
+                    typed_summaries,
+                    used_hot_topic_labels,
+                    max_chars=10,
+                )
+            if topic_name_full.casefold() in used_hot_topic_full_labels:
+                topic_name_full, topic_name_full_en = _disambiguate_hot_topic_label(
+                    topic_name_full,
+                    topic_name_full_en,
+                    storyline_name,
+                    typed_summaries,
+                    used_hot_topic_full_labels,
+                    max_chars=_HOT_TOPIC_FULL_NAME_MAX_CHARS,
+                )
+            used_hot_topic_labels.add(topic_name.casefold())
+            used_hot_topic_full_labels.add(topic_name_full.casefold())
             icon_key = family.get("topic_icon_key") if isinstance(family.get("topic_icon_key"), str) else "globe"
             if icon_key not in _HOT_TOPIC_ICON_MAP:
                 icon_key = "globe"

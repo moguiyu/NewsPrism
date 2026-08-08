@@ -56,6 +56,9 @@ class Article:
     is_placeholder: bool = False
     search_acceptance_status: str | None = None   # "accepted" | "failed" | None
     search_acceptance_reason: str | None = None   # short machine code, e.g. "http_401", "stale_result"
+    # "direct_event" | "background_context" for accepted searched material.
+    # Only direct event evidence may count as a displayed perspective.
+    search_evidence_role: str | None = None
     search_stage_trace: list[dict[str, str]] = field(default_factory=list)
 
 

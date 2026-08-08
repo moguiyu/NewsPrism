@@ -34,6 +34,7 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
             is_official_source=True,
             origin_region="jp",
             searched_provider="x_user_timeline",
+            search_evidence_role="direct_event",
         ),
         db_path=db_path,
     )
@@ -49,6 +50,7 @@ def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
     assert rows[0].is_official_source is True
     assert rows[0].origin_region == "jp"
     assert rows[0].searched_provider == "x_user_timeline"
+    assert rows[0].search_evidence_role == "direct_event"
     assert rows[0].is_placeholder is False
 
     insert_search_request_event(
@@ -203,7 +205,12 @@ def test_legacy_placeholder_url_is_migrated_and_filtered(tmp_path):
             "SELECT is_placeholder, search_acceptance_status, search_acceptance_reason "
             "FROM articles WHERE url LIKE 'placeholder:%'"
         ).fetchone()
-    assert {"is_placeholder", "search_acceptance_status", "search_acceptance_reason"} <= columns
+    assert {
+        "is_placeholder",
+        "search_acceptance_status",
+        "search_acceptance_reason",
+        "search_evidence_role",
+    } <= columns
     assert stored == (1, None, None)
 
     loaded = get_unclustered_articles(max_age_hours=48, db_path=db_path)
