@@ -53,7 +53,7 @@ class LLMClusterer:
         self.source_regions = {s.name: s.region for s in cfg.sources}
         self.min_clusters_fallback = cfg.clustering.get("llm_min_clusters_fallback", 3)
         self.max_articles_per_call = max(
-            20, int(cfg.clustering.get("llm_max_articles_per_call", 300))
+            20, int(cfg.clustering.get("llm_max_articles_per_call", 120))
         )
         self._compat_kwargs = completion_compat_kwargs(cfg.litellm_model, cfg.litellm_base_url)
         self._fallback = Clusterer(cfg)
@@ -61,21 +61,15 @@ class LLMClusterer:
     def cluster(self, articles: list[Article]) -> list[ArticleCluster]:
         if not articles:
             return []
-        try:
-            clusters = self._cluster_chunked(articles)
-            if len(clusters) < self.min_clusters_fallback:
-                logger.warning(
-                    "LLM clustering returned %d clusters (< %d) — falling back to embedding clusterer",
-                    len(clusters),
-                    self.min_clusters_fallback,
-                )
-                return self._fallback.cluster(articles)
-            return clusters
-        except Exception as exc:
-            logger.error(
-                "LLM clustering failed (%s) — falling back to embedding clusterer", exc
+        clusters = self._cluster_chunked(articles)
+        if len(clusters) < self.min_clusters_fallback:
+            logger.warning(
+                "LLM clustering returned %d clusters (< %d) — falling back to embedding clusterer",
+                len(clusters),
+                self.min_clusters_fallback,
             )
             return self._fallback.cluster(articles)
+        return clusters
 
     def _cluster_chunked(self, articles: list[Article]) -> list[ArticleCluster]:
         if len(articles) <= self.max_articles_per_call:
@@ -96,7 +90,7 @@ class LLMClusterer:
 
         clusters: list[ArticleCluster] = []
         for chunk in chunks:
-            clusters.extend(self._llm_cluster(chunk))
+            clusters.extend(self._cluster_chunk_with_recovery(chunk))
 
         # Sort: most diverse (regions, sources, articles) first
         clusters.sort(
@@ -114,6 +108,45 @@ class LLMClusterer:
             len(chunks),
         )
         return clusters
+
+    def _cluster_chunk_with_recovery(self, articles: list[Article]) -> list[ArticleCluster]:
+        """Prefer LLM clustering, degrading only the failed input chunk.
+
+        A malformed response from one oversized batch previously discarded all
+        successful LLM work for the run.  Retrying that batch as two smaller
+        requests is cheaper and preserves event boundaries elsewhere; only an
+        unrecoverable sub-chunk uses the embedding fallback.
+        """
+        try:
+            return self._llm_cluster(articles)
+        except Exception as exc:
+            if len(articles) >= 40:
+                midpoint = len(articles) // 2
+                logger.warning(
+                    "LLM clustering chunk failed (articles=%d error=%s); retrying as %d+%d",
+                    len(articles),
+                    exc,
+                    midpoint,
+                    len(articles) - midpoint,
+                )
+                recovered: list[ArticleCluster] = []
+                for subchunk in (articles[:midpoint], articles[midpoint:]):
+                    try:
+                        recovered.extend(self._llm_cluster(subchunk))
+                    except Exception as retry_exc:
+                        logger.error(
+                            "LLM clustering sub-chunk failed (articles=%d error=%s); using embedding fallback",
+                            len(subchunk),
+                            retry_exc,
+                        )
+                        recovered.extend(self._fallback.cluster(subchunk))
+                return recovered
+            logger.error(
+                "LLM clustering chunk failed (articles=%d error=%s); using embedding fallback",
+                len(articles),
+                exc,
+            )
+            return self._fallback.cluster(articles)
 
     def _llm_cluster(self, articles: list[Article]) -> list[ArticleCluster]:
         payload = [

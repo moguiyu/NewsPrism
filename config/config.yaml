@@ -38,6 +38,9 @@ collection:
 
 # ─── CLUSTERING ────────────────────────────────────────────────────────────────
 clustering:
+  # Keep structured LLM clustering responses bounded; malformed large batches
+  # retry as smaller chunks before only that chunk falls back to embeddings.
+  llm_max_articles_per_call: 120
   semantic_threshold: 0.72
   strong_similarity_threshold: 0.86   # bypass title-overlap gate for very strong semantic matches
   coherence_title_ngram_threshold: 0.12
@@ -137,6 +140,9 @@ active_search:
   max_requests_per_run: 40          # provider-wide safety budget; failures stay visible
   max_existing_title_overlap: 0.82
   min_semantic_event_match: 0.58
+  # Same-conflict search results may be useful background, but only a stronger
+  # event match can count as a distinct displayed perspective.
+  min_direct_semantic_event_match: 0.70
   # Country-stage acceptance: Tavily is already time-bounded (days=3), but it
   # frequently omits published_date, and URL-path dates are not always
   # recoverable. Treat undated results as passable in the country stage (they

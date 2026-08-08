@@ -693,6 +693,20 @@ def test_current_official_event_evidence_remains_accepted_and_marked():
     assert accepted[0].search_acceptance_reason == "current_event_perspective"
 
 
+def test_same_conflict_search_result_is_background_below_direct_event_floor():
+    seeker = ActiveSeeker(_config())
+    article = _article("AP", "G7 leaders pledge further Ukraine aid")
+
+    class _ContextOnlyModel:
+        def encode(self, *_args, **_kwargs):
+            return [[0.60, 0.80]]
+
+    with patch("newsprism.service.seeker.get_model", return_value=_ContextOnlyModel()):
+        role = seeker._search_evidence_role(article, np.array([1.0, 0.0]))
+
+    assert role == "background_context"
+
+
 def test_official_domain_does_not_relax_event_materiality_threshold():
     seeker = ActiveSeeker(_config())
     target = VoiceTarget("us", "Acme Labs", "company")

@@ -66,6 +66,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 is_placeholder INTEGER NOT NULL DEFAULT 0,
                 search_acceptance_status TEXT,
                 search_acceptance_reason TEXT,
+                search_evidence_role TEXT,
                 search_stage_trace TEXT NOT NULL DEFAULT '[]',
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             );
@@ -347,6 +348,12 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 "search_acceptance_reason",
                 "search_acceptance_reason TEXT",
             )
+        if "search_evidence_role" not in article_columns:
+            _add_column(
+                "articles",
+                "search_evidence_role",
+                "search_evidence_role TEXT",
+            )
         if "search_stage_trace" not in article_columns:
             _add_column(
                 "articles",
@@ -459,10 +466,11 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                        is_searched, search_region, source_kind, platform, account_id,
                        is_official_source, origin_region, searched_provider,
                        is_placeholder, search_acceptance_status, search_acceptance_reason,
+                       search_evidence_role,
                        search_stage_trace,
                        ownership_suppressed
                    )
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     article.url,
                     article.title,
@@ -482,6 +490,7 @@ def insert_article(article: Article, db_path: Path = DB_PATH) -> int | None:
                     1 if is_placeholder else 0,
                     article.search_acceptance_status,
                     article.search_acceptance_reason,
+                    article.search_evidence_role,
                     json.dumps(article.search_stage_trace, ensure_ascii=False, separators=(",", ":")),
                     1 if getattr(article, "ownership_suppressed", False) else 0,
                 ),
@@ -1274,6 +1283,11 @@ def _row_to_article(row: sqlite3.Row) -> Article:
         search_acceptance_reason=(
             row["search_acceptance_reason"]
             if "search_acceptance_reason" in row.keys()
+            else None
+        ),
+        search_evidence_role=(
+            row["search_evidence_role"]
+            if "search_evidence_role" in row.keys()
             else None
         ),
         search_stage_trace=(

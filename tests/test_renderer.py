@@ -783,6 +783,41 @@ class TestPerspectivesContext:
         assert payload["clusters"][0]["has_expandable_perspectives"] is False
         assert {source["source"] for source in payload["clusters"][0]["footer_sources"]} == {"澎湃新闻", "36氪"}
 
+    def test_background_search_context_does_not_count_as_a_perspective(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World",
+                articles=[
+                    Article("https://reuters.com/event", "Trump discusses Patriot missiles", "Reuters", datetime.now(tz=timezone.utc), "Direct event coverage."),
+                    Article(
+                        "https://apnews.com/context",
+                        "G7 pledges Ukraine aid",
+                        "AP News",
+                        datetime.now(tz=timezone.utc),
+                        "Same-conflict background coverage.",
+                        is_searched=True,
+                        search_acceptance_status="accepted",
+                        search_acceptance_reason="current_event_perspective",
+                        search_evidence_role="background_context",
+                    ),
+                ],
+            ),
+            summary="**特朗普回应爱国者导弹请求**\n\n美国表示自身也有防空需求。",
+            grouped_perspectives=[
+                PerspectiveGroup(sources=["Reuters"], perspective="报道特朗普的导弹表态。"),
+                PerspectiveGroup(sources=["AP News"], perspective="报道G7对乌援助承诺。"),
+            ],
+        )
+
+        html_path = renderer.render([summary], date(2026, 8, 8))
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert payload["clusters"][0]["distinct_perspective_count"] == 1
+        searched = next(source for source in payload["clusters"][0]["footer_sources"] if source["source"] == "AP News")
+        assert searched["counts_as_perspective"] is False
+        assert searched["provenance_label"] == "背景资料"
+
     def test_empty_render_keeps_existing_latest_symlink(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         previous_date = "2026-03-26"
@@ -1111,11 +1146,11 @@ class TestHotTopics:
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
-        assert payload["hot_topics"][0]["macro_topic_name"] == "俄乌军事升级"
-        assert payload["hot_topics"][0]["macro_topic_name_en"] == "Russia-Ukraine military escalation"
+        assert payload["hot_topics"][0]["macro_topic_name"] == "俄军大规模攻击预警"
+        assert payload["hot_topics"][0]["macro_topic_name_en"] is None
         assert "ロシア最大級の製油所" not in html
         assert "Russia&#39;s largest refinery" not in html
-        assert '<span data-lang-zh>俄乌军事升级</span><span data-lang-en>Russia-Ukraine military escalation</span>' in html
+        assert "俄军大规模攻击预警" in html
 
     def test_template_repairs_wrong_chinese_hot_topic_name_for_ru_ua_family(self, renderer, tmp_path):
         """Regression for 2026-07-31: a hot-topic tab named "美以伊局势"
@@ -1165,9 +1200,66 @@ class TestHotTopics:
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
-        assert payload["hot_topics"][0]["macro_topic_name"] == "俄乌军事升级"
-        assert payload["hot_topics"][0]["macro_topic_name_en"] == "Russia-Ukraine military escalation"
+        assert payload["hot_topics"][0]["macro_topic_name"] == "俄导弹落入波兰"
+        assert payload["hot_topics"][0]["macro_topic_name_en"] is None
         assert "美以伊局势" not in html
+
+    def test_template_keeps_distinct_narrow_ru_ua_hot_topic_labels(self, renderer, tmp_path):
+        """Separate Russia-Ukraine families must not collapse into one generic tab."""
+        renderer.output_dir = tmp_path
+
+        def summary(headline, short_name, storyline_name):
+            return ClusterSummary(
+                cluster=ArticleCluster(
+                    topic_category="World News",
+                    articles=[
+                        Article(
+                            url=f"https://example.com/{short_name}",
+                            title=headline,
+                            source_name="Reuters",
+                            published_at=datetime.now(tz=timezone.utc),
+                            content="Russia Ukraine military escalation body.",
+                        )
+                    ],
+                ),
+                summary=f"**{headline}**\n\n俄乌军事升级。",
+                perspectives={},
+                short_topic_name=short_name,
+                storyline_name=storyline_name,
+                macro_topic_name=storyline_name,
+            )
+
+        missile = summary("Trump says US needs Patriot missiles", "特朗普拒供导弹", "特朗普拒供导弹")
+        refinery = summary("Ukraine strikes Russian refinery", "乌袭俄炼油厂", "乌袭俄炼油厂")
+        html_path = renderer.render(
+            [],
+            datetime.now(tz=timezone.utc).date(),
+            hot_topics=[
+                {
+                    "dom_id": "hot-topic-1",
+                    "macro_topic_key": "patriot",
+                    "macro_topic_name": "特朗普拒供导弹",
+                    "storyline_name": "特朗普拒供导弹",
+                    "topic_icon_key": "war",
+                    "summaries": [missile],
+                },
+                {
+                    "dom_id": "hot-topic-2",
+                    "macro_topic_key": "refinery",
+                    "macro_topic_name": "乌袭俄炼油厂",
+                    "storyline_name": "乌袭俄炼油厂",
+                    "topic_icon_key": "war",
+                    "summaries": [refinery],
+                },
+            ],
+        )
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+
+        assert [topic["macro_topic_name"] for topic in payload["hot_topics"]] == [
+            "特朗普拒供导弹",
+            "乌袭俄炼油厂",
+        ]
+        assert len({topic["macro_topic_name"] for topic in payload["hot_topics"]}) == 2
 
     def test_template_wraps_emoji_with_fallback_spans(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -2160,7 +2252,7 @@ def test_render_does_not_add_shared_tag_when_only_one_cluster_per_key(renderer, 
 def test_shared_storyline_tag_uses_repaired_hot_topic_name(renderer, tmp_path):
     """Regression for 2026-07-31: main-feed cards sharing a hot-topic family's
     storyline_key showed the stale resolver-assigned name (e.g. "美以伊局势")
-    instead of the repaired tab label ("俄乌军事升级"). The renderer now
+    instead of the repaired tab label ("俄导弹落入波兰"). The renderer now
     propagates the repaired hot-topic name to main-feed shared labels.
     """
     renderer.output_dir = tmp_path
@@ -2245,8 +2337,8 @@ def test_shared_storyline_tag_uses_repaired_hot_topic_name(renderer, tmp_path):
     )
     payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
-    # The main-feed card should show the repaired name, not the stale one.
-    assert payload["clusters"][0]["shared_storyline_label"] == "俄乌军事升级"
+    # The main-feed card should show the repaired event label, not the stale one.
+    assert payload["clusters"][0]["shared_storyline_label"] == "俄导弹落入波兰"
     assert "美以伊局势" not in payload["clusters"][0].get("shared_storyline_label", "")
 
 

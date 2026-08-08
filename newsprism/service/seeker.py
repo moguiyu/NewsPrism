@@ -191,6 +191,12 @@ class ActiveSeeker:
         self.max_localized_query_variants = int(search_cfg.get("max_localized_query_variants", 2))
         self.max_existing_title_overlap = float(search_cfg.get("max_existing_title_overlap", 0.82))
         self.min_semantic_event_match = float(search_cfg.get("min_semantic_event_match", 0.58))
+        # A result may be useful context for the same conflict while still not
+        # covering this event.  Keep that material visible as background, but
+        # require a higher bar before it can increase perspective counts.
+        self.min_direct_semantic_event_match = float(
+            search_cfg.get("min_direct_semantic_event_match", 0.70)
+        )
         # Above this verifier confidence, a same_entity official_web candidate
         # on a clearly governmental domain is trusted without also requiring
         # target.label and publisher_entity to normalize to identical text —
@@ -967,6 +973,7 @@ class ActiveSeeker:
             # or news) and use the existing acceptance-reason field to retain
             # the evidence role without widening the Article/DB contract.
             article.search_acceptance_reason = _CURRENT_EVENT_ACCEPTANCE_REASON
+            article.search_evidence_role = self._search_evidence_role(article, centroid)
             self._record_candidate_review(
                 article,
                 target,
@@ -979,6 +986,36 @@ class ActiveSeeker:
             if len(accepted) >= self.max_results_per_region:
                 break
         return accepted, rejections
+
+    def _search_evidence_role(
+        self,
+        article: Article,
+        centroid: np.ndarray | None,
+    ) -> str:
+        """Classify accepted search material as direct evidence or context.
+
+        The admission threshold intentionally remains broad enough to surface
+        a missing country's relevant reporting.  The stricter role threshold
+        prevents a merely same-conflict result from being presented as a
+        distinct current-event perspective.
+        """
+        if centroid is None:
+            return "direct_event"
+        embedding = get_model().encode(
+            [f"{article.title} {article.content[:400]}"],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )[0]
+        similarity = float(np.dot(embedding, centroid))
+        if similarity >= self.min_direct_semantic_event_match:
+            return "direct_event"
+        logger.info(
+            "Search candidate retained as background context: source=%s similarity=%.3f direct_floor=%.3f",
+            article.source_name,
+            similarity,
+            self.min_direct_semantic_event_match,
+        )
+        return "background_context"
 
     def _existing_article_satisfies_target(
         self,

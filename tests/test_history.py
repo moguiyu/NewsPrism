@@ -521,6 +521,49 @@ def test_resolver_keeps_historical_name_when_adjacent():
     assert "关税战" in {cluster.storyline_name for cluster in resolved}
 
 
+def test_resolver_does_not_reuse_ru_ua_history_for_unrelated_korean_missile_launch():
+    """A conflict-family key cannot turn a generic missile event into Kyiv coverage.
+
+    This reproduces the Aug. 6–8 contamination: a real Russia-Ukraine
+    storyline had a North-Korean missile spillover, after which an unrelated
+    Korean launch reused the Kyiv key through a permissive cross-script match.
+    """
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer([]),
+        similarity_fn=lambda _text, _historical: 0.80,
+    )
+    clusters = [
+        ArticleCluster(
+            topic_category="North Korea launch",
+            articles=[_article("North Korea fires ballistic missile into Sea of Japan", [1.0, 0.0])],
+        ),
+        ArticleCluster(
+            topic_category="Kyiv missile attack",
+            articles=[_article("Russia missile attack on Kyiv Ukraine", [0.0, 1.0])],
+        ),
+    ]
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="Russia Ukraine war",
+            article_ids=[1],
+            summary="Russia launches missiles at Kyiv in Ukraine",
+            perspectives={},
+            report_date="2026-08-07",
+            storyline_key="kyiv-missiles",
+            storyline_name="基辅导弹袭击",
+            storyline_role="core",
+            storyline_confidence=0.80,
+        )
+    ]
+
+    resolved = resolver.resolve(clusters, historical, datetime(2026, 8, 8, tzinfo=timezone.utc).date())
+
+    assert resolved[0].storyline_key != "kyiv-missiles"
+    assert resolved[1].storyline_key == "kyiv-missiles"
+
+
 def test_resolver_regenerates_name_on_adjacent_same_script_drift():
     """Regression for the 2026-07-31 incident: a storyline named "美以伊局势"
     (US-Israel-Iran) was reused for Russia-Ukraine content the very next day.
