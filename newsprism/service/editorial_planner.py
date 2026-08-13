@@ -26,9 +26,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_HOT_TOPIC_ICON_KEY = "globe"
 # Cross-language coverage of the same event (multilingual mpnet) sits a notch
 # below same-language pairs, so 0.80 missed e.g. a zh/en NBA-final pair at 0.778.
-# 0.75 catches those while staying well above the 0.62–0.64 related-but-distinct
-# storyline range, so genuinely different stories are not merged.
-_DISPLAY_DEDUP_SIMILARITY = 0.75
+# 0.75 caught those but missed a zh/kr/ja US-CPI pair at 0.7477 (08-13), where
+# the market-reaction cluster duplicated the data-release cluster. 0.73 catches
+# it while staying well above the 0.62–0.64 related-but-distinct storyline
+# range, so genuinely different stories are not merged.
+_DISPLAY_DEDUP_SIMILARITY = 0.73
 
 
 def _extract_markdown_headline(summary_text: str) -> str:

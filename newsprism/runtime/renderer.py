@@ -146,6 +146,7 @@ _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "publisher_target_mismatch": ("发布者与目标不匹配", "Publisher does not match target"),
     "publisher_binding_unverified": ("未确认官方归属", "Official ownership unverified"),
     "official_binding_not_found": ("未找到可信官方渠道", "No verified official channel found"),
+    "official_skipped_low_budget": ("官方渠道搜索已让位于本地搜索", "Official search deferred to preserve local-search budget"),
     "request_budget_exhausted": ("本轮搜索额度已用完", "Search budget exhausted"),
     "coverage_satisfied": ("已有合格来源", "Qualifying coverage already exists"),
     "identity_binding_resolved": ("已确认官方渠道", "Official channel verified"),

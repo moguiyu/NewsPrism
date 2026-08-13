@@ -111,6 +111,13 @@ output:
     # same ongoing conflict have low centroid similarity by design).
     # Issue #2 rec #3.
     storyline_conflict_coherence_min: 0.40
+    # Relaxed *admission* bar for reusing a historical storyline key when the
+    # cluster's conflict signature intersects the family's signature. The 08-13
+    # Iran/Hormuz family shrank from 4 core members (08-09) to 1 while three
+    # same-conflict clusters fell to single-* because daily conflict incidents
+    # scored below the generic 0.55 history bar. Mirrors the coherence
+    # relaxation above; signature-verified conflict pairs only.
+    storyline_conflict_history_similarity: 0.40
     cluster_validation_pair_similarity: 0.50
     cluster_validation_pair_title_overlap: 0.03
     cluster_validation_outlier_similarity: 0.58
@@ -138,6 +145,20 @@ active_search:
   max_localized_query_variants: 2
   max_queries_per_stage: 2          # bounded official/country event queries per target
   max_requests_per_run: 40          # provider-wide safety budget; failures stay visible
+  # Country stage runs first: it is the time-bounded, high-pass-rate channel
+  # (~22% per call). The official stage runs only afterwards and only when a
+  # reviewed official_web binding (source_verdicts) or reviewed social account
+  # binding exists — unbinding identity-resolution searches had ~0% acceptance
+  # since 08-02 while Tavily stopped dating official results (0/63 in 7 days).
+  official_requires_reviewed_binding: true
+  # Reserve this many requests for the country stage: when the remaining budget
+  # is at or below the reserve, low-yield stages (official) are skipped entirely.
+  budget_country_reserve: 2
+  # Official-stage undated results are passable when true (mirrors
+  # country_allow_undated): Tavily is days=3 bounded but often omits
+  # published_date. They still must clear the official_web verifier,
+  # background-material, event-match, and entity-mention gates.
+  official_allow_undated: true
   max_existing_title_overlap: 0.82
   min_semantic_event_match: 0.58
   # Same-conflict search results may be useful background, but only a stronger
@@ -153,8 +174,11 @@ active_search:
   # When an entity's own coverage can't be found (no result, entity_mismatch,
   # or only dated-stale results), fall back to an entity-free country query
   # ("<event keyword> <country> local news") so at least one voice from that
-  # country appears. Reviewed country-editorial domains only.
+  # country appears. Reviewed country-editorial domains only. Budget-gated:
+  # only spent while at least fallback_min_budget_remaining requests remain
+  # (entity-free fallback accepted 0/28 in the 7 days to 08-13).
   country_entity_free_fallback: true
+  fallback_min_budget_remaining: 10
   # The impact evaluator extracts each named party from the event, so active
   # search can discover sources outside the normal intake. Candidates are
   # verified first-party voices or independently operated local editorial
