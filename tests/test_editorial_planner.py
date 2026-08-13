@@ -371,6 +371,29 @@ def test_display_dedup_merges_crosslang_same_event_in_positive_lane():
     assert len(pos) == 1
 
 
+def test_display_dedup_merges_cpi_event_pair_below_old_075_bar():
+    """08-13 regression: the US-CPI data-release cluster (zh/kr/ja) and the
+    US-CPI market-reaction cluster (zh/kr) were the same event with centroid
+    cosine 0.7477 — just below the old 0.75 bar — and both rendered in the
+    main lane. cos≈0.748 must now merge under the 0.73 bar."""
+    data_release = _summary("美7月 CPI 3.4% 放缓", 0.6, url="https://cn.example/cpi-data",
+                            embedding=[0.748, 0.6636, 0.0])
+    market_reaction = _summary("US CPI and Fed rate expectations", 0.6, url="https://en.example/cpi-market",
+                               embedding=[1.0, 0.0, 0.0])
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [data_release, market_reaction], [])
+    assert len(regular) == 1
+    assert regular[0].cluster.topic_category == "美7月 CPI 3.4% 放缓"
+
+
+def test_display_dedup_keeps_related_but_distinct_at_064():
+    """A 0.64 centroid pair — the documented related-but-distinct storyline
+    range — must stay separate under the lowered 0.73 bar."""
+    left = _summary("event A", 0.8, url="https://a.com/1", embedding=[0.64, 0.768, 0.0])
+    right = _summary("event B", 0.6, url="https://b.com/2", embedding=[1.0, 0.0, 0.0])
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
+    assert len(regular) == 2
+
+
 def test_finalize_positive_member_of_family_renders_in_positive_lane():
     """A positive pick that is also a storyline member must render once, in the
     positive lane — not be suppressed out of every lane by self-collision."""

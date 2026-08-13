@@ -274,7 +274,11 @@ def test_existing_duplicate_only_satisfies_target_when_identity_already_qualifie
 
 
 def test_official_identity_resolution_restricts_event_search_to_resolved_domain():
-    seeker = ActiveSeeker(_config())
+    cfg = _config()
+    # The binding gate (default on) skips the official stage for unbound
+    # targets; this test exercises the discovery path, so disable it.
+    cfg.active_search["official_requires_reviewed_binding"] = False
+    seeker = ActiveSeeker(cfg)
     cluster = _cluster()
     cluster.articles[0].origin_region = "gb"
     cluster.articles[0].content = "Acme Labs disclosed a security incident. " * 10
@@ -289,6 +293,8 @@ def test_official_identity_resolution_restricts_event_search_to_resolved_domain(
                 "title": "Acme Labs official site",
                 "content": "",
             }], None)
+        if request_type == "search_country":
+            return ([], None)  # country stage finds no local editorial voice
         return ([{
             "url": "https://acmelabs.com/security-incident",
             "title": "Acme Labs security incident statement",
@@ -309,8 +315,10 @@ def test_official_identity_resolution_restricts_event_search_to_resolved_domain(
     assert reason is None
     assert article is not None and article.is_official_source
     assert trace[-1] == {"stage": "official", "reason": "accepted"}
-    assert calls[0] == ("Acme Labs official website", (), "identity_resolution")
-    assert calls[1][1] == ("acmelabs.com",)
+    # Country stage runs first (empty), then the identity-resolution discovery
+    # path resolves the domain and the official search is domain-restricted.
+    assert ("Acme Labs official website", (), "identity_resolution") in calls
+    assert calls[-1][1] == ("acmelabs.com",)
 
 
 def test_reviewed_social_binding_avoids_unrestricted_official_event_search():
@@ -327,6 +335,8 @@ def test_reviewed_social_binding_avoids_unrestricted_official_event_search():
 
     def search(_target, query, include_domains=None, request_type="search"):
         calls.append((query, tuple(include_domains or []), request_type))
+        if request_type == "search_country":
+            return ([], None)  # country stage finds no local editorial voice
         return ([{
             "url": "https://x.com/exampleministry/status/123",
             "title": "Example Ministry policy statement",
@@ -346,7 +356,12 @@ def test_reviewed_social_binding_avoids_unrestricted_official_event_search():
     assert reason is None
     assert article is not None and article.is_official_source
     assert trace[-1] == {"stage": "official", "reason": "accepted"}
-    assert calls == [
+    # Country stage runs first and finds nothing; then, because no web binding
+    # exists but a reviewed social account binding does, the official stage is
+    # admitted and restricted to the account — no unrestricted official query.
+    assert calls[0][2] == "search_country"
+    official_calls = [call for call in calls if call[2] == "search_official"]
+    assert official_calls == [
         (
             "site:x.com/exampleministry policy change",
             ("x.com",),
@@ -402,7 +417,10 @@ def test_thin_official_pdf_survives_after_entity_domain_is_resolved():
     assert rejected == []
 
 
-def test_official_search_precedes_country_fallback_and_unreviewed_local_source_stays_pending():
+def test_country_stage_runs_before_official_and_unreviewed_local_source_stays_pending():
+    """Country is the priority stage now (08-13 optimization): it runs first,
+    and the official stage is skipped for unbound targets without burning
+    identity-resolution searches. Unreviewed local sources stay pending."""
     seeker = ActiveSeeker(_config())
     cluster = _cluster()
     cluster.articles[0].origin_region = "gb"
@@ -427,9 +445,12 @@ def test_official_search_precedes_country_fallback_and_unreviewed_local_source_s
 
     assert article is None
     assert reason == "candidate_pending_review"
-    assert [item["stage"] for item in trace] == ["official", "country"]
-    assert calls[0] == "Acme Labs official website"
-    assert len(calls) >= 2
+    # Country runs first; the official stage is skipped (no reviewed binding)
+    # and never issues an identity-resolution search.
+    assert [item["stage"] for item in trace] == ["country", "official"]
+    assert trace[-1] == {"stage": "official", "reason": "official_binding_not_found"}
+    assert "Acme Labs official website" not in calls
+    assert len(calls) >= 1
 
 
 def test_reviewed_local_source_can_be_used_as_country_fallback():
@@ -1289,3 +1310,191 @@ def test_entity_free_country_fallback_can_be_disabled():
         )
     assert reason == "country_fallback_not_found"
     assert "search_country_fallback" not in calls
+
+
+# ─── Budget-aware stage priority (08-13 optimization) ─────────────────────────
+
+
+def test_official_stage_skipped_when_no_reviewed_binding():
+    """The official stage is skipped entirely (no identity_resolution search,
+    no official queries) for targets without a reviewed official_web binding."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {}  # no official_web bindings
+    seeker = ActiveSeeker(cfg)
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    calls: list[str] = []
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append(request_type)
+        return ([], None)
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search):
+        _article, reason, trace = seeker._search_target(
+            cluster, target, "security incident", None
+        )
+
+    assert reason == "country_fallback_not_found"
+    assert [item["stage"] for item in trace] == ["country", "official"]
+    assert trace[-1] == {"stage": "official", "reason": "official_binding_not_found"}
+    assert "identity_resolution" not in calls
+    assert "search_official" not in calls
+
+
+def test_official_stage_runs_when_reviewed_binding_exists():
+    """With a reviewed official_web binding the official stage still runs —
+    it is the second (post-country) stage and uses the binding domain."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "acmelabs.com": {
+            "verdict": "official_web",
+            "region": "us",
+            "entity": "Acme Labs",
+        }
+    }
+    seeker = ActiveSeeker(cfg)
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    calls: list[tuple[str, tuple[str, ...], str]] = []
+    result = _fresh_result({
+        "url": "https://acmelabs.com/security-incident",
+        "title": "Acme Labs security incident statement",
+        "content": "Acme Labs announced the security incident. " * 10,
+    })
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append((query, tuple(include_domains or []), request_type))
+        if request_type == "search_country":
+            return ([], None)
+        return ([result], None)
+
+    identity = CandidateIdentity(
+        source_type="official_web",
+        publisher_entity="Acme Labs",
+        publisher_region="us",
+        relationship="same_entity",
+    )
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search), \
+         patch.object(ActiveSeeker, "_verify_candidate", return_value=identity):
+        article, reason, _trace = seeker._search_target(
+            cluster, target, "security incident", None
+        )
+
+    assert reason is None
+    assert article is not None and article.is_official_source
+    official_calls = [call for call in calls if call[2] == "search_official"]
+    assert official_calls and official_calls[0][1] == ("acmelabs.com",)
+    assert "identity_resolution" not in calls
+
+
+def test_official_stage_skipped_when_budget_is_low():
+    """When the remaining budget is at or below the country reserve, the
+    official stage is skipped so the tail budget is preserved for country."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "acmelabs.com": {
+            "verdict": "official_web",
+            "region": "us",
+            "entity": "Acme Labs",
+        }
+    }
+    seeker = ActiveSeeker(cfg)
+    seeker._request_count = seeker.max_requests_per_run - 1  # only 1 left
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    calls: list[str] = []
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append(request_type)
+        return ([], None)
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search):
+        _article, _reason, trace = seeker._search_target(
+            cluster, target, "security incident", None
+        )
+
+    assert [item["stage"] for item in trace] == ["country", "official"]
+    assert trace[-1] == {"stage": "official", "reason": "official_skipped_low_budget"}
+    assert "search_official" not in calls
+
+
+def test_discovery_query_skipped_when_budget_is_low():
+    """The duplicate-text discovery query (same text as the scoped query, empty
+    domains) is skipped when budget is tight, saving a second Tavily call."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "local-paper.example": {"verdict": "country_editorial", "region": "us"},
+    }
+    seeker = ActiveSeeker(cfg)
+    seeker._request_count = seeker.max_requests_per_run - 1
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    calls: list[tuple[str, str]] = []
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append((query, request_type))
+        return ([], None)
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search):
+        _article, _reason, _trace = seeker._search_target(
+            cluster, target, "security incident", None
+        )
+
+    country_queries = [(q, r) for q, r in calls if r == "search_country"]
+    # Scoped query runs once; the domain-free duplicate discovery does not.
+    assert len(country_queries) == 1
+
+
+def test_entity_free_fallback_skipped_when_budget_is_low():
+    """The entity-free country fallback (0/28 accepted over 7 days to 08-13) is
+    budget-gated: it only fires while enough budget remains."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "local-paper.example": {"verdict": "country_editorial", "region": "us"},
+    }
+    seeker = ActiveSeeker(cfg)
+    seeker._request_count = seeker.max_requests_per_run - seeker.fallback_min_budget_remaining
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    cluster.impact.voice_needs = [VoiceNeed(label="Acme Labs", country="us", kind="company")]
+    target = seeker._missing_voice_targets(cluster)[0]
+    calls: list[str] = []
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append(request_type)
+        return ([], None)
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search):
+        _article, _reason, _trace = seeker._search_target(
+            cluster, target, "security incident", None
+        )
+
+    assert "search_country_fallback" not in calls
+
+
+def test_official_undated_results_passable_when_enabled():
+    """Fix D: official-stage results without a provider date were rejected as
+    stale_result since 08-02 (Tavily stopped dating them), collapsing official
+    acceptance to 0/63. official_allow_undated makes undated results passable
+    in the official stage; they still face the other acceptance gates."""
+    cfg = _config()
+    cfg.active_search["official_allow_undated"] = True
+    seeker = ActiveSeeker(cfg)
+    target = VoiceTarget("us", "Acme Labs", "company")
+    article = _article("local", "Acme Labs responds", region="us")
+    article.published_at = None
+    assert seeker._rejection_reason(article, target, [], None, stage="official") == ""
+    assert seeker._rejection_reason(article, target, [], None, stage="country") == ""

@@ -113,6 +113,7 @@ def test_resolver_uses_namespaced_values_from_real_config():
     assert resolver.edge_confidence_threshold == 0.50
     assert resolver.candidate_similarity == 0.64
     assert resolver.history_similarity_threshold == 0.55
+    assert resolver.conflict_history_similarity_threshold == 0.40
 
 
 def test_conflict_relation_requires_both_stories_to_name_same_conflict_pair():
@@ -562,6 +563,87 @@ def test_resolver_does_not_reuse_ru_ua_history_for_unrelated_korean_missile_laun
 
     assert resolved[0].storyline_key != "kyiv-missiles"
     assert resolved[1].storyline_key == "kyiv-missiles"
+
+
+def test_resolver_conflict_signature_admits_same_conflict_cluster_below_generic_bar():
+    """08-13 Iran/Hormuz regression: same-conflict clusters scored between the
+    relaxed conflict bar (0.40) and the generic history bar (0.55) and were
+    stranded as single-* while the family shrank from 4 core members (08-09) to
+    1. A cluster whose conflict signature intersects the historical family's
+    signature must be admitted at the relaxed bar."""
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer([]),
+        # The Iran cluster scores in the relaxed-conflict band (0.40–0.55);
+        # the unrelated cluster scores far below any admission bar.
+        similarity_fn=lambda text, _h: 0.47 if "Trump demands compensation" in text else 0.05,
+    )
+    clusters = [
+        ArticleCluster(
+            topic_category="US Iran conflict",
+            articles=[_article("Trump demands compensation from Iran", [1.0, 0.0])],
+        ),
+        ArticleCluster(
+            topic_category="World News",
+            articles=[_article("Europe reacts to Iran US tensions", [0.0, 1.0])],
+        ),
+    ]
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="World News",
+            article_ids=[1],
+            summary="US Iran tensions and Hormuz attacks",
+            perspectives={},
+            report_date="2026-08-12",
+            storyline_key="storyline-ed88a9db",
+            storyline_name="霍尔木兹海峡局势",
+            storyline_role="core",
+            storyline_confidence=0.80,
+        )
+    ]
+
+    resolved = resolver.resolve(clusters, historical, datetime(2026, 8, 13, tzinfo=timezone.utc).date())
+
+    # The same-conflict cluster reuses the historical family key even though
+    # 0.47 sits below the generic 0.55 history bar.
+    assert "storyline-ed88a9db" in {cluster.storyline_key for cluster in resolved}
+
+
+def test_resolver_generic_bar_still_applies_to_non_conflict_clusters():
+    """The relaxed conflict bar must NOT admit ordinary (non-conflict) clusters
+    below the generic history threshold — same-script drift guard stays intact."""
+    cfg = _config()
+    cfg.output["hot_topics"]["history_similarity_threshold"] = 0.55
+    resolver = StorylineResolver(
+        cfg,
+        summarizer=_StubSummarizer([]),
+        similarity_fn=lambda _t, _h: 0.47,
+    )
+    clusters = [
+        ArticleCluster(
+            topic_category="Economy",
+            articles=[_article("Fed holds rates amid inflation data", [1.0, 0.0])],
+        ),
+    ]
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="Economy",
+            article_ids=[1],
+            summary="US central bank policy and markets",
+            perspectives={},
+            report_date="2026-08-12",
+            storyline_key="storyline-fed-rates",
+            storyline_name="美联储利率",
+            storyline_role="core",
+            storyline_confidence=0.80,
+        )
+    ]
+
+    resolved = resolver.resolve(clusters, historical, datetime(2026, 8, 13, tzinfo=timezone.utc).date())
+
+    assert resolved[0].storyline_key != "storyline-fed-rates"
 
 
 def test_resolver_regenerates_name_on_adjacent_same_script_drift():

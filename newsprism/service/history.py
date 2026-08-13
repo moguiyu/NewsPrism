@@ -510,6 +510,19 @@ class StorylineResolver:
             "history_similarity_threshold",
             0.48,
         )
+        # Relaxed admission bar for clusters whose conflict signature intersects
+        # a historical family's signature. Different daily incidents of the same
+        # ongoing conflict have low centroid similarity by design (the coherence
+        # gate already mirrors this with storyline_conflict_coherence_min), so
+        # admitting them at the generic history bar stranded Iran/Hormuz-family
+        # members as single-* clusters on 08-13 while the family shrank from 4
+        # core members (08-09) to 1.
+        self.conflict_history_similarity_threshold = _storyline_float_config(
+            hot_cfg,
+            "storyline_conflict_history_similarity",
+            "conflict_history_similarity",
+            0.40,
+        )
         # A storyline family must be internally coherent: the mean pairwise
         # centroid cosine across *all* its members must clear this bar. Union-find
         # over accepted edges otherwise chains unrelated clusters transitively
@@ -601,7 +614,15 @@ class StorylineResolver:
                 if historical_conflicts and not (historical_conflicts & current_conflicts):
                     continue
                 similarity = self.similarity_fn(str(profile["text"]), historical)
-                if similarity < self.history_similarity_threshold:
+                # Same-conflict daily incidents have low centroid similarity by
+                # design; admit them into an existing conflict family at the
+                # relaxed bar (mirrors storyline_conflict_coherence_min).
+                admission_bar = (
+                    self.conflict_history_similarity_threshold
+                    if (historical_conflicts & current_conflicts)
+                    else self.history_similarity_threshold
+                )
+                if similarity < admission_bar:
                     continue
                 recency_bonus = 0.0
                 try:

@@ -222,9 +222,28 @@ class ActiveSeeker:
         # When an entity's own coverage can't be found (no result, mismatch, or
         # only dated-stale results), fall back to an entity-free country query
         # so at least one voice from that country appears. Reviewed domains only.
+        # Budget-gated: only spent when at least this many calls remain.
         self.country_entity_free_fallback = bool(
             search_cfg.get("country_entity_free_fallback", True)
         )
+        self.fallback_min_budget_remaining = int(search_cfg.get("fallback_min_budget_remaining", 10))
+        # Run the official stage only for targets with a reviewed official_web
+        # binding (source_verdicts) or reviewed social account binding. Without
+        # a binding the official stage burned an identity_resolution search plus
+        # up to two official queries per target with ~0% acceptance (08-02+:
+        # 0/63 official acceptances while Tavily stopped dating results).
+        self.official_requires_reviewed_binding = bool(
+            search_cfg.get("official_requires_reviewed_binding", True)
+        )
+        # Official-stage undated results are passable when true (mirrors
+        # country_allow_undated): Tavily is days=3 bounded but often omits
+        # published_date. They still must clear the official_web verifier,
+        # background-material, event-match, and entity-mention gates.
+        self.official_allow_undated = bool(search_cfg.get("official_allow_undated", False))
+        # Reserve this many calls for the high-yield country stage: when the
+        # remaining budget is at or below the reserve, low-yield stages
+        # (official) are skipped entirely instead of eating the tail budget.
+        self.budget_country_reserve = max(0, int(search_cfg.get("budget_country_reserve", 2)))
 
         profiles = search_cfg.get("search_profiles", {}) if isinstance(search_cfg, dict) else {}
         self.region_config = self._build_region_config(profiles)
@@ -682,7 +701,10 @@ class ActiveSeeker:
         failure_reason is set only when no article was accepted, so the caller
         can synthesize an inline placeholder that surfaces the cause to readers.
         """
-        stages = ("country",) if target.role == "country" else ("official", "country")
+        # Country first: it is the time-bounded, high-pass-rate channel (~22%
+        # per call vs 0% official since 08-02). Official runs only afterwards,
+        # and only for targets with a reviewed binding.
+        stages = ("country",) if target.role == "country" else ("country", "official")
         last_reason: str | None = None
         stage_trace: list[dict[str, str]] = []
         for stage in stages:
@@ -691,6 +713,21 @@ class ActiveSeeker:
                 : self.max_queries_per_stage
             ]
             if stage == "official":
+                if self._request_count + self.budget_country_reserve >= self.max_requests_per_run:
+                    # Low budget: reserve the tail for the country stage of
+                    # later targets instead of spending it on the low-yield
+                    # official stage. Do not overwrite a country-stage reason.
+                    stage_trace.append({"stage": stage, "reason": "official_skipped_low_budget"})
+                    continue
+                if self.official_requires_reviewed_binding and not self._has_reviewed_official_binding(
+                    target
+                ) and not self._reviewed_social_searches(target, keyword):
+                    # Without a reviewed official_web binding the official stage
+                    # had ~0% acceptance (08-02+); skip it entirely instead of
+                    # burning identity_resolution + official queries. The
+                    # pre-check is free: it never issues a search.
+                    stage_trace.append({"stage": stage, "reason": "official_binding_not_found"})
+                    continue
                 include_domains, resolve_reason = self._resolve_official_domains(target)
                 if resolve_reason in {
                     "http_401", "http_402", "http_403", "http_429", "network",
@@ -721,7 +758,16 @@ class ActiveSeeker:
                 # pending; only reviewed country bindings can be published.
                 discovery_query = stage_queries[0] if stage_queries else keyword
                 if include_domains:
-                    searches.append((discovery_query, [], "search_country"))
+                    # The discovery query duplicates stage_queries[0] verbatim
+                    # (same text, empty domains → second Tavily call). Skip it
+                    # when budget is low; the scoped query already fetched the
+                    # same text so this only re-spends for new-publisher
+                    # discovery that stays pending-review anyway.
+                    if (
+                        self._request_count + self.budget_country_reserve
+                        < self.max_requests_per_run
+                    ):
+                        searches.append((discovery_query, [], "search_country"))
                 else:
                     searches = [(discovery_query, [], "search_country")]
                 # Entity-free fallback: an entity may have no fresh coverage
@@ -731,6 +777,8 @@ class ActiveSeeker:
                 # country-editorial domains only; one extra bounded query.
                 if (
                     self.country_entity_free_fallback
+                    and self._request_count + self.fallback_min_budget_remaining
+                    < self.max_requests_per_run
                     and target.role != "country"
                     and include_domains
                     and stage_queries
@@ -1060,7 +1108,10 @@ class ActiveSeeker:
             return "entity_mismatch"
         if not self._is_fresh(
             article.published_at,
-            allow_undated=bool(stage == "country" and self.country_allow_undated),
+            allow_undated=bool(
+                (stage == "country" and self.country_allow_undated)
+                or (stage == "official" and self.official_allow_undated)
+            ),
         ):
             return "stale_result"
         if stage == "official" and self._looks_like_official_background(article):
@@ -1430,6 +1481,27 @@ class ActiveSeeker:
         return centroid / norm
 
     # ─── QUERIES ─────────────────────────────────────────────────────────────
+
+    def _has_reviewed_official_binding(self, target: VoiceTarget) -> bool:
+        """Cheap (search-free) check: does a reviewed official_web domain
+        binding exist for this target? Consults the in-memory cache and the
+        configured source_verdicts only — never issues a Tavily call."""
+        key = (self._identity_text(target.label), target.region)
+        if self._resolved_official_bindings.get(key):
+            return True
+        for domain, spec in self.source_verdicts.items():
+            if str(spec.get("verdict") or "") != "official_web":
+                continue
+            alias_names = [str(spec.get("entity") or ""), *(spec.get("entity_aliases") or [])]
+            if key[0] not in {
+                self._identity_text(str(alias)) for alias in alias_names if str(alias).strip()
+            }:
+                continue
+            region = str(spec.get("region") or "").strip().lower()
+            if region and region != target.region:
+                continue
+            return True
+        return False
 
     def _resolve_official_domains(
         self,
