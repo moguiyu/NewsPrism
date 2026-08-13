@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.6.2 - 2026-08-13
+
+### Fixed
+
+- Merged same-event cluster pairs at the display level (dedup bar 0.75 → 0.73):
+  the 08-13 US-CPI data-release and market-reaction clusters (centroid 0.7477)
+  rendered as two main-lane cards; same-language and cross-language pairs now
+  collapse while the 0.62–0.64 related-but-distinct band stays separate.
+- Conflict-family history admission now uses a relaxed similarity bar
+  (`storyline_conflict_history_similarity: 0.40`) for clusters whose conflict
+  signature intersects an existing family's signature. The Iran/Hormuz family
+  shrank from 4 core members (08-09) to 1 while same-conflict clusters fell to
+  `single-*` under the generic 0.55 bar; ordinary clusters keep the strict bar.
+- Active Search runs the time-bounded country stage first and the official
+  stage only for targets with a reviewed official_web/social binding
+  (`official_requires_reviewed_binding`); identity-resolution discovery is no
+  longer issued for unbound targets.
+- `official_allow_undated`: Tavily stopped dating official results (08-02+),
+  which made the strict official freshness gate reject all candidates
+  (0/63). Undated official pages are passable again while still clearing the
+  verifier, background-material, event-match, and entity-mention gates.
+- Budget priority within the 40-request cap: `budget_country_reserve: 2`
+  skips the official stage and the duplicate-text discovery query under
+  budget pressure; the entity-free fallback is gated by
+  `fallback_min_budget_remaining: 10` (0/28 accepted over 7 days).
+
 ## v0.6.1 - 2026-08-01
 
 ### Fixed
