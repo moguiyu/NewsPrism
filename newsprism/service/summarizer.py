@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from newsprism.config import Config
 from newsprism.service.llm_compat import completion_compat_kwargs
+from newsprism.service.llm_telemetry import tracked_completion
 from newsprism.service.perspectives import canonicalize_perspective_groups
 from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup, is_real_article
 
@@ -160,8 +161,10 @@ class Summarizer:
         self.model = cfg.litellm_model
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
+        self.telemetry_enabled = getattr(cfg, "llm_telemetry_enabled", False)
         self.temperature = cfg.summarizer.get("temperature", 0.3)
         self.max_tokens = cfg.summarizer.get("max_tokens", 1200)
+        self.article_content_chars = max(200, int(cfg.summarizer.get("article_content_chars", 1600)))
         self.completion_compat_kwargs = completion_compat_kwargs(self.model, self.base_url)
         self.hot_topics_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
         self.topic_icon_allowlist = self.hot_topics_cfg.get(
@@ -231,7 +234,9 @@ class Summarizer:
             f"{clusters_text}"
         )
 
-        response = litellm.completion(
+        tracked = tracked_completion(
+            stage="summary_batch",
+            enabled=self.telemetry_enabled,
             model=self.model,
             api_key=self.api_key,
             api_base=self.base_url,
@@ -242,11 +247,24 @@ class Summarizer:
             temperature=self.temperature,
             max_tokens=min(len(clusters) * 800, 16000),
             response_format={"type": "json_object"},
+            item_count=len(clusters),
             **self.completion_compat_kwargs,
         )
 
-        content = response.choices[0].message.content or ""
-        batch_result = BatchSummaryResponse.model_validate_json(content)
+        content = tracked.choices[0].message.content or ""
+        try:
+            batch_result = BatchSummaryResponse.model_validate_json(content)
+        except Exception:
+            salvaged_items = self._salvage_batch_summary_items(content)
+            if not salvaged_items:
+                tracked.mark("malformed_json")
+                raise
+            logger.warning(
+                "Batch summary JSON was malformed; salvaged %d/%d items",
+                len(salvaged_items),
+                len(clusters),
+            )
+            batch_result = BatchSummaryResponse(clusters=salvaged_items)
 
         items_by_index = {item.index: item for item in batch_result.clusters}
 
@@ -472,7 +490,7 @@ class Summarizer:
             prompt = self._build_storyline_relation_prompt(batch)
             parsed = self._request_storyline_relations(
                 prompt=prompt,
-                max_tokens=min(self.max_tokens, 1600),
+                max_tokens=min(16000, 600 + len(batch) * 180),
                 stage_label=f"storyline relation batch {start + 1}-{start + len(batch)}",
             )
             by_pair = {
@@ -523,7 +541,7 @@ class Summarizer:
             + "\n\n".join(anchor_lines)
         )
         try:
-            content = self._macro_topic_completion(prompt, min(self.max_tokens, 300))
+            content = self._macro_topic_completion(prompt, min(self.max_tokens, 300), stage="storyline_name")
             extracted = self._extract_json_object(content) or content
             match = re.search(r'"storyline_name"\s*:\s*"([^"]+)"', extracted)
             if not match:
@@ -577,8 +595,15 @@ class Summarizer:
         logger.error("Failed to parse %s output after retry", stage_label)
         return None
 
-    def _macro_topic_completion(self, prompt: str, max_tokens: int) -> str:
-        response = litellm.completion(
+    def _macro_topic_completion(
+        self,
+        prompt: str,
+        max_tokens: int,
+        stage: str = "storyline_relation",
+    ) -> str:
+        tracked = tracked_completion(
+            stage=stage,
+            enabled=self.telemetry_enabled,
             model=self.model,
             api_key=self.api_key,
             api_base=self.base_url,
@@ -591,7 +616,7 @@ class Summarizer:
             response_format={"type": "json_object"},
             **self.completion_compat_kwargs,
         )
-        return response.choices[0].message.content or ""
+        return tracked.choices[0].message.content or ""
 
 
     def _parse_storyline_relation_content(self, content: str) -> StorylineRelationBatch | None:
@@ -615,6 +640,30 @@ class Summarizer:
             return None
         return content[start:end + 1]
 
+    def _salvage_batch_summary_items(self, content: str) -> list[BatchSummaryItem]:
+        """Recover complete indexed items from a truncated batch-summary JSON."""
+        text = (content or "").strip()
+        if not text:
+            return []
+        items: list[BatchSummaryItem] = []
+        decoder = json.JSONDecoder()
+        pos = 0
+        while pos < len(text):
+            start = text.find("{", pos)
+            if start == -1:
+                break
+            try:
+                obj, end = decoder.raw_decode(text[start:])
+            except json.JSONDecodeError:
+                pos = start + 1
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("index"), int):
+                try:
+                    items.append(BatchSummaryItem.model_validate(obj))
+                except Exception:
+                    pass
+            pos = start + max(1, end)
+        return items
 
     def _salvage_storyline_relations(self, content: str) -> list[StorylineRelationItem]:
         if not content.strip():
@@ -657,7 +706,9 @@ class Summarizer:
         articles_block = self._format_articles(cluster)
         prompt = self._build_prompt(cluster, articles_block)
 
-        response = litellm.completion(
+        tracked = tracked_completion(
+            stage="summary_single",
+            enabled=self.telemetry_enabled,
             model=self.model,
             api_key=self.api_key,
             api_base=self.base_url,
@@ -668,12 +719,13 @@ class Summarizer:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             response_format={"type": "json_object"},
+            item_count=1,
             **self.completion_compat_kwargs,
         )
 
         try:
             # Parse the returned JSON string into our Pydantic model
-            content = response.choices[0].message.content or ""
+            content = tracked.choices[0].message.content or ""
             parsed = StructuredSummary.model_validate_json(content)
 
             headline_clean = parsed.headline.strip().strip("*")
@@ -778,8 +830,11 @@ class Summarizer:
         user_prompt: str,
         max_tokens: int,
         temperature: float = 0.1,
+        stage: str = "translation",
     ) -> str:
-        response = litellm.completion(
+        tracked = tracked_completion(
+            stage=stage,
+            enabled=self.telemetry_enabled,
             model=self.model,
             api_key=self.api_key,
             api_base=self.base_url,
@@ -792,7 +847,7 @@ class Summarizer:
             response_format={"type": "json_object"},
             **self.completion_compat_kwargs,
         )
-        return response.choices[0].message.content or ""
+        return tracked.choices[0].message.content or ""
 
     def _normalize_perspective_groups(
         self,
@@ -1146,7 +1201,9 @@ class Summarizer:
             f"Unsupported values: {unsupported}\nCurrent summary:\n{summary.summary}\n\nSources:\n{evidence}"
         )
         try:
-            response = litellm.completion(
+            tracked = tracked_completion(
+                stage="summary_rewrite",
+                enabled=self.telemetry_enabled,
                 model=self.model,
                 api_key=self.api_key,
                 api_base=self.base_url,
@@ -1154,10 +1211,11 @@ class Summarizer:
                 temperature=0,
                 max_tokens=500,
                 response_format={"type": "json_object"},
+                item_count=1,
                 **self.completion_compat_kwargs,
             )
             parsed = GroundedSummaryRewrite.model_validate_json(
-                response.choices[0].message.content or ""
+                tracked.choices[0].message.content or ""
             )
             if not parsed.headline.strip() or not parsed.body.strip():
                 return None
@@ -1401,8 +1459,7 @@ class Summarizer:
             lines.append(
                 f"[{article_index}] 来源：{article.source_name}\n"
                 f"标题：{article.title}\n"
-                f"内容：{article.content[:3000]}\n"
-                f"链接：{article.url}\n"
+                f"内容：{article.content[:self.article_content_chars]}\n"
             )
         return "\n".join(lines)
 

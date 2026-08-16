@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="{{ 'en-US' if edition == 'en' else 'zh-CN' }}">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  {% if edition == 'en' %}
+  <title>NewsPrism Archive · Daily News, Many Perspectives</title>
+  <meta name="description" content="All {{ total_count }} NewsPrism daily reports — one event, many perspectives on the same facts, browsable by month." />
+  {% else %}
+  <title>NewsPrism 归档 · 每日新闻多角度解读</title>
+  <meta name="description" content="NewsPrism 全部{{ total_count }}篇日报归档：同一事件，多国媒体立场对照，按月浏览每日报告。" />
+  {% endif %}
+  {% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}" />{% endif %}
+  <link rel="icon" href="/favicon.ico" sizes="16x16" />
+  <link rel="alternate" type="application/rss+xml" title="NewsPrism" href="/feed.xml" />
+  <link rel="stylesheet" href="/fonts/fonts.css">
+  {% if umami_website_id %}<script async defer src="{{ umami_script_url }}" data-website-id="{{ umami_website_id }}"></script>{% endif %}
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    /* Same token set as report-template (dark default, OS light override). */
+    :root {
+      --font-sans: 'Outfit', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
+      --bg: #0a0b10;
+      --text: #f0f2f8;
+      --muted: #8b95a8;
+      --accent: #6e9cff;
+      --border: rgba(255, 255, 255, 0.08);
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f6fa;
+        --text: #1c202b;
+        --muted: #5a6477;
+        --accent: #3b6ef5;
+        --border: rgba(0, 0, 0, 0.08);
+      }
+    }
+
+    html {
+      color-scheme: dark light;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 40px 20px 60px;
+    }
+
+    .site-header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+      margin-bottom: 28px;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+    }
+
+    .logo {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -0.5px;
+      text-decoration: none;
+    }
+
+    .logo:hover {
+      color: var(--text);
+    }
+
+    .header-sub {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .page-sub {
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 28px;
+    }
+
+    .month {
+      margin-bottom: 32px;
+    }
+
+    .month-title {
+      font-size: 16px;
+      font-weight: 700;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--border);
+      margin-bottom: 4px;
+    }
+
+    .day-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      padding: 10px 2px;
+      border-bottom: 1px solid var(--border);
+      text-decoration: none;
+      color: var(--text);
+    }
+
+    .day-row:hover .day-date {
+      color: var(--accent);
+    }
+
+    .day-date {
+      font-weight: 600;
+    }
+
+    .day-meta {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .back-latest {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .back-latest:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    footer {
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="site-header">
+      <a class="logo" href="/">NewsPrism</a>
+      <span class="header-sub">归档 · Archive</span>
+    </div>
+
+    {% if edition == 'en' %}
+    <h1>All daily reports</h1>
+    <p class="page-sub">{{ total_count }} reports · One event, many perspectives</p>
+    {% else %}
+    <h1>全部日报归档</h1>
+    <p class="page-sub">共 {{ total_count }} 篇 · 同一事件，多国媒体立场对照</p>
+    {% endif %}
+
+    {% for month in months %}
+    <section class="month">
+      <h2 class="month-title">{{ month.label }}</h2>
+      {% for day in month.days %}
+      <a class="day-row" href="{{ day.href }}">
+        <span class="day-date">{{ day.display }} {{ day.day_name }} · {{ day.date }}</span>
+        <span class="day-meta">{{ day.display_en }} {{ day.day_name_en }}</span>
+      </a>
+      {% endfor %}
+    </section>
+    {% endfor %}
+
+    <a class="back-latest" href="{{ '/' if edition == 'en' else '/cn/' }}">← {{ 'Back to latest report' if edition == 'en' else '返回今日报告 · Latest report' }}</a>
+
+    <footer>
+      <span>NewsPrism · {{ 'Daily News, Many Perspectives' if edition == 'en' else '每日新闻多角度解读' }}</span>
+      <span><a href="/feed.xml" style="color: inherit;">RSS</a></span>
+    </footer>
+  </div>
+</body>
+
+</html>

@@ -7,6 +7,7 @@ schedule:
   full_collect_cron: "15 0,4,16,20 * * *"
   prepublish_collect_cron: "20 7 * * *"
   publish_cron: "30 7 * * *"    # build staged report before the 08:00 push
+  retention_output_cron: "30 4 * * 1"  # weekly report-dir pruning (output.retention_days)
   push_cron: "0 8 * * *"        # deliver final page + Telegram at 08:00 sharp
   calibrate_cron: "30 3 * * 1"      # weekly Mon 03:30: nudge weights + refresh policy memory
   retention_cron: "0 4 * * 1"       # weekly Mon 04:00: drop unclustered articles >30d
@@ -15,6 +16,12 @@ schedule:
     max_attempts: 3
     retry_interval_minutes: 5
   timezone: "Europe/Warsaw"     # overridable via SCHEDULE_TIMEZONE env var
+
+# ─── LLM TELEMETRY ─────────────────────────────────────────────────────────────
+llm_telemetry:
+  # Persist prompt/completion token usage per pipeline stage in
+  # SQLite (llm_call_events). Runtime-only telemetry; never changes prompts.
+  enabled: true
 
 # ─── EVOLUTION (P2) ─────────────────────────────────────────────────────────────
 evolution:
@@ -41,6 +48,12 @@ clustering:
   # Keep structured LLM clustering responses bounded; malformed large batches
   # retry as smaller chunks before only that chunk falls back to embeddings.
   llm_max_articles_per_call: 120
+  # Phase 2a: collapse same-source near-duplicate event updates before the
+  # LLM clustering pass. Representatives are re-expanded afterwards, so the
+  # final article set is unchanged. Strict on purpose.
+  compaction_enabled: true
+  compaction_semantic_similarity: 0.92
+  compaction_title_ratio: 90
   semantic_threshold: 0.72
   strong_similarity_threshold: 0.86   # bypass title-overlap gate for very strong semantic matches
   coherence_title_ngram_threshold: 0.12
@@ -59,6 +72,9 @@ summarizer:
   temperature: 0.3
   max_tokens: 1200
   language: "zh"
+  # Phase 3a: cap body chars sent to the LLM per article. The local numeric
+  # grounding gate still validates against the full stored article content.
+  article_content_chars: 1600
   style_guide_file: "config/style-guide.md"
 
 # ─── OUTPUT ────────────────────────────────────────────────────────────────────
@@ -69,6 +85,12 @@ output:
   latest_symlink: true
   english:
     enabled: true
+    # Path-isolated editions with English as the site default:
+    #   /{date}/      → English edition (root, default landing)
+    #   /cn/{date}/   → Chinese edition
+    # Days without English content fall back to Chinese at the root URL.
+    # The header language control navigates between the two edition URLs.
+    separate_edition: true
   positive_energy:
     enabled: true
     min_items: 1
@@ -80,7 +102,14 @@ output:
     source_diversity: true
     use_llm_classifier: false
   day_navigation:
+    # Footer shows prev/next-day links as real /YYYY-MM-DD/ URLs (always on).
+    # `days` now only controls how many legacy /p/N/ symlinks are maintained
+    # for already-indexed/bookmarked alias URLs (no page links to them).
     days: 3
+  # Prune published report dirs older than N days (weekly cron, see
+  # schedule.retention_output_cron). 0 disables. latest/p symlink targets are
+  # never deleted; sitemap/archive/feed regenerate after pruning.
+  retention_days: 730
   hot_topics:
     enabled: true
     # Cap of 3 storyline tabs per day — keep the navigation simple; the top-3

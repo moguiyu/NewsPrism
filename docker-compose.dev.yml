@@ -108,6 +108,51 @@ services:
       retries: 5
       start_period: 120s
 
+  # ── umami — self-hosted, privacy-friendly web analytics ────────────────────
+  # Tracker is injected into the report template (env-driven, inert until
+  # UMAMI_WEBSITE_ID is set). Reached publicly at https://stats.moguiyu.top via
+  # Cloudflare Tunnel — same pattern as the admin portal: bound to 0.0.0.0 so
+  # the separate cloudflared network can reach it via the host LAN IP.
+  umami:
+    image: ghcr.io/umami-software/umami:postgresql-latest
+    container_name: newsprism-umami
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://umami:${UMAMI_DB_PASSWORD}@umami-db:5432/umami
+      - DATABASE_TYPE=postgresql
+      - APP_SECRET=${UMAMI_APP_SECRET}
+    ports:
+      - "8082:3000"
+    depends_on:
+      umami-db:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  umami-db:
+    image: postgres:16-alpine
+    container_name: newsprism-umami-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=umami
+      - POSTGRES_USER=umami
+      - POSTGRES_PASSWORD=${UMAMI_DB_PASSWORD}
+    volumes:
+      - umami-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "umami"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── nginx — static HTML report server ──────────────────────────────────────
   # Contributor stack keeps nginx config editable from the repo.
   web:
@@ -127,3 +172,4 @@ services:
 
 volumes:
   hf_cache:
+  umami-db:

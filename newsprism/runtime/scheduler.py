@@ -236,8 +236,16 @@ class Scheduler:
             output_dir=cfg.output.get("html_dir", "output"),
             source_regions={s.name: s.region for s in cfg.sources},
             source_certifications=cfg.certifications,
+            report_base_url=cfg.report_base_url,
+            umami_website_id=cfg.umami_website_id,
+            umami_script_url=cfg.umami_script_url,
+            google_site_verification=cfg.google_site_verification,
+            bing_site_verification=cfg.bing_site_verification,
+            schedule_timezone=cfg.schedule.get("timezone", "Europe/Warsaw"),
         )
         self.renderer.day_navigation_cfg = cfg.output.get("day_navigation", {}) if isinstance(cfg.output, dict) else {}
+        english_cfg = cfg.output.get("english", {}) if isinstance(cfg.output, dict) else {}
+        self.renderer.english_edition_enabled = bool(english_cfg.get("separate_edition", False))
 
     def _positive_energy_cfg(self) -> dict:
         return self.cfg.output.get("positive_energy", {}) if isinstance(self.cfg.output, dict) else {}
@@ -486,7 +494,7 @@ class Scheduler:
                 logger.warning("No unclustered articles found — skipping %s", phase_name.lower())
                 return
 
-            clusters = self.clusterer.cluster(articles)
+            clusters = self.clusterer.cluster(articles, report_date=today.isoformat())
             clusters = [cluster for cluster in clusters if _cluster_has_real_article(cluster)]
             if not clusters:
                 logger.warning("No clusters formed — skipping %s", phase_name.lower())
@@ -833,6 +841,26 @@ class Scheduler:
         except Exception:
             logger.exception("Retention job failed")
 
+    async def _run_output_retention(self) -> None:
+        """Weekly: prune published report dirs past output.retention_days.
+
+        0/absent disables pruning. Sitemap/archive/feed regenerate in the same
+        pass so the deleted URLs leave the discovery surfaces immediately.
+        """
+        out_cfg = self.cfg.output if isinstance(self.cfg.output, dict) else {}
+        try:
+            days = int(out_cfg.get("retention_days", 0) or 0)
+        except (TypeError, ValueError):
+            days = 0
+        if days <= 0:
+            return
+        try:
+            deleted = await asyncio.to_thread(self.renderer.prune_old_reports, days)
+            if deleted:
+                logger.info("Output retention: pruned %d report dirs older than %d days", len(deleted), days)
+        except Exception:
+            logger.exception("Output retention job failed")
+
     async def replay(self, report_date: date | None = None, dry_run: bool = False) -> None:
         """Reset one report date's article set and rerun publish from that exact set."""
         target_date = report_date or date.today()
@@ -946,6 +974,12 @@ class Scheduler:
             self._run_retention,
             CronTrigger.from_crontab(retention_cron, timezone=tz),
             id="retention_weekly",
+        )
+        output_retention_cron = self.cfg.schedule.get("retention_output_cron", "30 4 * * 1")
+        sched.add_job(
+            self._run_output_retention,
+            CronTrigger.from_crontab(output_retention_cron, timezone=tz),
+            id="output_retention_weekly",
         )
 
         sched.start()

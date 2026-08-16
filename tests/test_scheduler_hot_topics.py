@@ -184,7 +184,7 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
 
     input_articles = [_article("Reuters", "Input")]
     input_cluster = _cluster("Input")
-    scheduler.clusterer = SimpleNamespace(cluster=lambda articles: [input_cluster])
+    scheduler.clusterer = SimpleNamespace(cluster=lambda articles, **kwargs: [input_cluster])
     scheduler.cluster_validator = SimpleNamespace(validate=lambda clusters: clusters)
     scheduler.impact_assessor = SimpleNamespace(
         rank_candidates=lambda clusters, window: clusters,

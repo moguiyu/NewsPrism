@@ -1498,3 +1498,34 @@ def test_official_undated_results_passable_when_enabled():
     article.published_at = None
     assert seeker._rejection_reason(article, target, [], None, stage="official") == ""
     assert seeker._rejection_reason(article, target, [], None, stage="country") == ""
+
+
+def test_identity_resolution_registry_reject_skips_verifier(monkeypatch):
+    """Reviewed-binding terminal decisions must not spend an LLM verifier call."""
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "example.com": {
+            "verdict": "country_editorial",
+            "region": "us",
+            "entity": "Acme",
+        }
+    }
+    seeker = ActiveSeeker(cfg)
+    target = VoiceTarget(region="us", label="Acme", role="company")
+    result = {
+        "url": "https://example.com/page",
+        "title": "Acme statement",
+        "content": "body " * 40,
+        "published_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+
+    monkeypatch.setattr(seeker, "_search_tavily", lambda *args, **kwargs: ([result], None))
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("verifier should not be called for a registry-terminal decision")
+
+    monkeypatch.setattr(seeker, "_verify_candidate", fail_if_called)
+
+    domains, reason = seeker._resolve_official_domains(target)
+    assert domains == []
+    assert reason == "not_official_source"
