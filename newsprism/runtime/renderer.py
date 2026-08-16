@@ -8,12 +8,15 @@ from __future__ import annotations
 import html as html_lib
 import json
 import logging
+import os
 import re
+import shutil
 import struct
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
@@ -30,6 +33,37 @@ from newsprism.service.locales import region_flag, region_flags
 from newsprism.types import ClusterSummary, SourceCertification, is_real_article
 
 logger = logging.getLogger(__name__)
+
+# Matches a published daily report directory (YYYY-MM-DD) at the output root.
+_REPORT_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# English day/month abbreviations for RFC-822 <pubDate> in the RSS feed
+# (locale-independent, since strftime %a/%b are locale-sensitive).
+_RFC822_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_RFC822_MONTHS = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+]
+
+
+def _rfc822_pub_date(date_str: str, tz_name: str) -> str:
+    """RFC-822 pubDate for a report date at 08:00 in the schedule timezone.
+
+    Offset is formatted manually (locale-safe); DST is resolved by ZoneInfo.
+    """
+    d = date.fromisoformat(date_str)
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+    offset = datetime(d.year, d.month, d.day, 8, 0, tzinfo=tz).utcoffset() or timedelta(0)
+    total = abs(int(offset.total_seconds()))
+    sign = "+" if offset.total_seconds() >= 0 else "-"
+    hh, mm = divmod(total // 60, 60)
+    return (
+        f"{_RFC822_DAYS[d.weekday()]}, {d.day:02d} {_RFC822_MONTHS[d.month - 1]} "
+        f"{d.year} 08:00:00 {sign}{hh:02d}{mm:02d}"
+    )
 
 # ── BROAD CATEGORY MAPPING ────────────────────────────────────────────────────
 
@@ -623,11 +657,33 @@ class HtmlRenderer:
         template_dir: str = "templates",
         source_regions: dict[str, str] | None = None,
         source_certifications: dict[str, SourceCertification] | None = None,
+        report_base_url: str = "",
+        umami_website_id: str = "",
+        umami_script_url: str = "",
+        google_site_verification: str = "",
+        bing_site_verification: str = "",
+        schedule_timezone: str = "UTC",
     ) -> None:
         self.output_dir = Path(output_dir)
         self.template_file = "report-template.html"
         self.source_regions: dict[str, str] = source_regions or {}
         self.source_certifications: dict[str, SourceCertification] = source_certifications or {}
+        # Public base URL used for SEO canonical / sitemap / OG absolute URLs.
+        # Empty in tests or when REPORT_BASE_URL is unset — SEO URL tags are
+        # then omitted rather than emitting broken localhost/relative URLs.
+        self.report_base_url = (report_base_url or "").rstrip("/")
+        # Self-hosted Umami analytics; tracker is emitted only when both are set.
+        self.umami_website_id = (umami_website_id or "").strip()
+        self.umami_script_url = (umami_script_url or "").strip()
+        # Search-console verification tokens (rendered as <meta> tags when set).
+        self.google_site_verification = (google_site_verification or "").strip()
+        self.bing_site_verification = (bing_site_verification or "").strip()
+        # Schedule timezone (IANA name) — used for the RSS feed's pubDate offset.
+        self.schedule_timezone = (schedule_timezone or "UTC").strip() or "UTC"
+        # Render a second English edition at /en/{date}/ (hreflang-linked with
+        # the Chinese pages). Off by default; scheduler wires it from
+        # output.english.separate_edition.
+        self.english_edition_enabled = False
         self.env = Environment(
             loader=FileSystemLoader(template_dir),
             autoescape=select_autoescape(["html"]),
@@ -1192,29 +1248,131 @@ class HtmlRenderer:
             },
         )
 
-    def _build_day_links(self, report_date: date, days: int = 3) -> list[dict[str, object]]:
-        # Past-day footer links only — today is served at /, no self-link.
-        # Hrefs use stable /p/N/ aliases so the on-disk YYYY-MM-DD layout is
-        # not exposed in HTML; availability is probed against the final
-        # production output dir (not any staging subdir).
-        links: list[dict[str, object]] = []
+    def _render_cn_edition(
+        self,
+        report_date: date,
+        common: dict,
+        clusters_ctx: list[dict],
+        sections: list[dict],
+        positive_ctx: list[dict],
+        hot_topics_ctx: list[dict],
+        template,
+        update_latest: bool,
+    ) -> None:
+        """Render the Chinese edition at /cn/{date}/ for a dual-edition day.
+
+        The root /{date}/ page of a dual day is the English edition (site
+        default); this writes the Chinese twin with its own /cn/ canonical and
+        zh_CN SEO context. Called only when the separate edition is enabled and
+        English content exists.
+        """
+        date_str = report_date.isoformat()
+        common_cn = dict(common)
+        common_cn.update(
+            self._build_seo_context(
+                report_date,
+                [
+                    {"headline": c.get("headline"), "headline_en": c.get("headline_en")}
+                    for c in clusters_ctx
+                ],
+                True,
+                edition="zh",
+                zh_under_cn=True,
+            )
+        )
+        common_cn["default_language"] = "zh"
+        common_cn["available_languages"] = ["zh", "en"]
+        common_cn["day_links"] = self._build_day_links(report_date, edition="zh")
+        common_cn["archive_link"] = "/cn/archive/"
+        common_cn["language_crosslink"] = f"/{date_str}/"
+
+        cn_dir = self.output_dir / "cn" / date_str
+        cn_dir.mkdir(parents=True, exist_ok=True)
+        page = template.render(
+            **common_cn,
+            clusters=clusters_ctx,
+            sections=sections,
+            main_sections=sections,
+            positive_stories=positive_ctx,
+            hot_topics=hot_topics_ctx,
+        )
+        cn_index = cn_dir / "index.html"
+        cn_index.write_text(page, encoding="utf-8")
+        cn_index.chmod(0o644)
+
+        if update_latest:
+            cn_latest = self.output_dir / "cn" / "latest"
+            if cn_latest.is_symlink():
+                cn_latest.unlink()
+            try:
+                cn_latest.symlink_to(date_str)
+            except OSError:
+                pass
+        logger.info("Chinese edition written: %s", cn_index)
+
+    def _is_en_primary(self, date_str: str) -> bool:
+        """True when the root report for a date is the English edition.
+
+        Marked in data.json (`default_language: "en"`) on dual-edition days;
+        legacy/absent payloads read as Chinese-primary.
+        """
+        try:
+            payload = json.loads(
+                (self.output_dir / date_str / "data.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return False
+        return isinstance(payload, dict) and payload.get("default_language") == "en"
+
+    def _zh_href(self, date_str: str) -> str | None:
+        """Path of the Chinese edition for a date, or None if it doesn't exist.
+
+        /cn/{date}/ on dual-edition days (and legacy dates migrated to /cn),
+        the root URL itself on zh-only fallback days.
+        """
+        if (self.output_dir / "cn" / date_str / "index.html").exists():
+            return f"/cn/{date_str}/"
+        if (self.output_dir / date_str / "index.html").exists() and not self._is_en_primary(date_str):
+            return f"/{date_str}/"
+        return None
+
+    def _build_day_links(
+        self, report_date: date, days: int = 3, edition: str = "zh"
+    ) -> list[dict[str, object]]:
+        """Adjacent-day footer links as real date URLs for THIS page's edition.
+
+        English pages link neighbouring English-primary root dates; Chinese
+        pages link the neighbouring Chinese URLs (/cn/ when it exists, the root
+        URL on zh-only fallback days). /p/N/ symlinks are still maintained for
+        already-indexed/bookmarked alias URLs; nothing links to them.
+        """
         day_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         day_names_en = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        for offset in range(1, max(1, days) + 1):
-            current = report_date - timedelta(days=offset)
+        links: list[dict[str, object]] = []
+        for offset, label, label_en in (
+            (-1, "前一天", "Prev day"),
+            (1, "后一天", "Next day"),
+        ):
+            current = report_date + timedelta(days=offset)
             date_str = current.isoformat()
-            available = (self.output_dir / date_str / "index.html").exists()
+            if edition == "en":
+                href = f"/{date_str}/" if (
+                    (self.output_dir / date_str / "index.html").exists()
+                    and self._is_en_primary(date_str)
+                ) else None
+            else:
+                href = self._zh_href(date_str)
             links.append(
                 {
                     "date": date_str,
-                    "label": f"{offset}天前",
-                    "label_en": f"{offset}d ago",
+                    "label": label,
+                    "label_en": label_en,
                     "date_display": current.strftime("%m月%d日"),
                     "date_display_en": current.strftime("%b %d"),
                     "day_name": day_names[current.weekday()],
                     "day_name_en": day_names_en[current.weekday()],
-                    "href": f"/p/{offset}/" if available else None,
-                    "available": available,
+                    "href": href,
+                    "available": href is not None,
                     "active": False,
                 }
             )
@@ -1565,6 +1723,7 @@ class HtmlRenderer:
             day_nav_cfg = {}
         day_link_count = int(day_nav_cfg.get("days", 3)) if isinstance(day_nav_cfg, dict) else 3
 
+        dual_edition = self.english_edition_enabled and english_available
         common = {
             "report_date": date_str,
             "report_date_display": report_date.strftime("%Y年%m月%d日"),
@@ -1582,9 +1741,34 @@ class HtmlRenderer:
             "total_cluster_count": len(summaries) + len(positive_ctx) + hot_topic_story_count,
             "english_available": english_available,
             "available_languages": ["zh", "en"] if english_available else ["zh"],
-            "default_language": "zh",
-            "day_links": self._build_day_links(report_date, day_link_count),
+            # Root is the English edition on dual days; falls back to Chinese
+            # when no English content exists (data.json records which).
+            "default_language": "en" if dual_edition else "zh",
+            "day_links": self._build_day_links(
+                report_date, day_link_count, edition="en" if dual_edition else "zh"
+            ),
+            "archive_link": "/archive/" if dual_edition else "/cn/archive/",
         }
+        if dual_edition:
+            common["language_crosslink"] = f"/cn/{date_str}/"
+        common.update(
+            self._build_seo_context(
+                report_date,
+                clusters_json,
+                english_available,
+                edition="en" if dual_edition else "zh",
+                zh_under_cn=dual_edition,
+            )
+        )
+        # Umami tracker values — present only when configured (see template).
+        if self.umami_website_id and self.umami_script_url:
+            common["umami_website_id"] = self.umami_website_id
+            common["umami_script_url"] = self.umami_script_url
+        # Search-console verification tokens — present only when configured.
+        if self.google_site_verification:
+            common["google_site_verification"] = self.google_site_verification
+        if self.bing_site_verification:
+            common["bing_site_verification"] = self.bing_site_verification
 
         template = self.env.get_template(self.template_file)
         page_html = template.render(
@@ -1620,6 +1804,17 @@ class HtmlRenderer:
             + common["focus_storyline_story_count"]
             + common["hot_topic_story_count"]
         )
+        if dual_edition:
+            self._render_cn_edition(
+                report_date,
+                common,
+                clusters_ctx,
+                sections,
+                positive_ctx,
+                hot_topics_ctx,
+                template,
+                update_latest=update_latest and total_story_count > 0,
+            )
         latest = self.output_dir / "latest"
         if update_latest and total_story_count > 0:
             if latest.is_symlink():
@@ -1635,5 +1830,434 @@ class HtmlRenderer:
                 date_str,
             )
 
+        self._write_seo_files(report_date)
         logger.info("HTML report written: %s", html_path)
         return html_path
+
+    def _build_seo_context(
+        self,
+        report_date: date,
+        clusters_json: list[dict],
+        english_available: bool,
+        edition: str = "zh",
+        zh_under_cn: bool = False,
+    ) -> dict[str, object]:
+        """Per-page SEO meta (title / description / canonical) from today's clusters.
+
+        Plain strings only — the template stays declarative. Language editions
+        are path-isolated: the root /{date}/ URL is the English edition (site
+        default), the Chinese edition lives at /cn/{date}/. On days without
+        English content the root falls back to Chinese and the zh canonical
+        stays at the root URL (zh_under_cn=False). hreflang pairs are emitted
+        only when both editions exist; x-default points at the English root.
+        """
+        date_display_zh = report_date.strftime("%Y年%m月%d日")
+        date_display_en = report_date.strftime("%b %d, %Y")
+        date_str = report_date.isoformat()
+
+        headlines_zh = [
+            str(c.get("headline") or "").strip()
+            for c in clusters_json
+            if str(c.get("headline") or "").strip()
+        ]
+        top_zh = headlines_zh[0] if headlines_zh else ""
+
+        if headlines_zh:
+            joined = "、".join(headlines_zh[:3])
+            description = f"NewsPrism {date_display_zh} 多角度新闻解读：{joined}。同一事件，多国媒体立场对照"
+            if len(description) > 155:
+                description = description[:154].rstrip("、，。 ") + "…"
+        else:
+            description = f"NewsPrism · {date_display_zh} 全球新闻多角度解读：同一事件，多国媒体立场对照"
+
+        title_zh = (
+            f"NewsPrism · {date_display_zh} · {top_zh}"
+            if top_zh
+            else f"NewsPrism · {date_display_zh} 每日新闻多角度解读"
+        )
+        seo_title = title_zh[:70] + ("…" if len(title_zh) > 70 else "")
+        og_locale = "zh_CN"
+        in_language = "zh-CN"
+        zh_path = f"/cn/{date_str}/" if zh_under_cn else f"/{date_str}/"
+        canonical_url = f"{self.report_base_url}{zh_path}" if self.report_base_url else ""
+
+        if edition == "en":
+            headlines_en = [
+                str(c.get("headline_en") or "").strip()
+                for c in clusters_json
+                if str(c.get("headline_en") or "").strip()
+            ]
+            top_en = headlines_en[0] if headlines_en else top_zh
+            if headlines_en:
+                description = (
+                    f"NewsPrism {date_display_en} daily digest — one event, many perspectives: "
+                    f"{'; '.join(headlines_en[:3])}."
+                )
+                if len(description) > 160:
+                    description = description[:159].rstrip(",;. ") + "…"
+            else:
+                description = "NewsPrism daily digest — one event, many perspectives on the same facts."
+            title_en = (
+                f"NewsPrism · {date_display_en} · {top_en}"
+                if top_en
+                else f"NewsPrism · {date_display_en} Daily News, Many Perspectives"
+            )
+            seo_title = title_en[:70] + ("…" if len(title_en) > 70 else "")
+            og_locale = "en_US"
+            in_language = "en-US"
+            canonical_url = f"{self.report_base_url}/{date_str}/" if self.report_base_url else ""
+
+        og_image = f"{self.report_base_url}/og-image.png" if self.report_base_url else ""
+
+        # hreflang pair — only meaningful when both editions have absolute URLs.
+        hreflang_alternates: list[dict[str, str]] = []
+        if self.report_base_url:
+            zh_url = f"{self.report_base_url}{zh_path}"
+            en_url = f"{self.report_base_url}/{date_str}/"
+            if english_available:
+                hreflang_alternates = [
+                    {"lang": "zh", "url": zh_url},
+                    {"lang": "en", "url": en_url},
+                    {"lang": "x-default", "url": en_url},
+                ]
+            else:
+                hreflang_alternates = [{"lang": "zh", "url": zh_url}]
+
+        ld: dict = {
+            "@context": "https://schema.org",
+            "@type": "NewsArticle",
+            "headline": seo_title,
+            "description": description,
+            "datePublished": date_str,
+            "dateModified": date_str,
+            "inLanguage": in_language,
+            "author": {"@type": "Organization", "name": "NewsPrism"},
+            "publisher": {"@type": "Organization", "name": "NewsPrism"},
+        }
+        if canonical_url:
+            ld["mainEntityOfPage"] = {"@type": "WebPage", "@id": canonical_url}
+        if og_image:
+            ld["image"] = [og_image]
+        # Escape chars that would break out of a <script> JSON-LD block; expose as
+        # a pre-escaped string so Jinja's autoescape does not double-encode it.
+        json_ld = (
+            json.dumps(ld, ensure_ascii=False)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
+
+        return {
+            "seo_title": seo_title,
+            "seo_description": description,
+            "canonical_url": canonical_url,
+            "og_image": og_image,
+            "og_locale": og_locale,
+            "hreflang_alternates": hreflang_alternates,
+            "json_ld": json_ld,
+        }
+
+    def _discover_report_dates(self) -> list[str]:
+        """Sorted YYYY-MM-DD dirs at the output root that contain a report.
+
+        Zero-story dates are excluded from the discovery set (they feed the
+        sitemap, archive, and RSS feed) but keep their direct URL browsable.
+        Fail-open: unreadable or legacy data.json keeps the date listed.
+        """
+        dates: list[str] = []
+        if not self.output_dir.is_dir():
+            return dates
+        for entry in self.output_dir.iterdir():
+            if (
+                entry.is_dir()
+                and _REPORT_DATE_DIR_RE.match(entry.name)
+                and (entry / "index.html").exists()
+                and self._report_has_stories(entry.name)
+            ):
+                dates.append(entry.name)
+        return sorted(dates)
+
+    def _report_has_stories(self, date_str: str) -> bool:
+        try:
+            payload = json.loads(
+                (self.output_dir / date_str / "data.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return True  # fail-open: legacy/corrupt exports stay listed
+        if not isinstance(payload, dict) or "total_cluster_count" not in payload:
+            return True
+        try:
+            return int(payload.get("total_cluster_count") or 0) > 0
+        except (TypeError, ValueError):
+            return True
+
+    def _write_seo_files(self, report_date: date) -> None:
+        """Refresh robots.txt and sitemap.xml at the output root after each publish.
+
+        Keeps the sitemap in sync with every published daily report. Only the
+        canonical date URLs (plus the homepage) are listed — the /latest and
+        /p/N/ aliases are excluded so crawlers see one URL per report and we
+        avoid duplicate-content signals. Sitemap is written only when a public
+        base URL is configured (absolute URLs are required by the spec).
+        """
+        robots_lines = ["User-agent: *", "Allow: /"]
+        if self.report_base_url:
+            robots_lines += ["", f"Sitemap: {self.report_base_url}/sitemap.xml"]
+        robots_lines.append("")
+        (self.output_dir / "robots.txt").write_text("\n".join(robots_lines), encoding="utf-8")
+
+        # Social share image — static brand asset, copied idempotently like the
+        # PWA icons. Referenced by the og:image / twitter:image meta tags.
+        og_src = Path(__file__).resolve().parent.parent / "static" / "og-image.png"
+        if og_src.exists():
+            import shutil
+            og_dest = self.output_dir / "og-image.png"
+            if not (og_dest.exists() and og_dest.stat().st_size == og_src.stat().st_size):
+                shutil.copy2(og_src, og_dest)
+                og_dest.chmod(0o644)
+
+        if not self.report_base_url:
+            self._write_archive_page("en")
+            self._write_archive_page("zh")
+            return
+
+        def _lastmod(date_dir: str) -> str:
+            # mtime reflects replays/corrections, not just the original publish
+            # date — Google then re-fetches fixed reports (lastmod moves forward).
+            idx = self.output_dir / date_dir / "index.html"
+            try:
+                return datetime.fromtimestamp(idx.stat().st_mtime).date().isoformat()
+            except OSError:
+                return date_dir
+
+        dates = self._discover_report_dates()
+        base = self.report_base_url
+        newest = _lastmod(dates[-1]) if dates else report_date.isoformat()
+
+        def _en_lastmod(d: str) -> str:
+            return _lastmod(d)
+
+        def _zh_lastmod(d: str) -> str:
+            if zh_of[d].startswith("/cn/"):
+                idx = self.output_dir / "cn" / d / "index.html"
+                try:
+                    return datetime.fromtimestamp(idx.stat().st_mtime).date().isoformat()
+                except OSError:
+                    return d
+            return _lastmod(d)
+
+        def _url(loc: str, lastmod: str, alternates: list[dict[str, str]]) -> list[str]:
+            block = ["  <url>", f"    <loc>{html_lib.escape(loc, quote=False)}</loc>"]
+            for alt in alternates:
+                block.append(
+                    f'    <xhtml:link rel="alternate" hreflang="{alt["lang"]}" '
+                    f'href="{html_lib.escape(alt["url"], quote=False)}"/>'
+                )
+            block.append(f"    <lastmod>{lastmod}</lastmod>")
+            block.append("  </url>")
+            return block
+
+        dual_dates = [d for d in dates if self._is_en_primary(d)]
+        zh_of = {d: self._zh_href(d) for d in dates}
+
+        def _pair(d: str) -> list[dict[str, str]]:
+            return [
+                {"lang": "zh", "url": f"{base}{zh_of[d]}"},
+                {"lang": "en", "url": f"{base}/{d}/"},
+                {"lang": "x-default", "url": f"{base}/{d}/"},
+            ]
+
+        archive_alts = (
+            [
+                {"lang": "zh", "url": f"{base}/cn/archive/"},
+                {"lang": "en", "url": f"{base}/archive/"},
+                {"lang": "x-default", "url": f"{base}/archive/"},
+            ]
+            if dual_dates
+            else []
+        )
+        lines = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+            'xmlns:xhtml="http://www.w3.org/1999/xhtml">',
+        ]
+        lines += _url(f"{base}/", newest, [])
+        lines += _url(f"{base}/archive/", newest, archive_alts)
+        if (self.output_dir / "cn" / "archive" / "index.html").exists():
+            lines += _url(f"{base}/cn/archive/", newest, archive_alts)
+            lines += _url(f"{base}/cn/", newest, [])
+        for d in dates:
+            if d in dual_dates:
+                # dual day: root English page + /cn Chinese twin, hreflang-paired
+                lines += _url(f"{base}/{d}/", _en_lastmod(d), _pair(d))
+                lines += _url(f"{base}{zh_of[d]}", _zh_lastmod(d), _pair(d))
+            else:
+                # zh-only day: single Chinese entry (legacy /cn/ or fallback root)
+                zh_url = f"{base}{zh_of[d]}"
+                lines += _url(zh_url, _zh_lastmod(d), [{"lang": "zh", "url": zh_url}])
+        lines.append("</urlset>")
+        (self.output_dir / "sitemap.xml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        self._write_archive_page("en")
+        self._write_archive_page("zh")
+        self._write_feed()
+
+    def prune_old_reports(self, retention_days: int) -> list[str]:
+        """Delete report date dirs older than the retention window.
+
+        Boundless output growth was an ops risk; the default window keeps two
+        years of daily reports. Targets of the `latest` and `p/N` symlinks are
+        always protected. Sitemap/archive/feed are regenerated afterwards so
+        the deleted URLs disappear from discovery surfaces in the same pass.
+        Returns the deleted date strings.
+        """
+        if retention_days <= 0:
+            return []
+        cutoff = date.today() - timedelta(days=retention_days)
+        protected: set[str] = set()
+
+        def _protect(link: Path) -> None:
+            try:
+                protected.add(Path(os.readlink(str(link))).name)
+            except OSError:
+                pass
+
+        latest = self.output_dir / "latest"
+        if latest.is_symlink():
+            _protect(latest)
+        p_root = self.output_dir / "p"
+        if p_root.is_dir():
+            for link in p_root.iterdir():
+                if link.is_symlink():
+                    _protect(link)
+
+        deleted: list[str] = []
+        if self.output_dir.is_dir():
+            for entry in self.output_dir.iterdir():
+                if not (entry.is_dir() and _REPORT_DATE_DIR_RE.match(entry.name)):
+                    continue
+                try:
+                    entry_date = date.fromisoformat(entry.name)
+                except ValueError:
+                    continue
+                if entry_date >= cutoff or entry.name in protected:
+                    continue
+                shutil.rmtree(entry, ignore_errors=True)
+                deleted.append(entry.name)
+
+        if deleted:
+            logger.info("Output retention: pruned %d report dirs (%s ... %s)", len(deleted), deleted[0], deleted[-1])
+            self._write_seo_files(date.today())
+        return deleted
+
+    def _write_archive_page(self, edition: str = "en") -> None:
+        """Render the archive index: /archive/ (English) and /cn/archive/ (Chinese).
+
+        The English archive lists dual-edition dates (root URLs); the Chinese
+        archive lists every date with a Chinese page (/cn/ when it exists, the
+        root URL on zh-only fallback days). Regenerated on every publish.
+        """
+        all_dates = self._discover_report_dates()
+        if edition == "en":
+            dates = [d for d in all_dates if self._is_en_primary(d)]
+        else:
+            dates = [d for d in all_dates if self._zh_href(d)]
+        zh_days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        en_days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        months: list[dict[str, object]] = []
+        recent: list[dict[str, object]] = []
+        for d_str in reversed(dates):  # newest first
+            d = date.fromisoformat(d_str)
+            href = f"/{d_str}/" if edition == "en" else self._zh_href(d_str)
+            day = {
+                "date": d_str,
+                "display": d.strftime("%m月%d日"),
+                "display_en": d.strftime("%b %d"),
+                "day_name": zh_days[d.weekday()],
+                "day_name_en": en_days[d.weekday()],
+                "href": href,
+            }
+            key = f"{d.year}-{d.month:02d}"
+            if not months or months[-1]["key"] != key:
+                months.append({"key": key, "label": f"{d.year}年{d.month}月", "days": []})
+            months[-1]["days"].append(day)
+            if len(recent) < 7:
+                recent.append(day)
+
+        total = len(dates)
+        canonical = (
+            f"{self.report_base_url}/{'' if edition == 'en' else 'cn/'}archive/"
+            if self.report_base_url
+            else ""
+        )
+        try:
+            template = self.env.get_template("archive-template.html")
+            page = template.render(
+                months=months,
+                recent=recent,
+                total_count=total,
+                canonical_url=canonical,
+                edition=edition,
+                umami_website_id=self.umami_website_id or None,
+                umami_script_url=self.umami_script_url or None,
+            )
+        except Exception:
+            logger.exception("Archive page rendering failed")
+            return
+        base_dir = self.output_dir if edition == "en" else self.output_dir / "cn"
+        archive_dir = base_dir / "archive"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        (archive_dir / "index.html").write_text(page, encoding="utf-8")
+        (archive_dir / "index.html").chmod(0o644)
+
+    def _write_feed(self) -> None:
+        """Write /feed.xml (RSS 2.0) listing the most recent daily reports.
+
+        Drives subscription return-visits and gives crawlers a second discovery
+        channel alongside the sitemap. Item titles/descriptions are read from
+        each date's data.json (already written by the renderer), so the feed
+        needs no re-render of old reports. Newest first; up to 20 items.
+        """
+        dates = list(reversed(self._discover_report_dates()))[:20]
+        if not dates:
+            return
+
+        def esc(value: object) -> str:
+            return html_lib.escape(str(value), quote=False)
+
+        def rfc822(date_str: str) -> str:
+            return _rfc822_pub_date(date_str, self.schedule_timezone)
+
+        items: list[str] = []
+        for d in dates:
+            title = f"NewsPrism · {d}"
+            description = "每日全球新闻多角度解读"
+            try:
+                payload = json.loads((self.output_dir / d / "data.json").read_text(encoding="utf-8"))
+                title = str(payload.get("seo_title") or payload.get("report_date_display") or title)
+                description = str(payload.get("seo_description") or description)
+            except (OSError, ValueError):
+                pass
+            zh_path = self._zh_href(d) or f"/{d}/"
+            link = f"{self.report_base_url}{zh_path}"
+            items.append("    <item>")
+            items.append(f"      <title>{esc(title)}</title>")
+            items.append(f"      <link>{esc(link)}</link>")
+            items.append(f'      <guid isPermaLink="true">{esc(link)}</guid>')
+            items.append(f"      <pubDate>{rfc822(d)}</pubDate>")
+            items.append(f"      <description>{esc(description)}</description>")
+            items.append("    </item>")
+
+        feed = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">',
+            "  <channel>",
+            "    <title>NewsPrism</title>",
+            f"    <link>{esc(self.report_base_url)}/</link>",
+            "    <description>同一事件，多国媒体多角度解读 · 每日全球新闻中文速览</description>",
+            "    <language>zh-CN</language>",
+            f'    <atom:link href="{esc(self.report_base_url)}/feed.xml" rel="self" type="application/rss+xml" />',
+        ]
+        feed += items
+        feed += ["  </channel>", "</rss>"]
+        (self.output_dir / "feed.xml").write_text("\n".join(feed) + "\n", encoding="utf-8")

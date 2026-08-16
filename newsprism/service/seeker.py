@@ -30,6 +30,7 @@ from newsprism.config import Config
 from newsprism.repo import DB_PATH, insert_search_candidate_review, insert_search_request_event
 from newsprism.service.embeddings import get_model
 from newsprism.service.llm_compat import completion_compat_kwargs
+from newsprism.service.llm_telemetry import tracked_completion
 from newsprism.service.locales import (
     country_name,
     is_recognized_country,
@@ -179,6 +180,7 @@ class ActiveSeeker:
         self.evaluator_model = cfg.evaluator_model
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
+        self.llm_telemetry_enabled = getattr(cfg, "llm_telemetry_enabled", False)
         self.completion_compat_kwargs = completion_compat_kwargs(self.evaluator_model, self.base_url)
 
         search_cfg = cfg.active_search if isinstance(cfg.active_search, dict) else {}
@@ -498,7 +500,9 @@ class ActiveSeeker:
             f"Related countries: {impact.subject_regions}"
         )
         try:
-            response = litellm.completion(
+            tracked = tracked_completion(
+                stage="seeker_actor_recovery",
+                enabled=self.llm_telemetry_enabled,
                 model=self.evaluator_model,
                 api_key=self.api_key,
                 api_base=self.base_url,
@@ -508,7 +512,7 @@ class ActiveSeeker:
                 response_format={"type": "json_object"},
                 **self.completion_compat_kwargs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            content = (tracked.choices[0].message.content or "").strip()
             parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
             return self._validated_actor_targets(
                 cluster,
@@ -605,7 +609,9 @@ class ActiveSeeker:
             "Return compact JSON only: {\"keyword\": \"<3-8 words for this exact event>\"}."
         )
         try:
-            response = litellm.completion(
+            tracked = tracked_completion(
+                stage="seeker_keyword",
+                enabled=self.llm_telemetry_enabled,
                 model=self.evaluator_model,
                 api_key=self.api_key,
                 api_base=self.base_url,
@@ -615,7 +621,7 @@ class ActiveSeeker:
                 response_format={"type": "json_object"},
                 **self.completion_compat_kwargs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            content = (tracked.choices[0].message.content or "").strip()
             parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
             keyword = str(parsed.get("keyword") or "").strip()[:160]
             return keyword or self._fallback_search_keyword(cluster)
@@ -937,25 +943,35 @@ class ActiveSeeker:
                 )
                 rejections.append((reason, article.url))
                 continue
-            dynamic_identity = self._dynamic_official_identity(article.url, target)
-            identity = dynamic_identity or self._candidate_identity(
-                self._verify_candidate(article, target, stage)
-            )
             registry_identity, registry_reason = self._registry_identity(article.url, target, stage)
+            dynamic_identity = self._dynamic_official_identity(article.url, target)
             if registry_reason:
+                # Reviewed-binding decisions are deterministic; do not spend an
+                # LLM verification call before applying them.
                 decision = (
                     "pending_review"
                     if registry_reason == "publisher_binding_unverified"
                     else "rejected"
                 )
                 self._record_candidate_review(
-                    article, target, stage, identity, decision, registry_reason
+                    article,
+                    target,
+                    stage,
+                    registry_identity or CandidateIdentity(),
+                    decision,
+                    registry_reason,
                 )
                 rejections.append((registry_reason, article.url))
                 continue
             if registry_identity is not None:
                 identity = registry_identity
-            elif stage == "official" and self._social_account_binding(article.url, target):
+            elif dynamic_identity is not None:
+                identity = dynamic_identity
+            else:
+                identity = self._candidate_identity(
+                    self._verify_candidate(article, target, stage)
+                )
+            if stage == "official" and self._social_account_binding(article.url, target):
                 identity = CandidateIdentity(
                     source_type="official_social",
                     publisher_entity=target.label,
@@ -1190,7 +1206,9 @@ class ActiveSeeker:
             "\"ownership_evidence\":\"short evidence\",\"confidence\":0.0}."
         )
         try:
-            response = litellm.completion(
+            tracked = tracked_completion(
+                stage="seeker_verify",
+                enabled=self.llm_telemetry_enabled,
                 model=self.evaluator_model,
                 api_key=self.api_key,
                 api_base=self.base_url,
@@ -1200,7 +1218,7 @@ class ActiveSeeker:
                 response_format={"type": "json_object"},
                 **self.completion_compat_kwargs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            content = (tracked.choices[0].message.content or "").strip()
             return self._candidate_identity(json.loads(content[content.find("{"): content.rfind("}") + 1]))
         except Exception as exc:
             logger.debug("Search candidate verification failed for %s: %s", article.url, exc)
@@ -1550,9 +1568,6 @@ class ActiveSeeker:
             if article is None:
                 rejection_reasons.add("thin_result")
                 continue
-            identity = self._candidate_identity(
-                self._verify_candidate(article, target, "official")
-            )
             registry_identity, registry_reason = self._registry_identity(
                 article.url, target, "official"
             )
@@ -1562,13 +1577,17 @@ class ActiveSeeker:
                     article,
                     target,
                     "identity",
-                    identity,
+                    registry_identity or CandidateIdentity(),
                     "pending_review" if registry_reason == "publisher_binding_unverified" else "rejected",
                     registry_reason,
                 )
                 continue
-            if registry_identity is not None:
-                identity = registry_identity
+            identity = (
+                registry_identity
+                or self._candidate_identity(
+                    self._verify_candidate(article, target, "official")
+                )
+            )
             if identity.source_type == "official_social":
                 # Social bindings are account-scoped and handled by
                 # _reviewed_social_searches; never cache the whole host.
@@ -1710,7 +1729,9 @@ class ActiveSeeker:
             "Return ONLY the localized search query, 3-8 words, with no explanation or quotes."
         )
         try:
-            response = litellm.completion(
+            tracked = tracked_completion(
+                stage="seeker_localize",
+                enabled=self.llm_telemetry_enabled,
                 model=self.evaluator_model,
                 api_key=self.api_key,
                 api_base=self.base_url,
@@ -1719,7 +1740,7 @@ class ActiveSeeker:
                 max_tokens=40,
                 **self.completion_compat_kwargs,
             )
-            content = (response.choices[0].message.content or "").strip()
+            content = (tracked.choices[0].message.content or "").strip()
             localized = content.splitlines()[0].strip().strip("\"'")
             return localized or keyword
         except Exception as exc:

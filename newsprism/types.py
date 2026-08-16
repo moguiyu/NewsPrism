@@ -91,6 +91,26 @@ def is_real_article(article: Article) -> bool:
 
 
 @dataclass
+class LLMCallEvent:
+    """One LLM API call emitted by any service stage (token telemetry)."""
+    stage: str
+    model: str
+    status: str = "ok"
+    report_date: str | None = None
+    cluster_key: str | None = None
+    item_count: int | None = None
+    attempt: int = 1
+    finish_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    input_chars: int | None = None
+    output_chars: int | None = None
+    duration_ms: int | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
 class SearchRequestEvent:
     """One outbound search/social API request emitted by Active Seeker."""
     provider: str

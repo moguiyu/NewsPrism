@@ -1,11 +1,33 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-lang="{{ default_language }}">
+<html lang="{{ 'en-US' if default_language == 'en' else 'zh-CN' }}" data-lang="{{ default_language }}">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>NewsPrism · {{ report_date_display }}</title>
+  <title>{{ seo_title }}</title>
+  <meta name="description" content="{{ seo_description }}" />
+  {% if google_site_verification %}<meta name="google-site-verification" content="{{ google_site_verification }}" />{% endif %}
+  {% if bing_site_verification %}<meta name="msvalidate.01" content="{{ bing_site_verification }}" />{% endif %}
+  {% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}" />{% endif %}
+  {% for alt in hreflang_alternates %}<link rel="alternate" hreflang="{{ alt.lang }}" href="{{ alt.url }}" />
+  {% endfor %}
   <link rel="icon" href="/favicon.ico" sizes="16x16" />
+  <link rel="alternate" type="application/rss+xml" title="NewsPrism" href="/feed.xml" />
+
+  {% if canonical_url %}
+  <!-- Open Graph / Twitter Card — social share previews -->
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="NewsPrism" />
+  <meta property="og:locale" content="{{ og_locale }}" />
+  <meta property="og:url" content="{{ canonical_url }}" />
+  <meta property="og:title" content="{{ seo_title }}" />
+  <meta property="og:description" content="{{ seo_description }}" />
+  {% if og_image %}<meta property="og:image" content="{{ og_image }}" />{% endif %}
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="{{ seo_title }}" />
+  <meta name="twitter:description" content="{{ seo_description }}" />
+  {% if og_image %}<meta name="twitter:image" content="{{ og_image }}" />{% endif %}
+  {% endif %}
 
   <!-- PWA -->
   <link rel="manifest" href="/manifest.json" />
@@ -117,6 +139,20 @@
       vertical-align: -0.08em;
     }
 
+    /* Visually hidden but available to crawlers / screen readers — carries the
+       page's single primary heading without disturbing the flat editorial layout. */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     /* Background subtle gradient */
     body::before {
       content: '';
@@ -223,7 +259,9 @@
       -webkit-backdrop-filter: var(--blur);
     }
 
-    .language-toggle button {
+    .language-toggle button,
+    .language-toggle a {
+      text-decoration: none;
       border: 0;
       background: transparent;
       color: var(--muted);
@@ -237,7 +275,8 @@
       transition: all 0.2s ease;
     }
 
-    .language-toggle button.active {
+    .language-toggle button.active,
+    .language-toggle a.lang-btn {
       background: var(--cat-active-bg);
       color: var(--text);
       box-shadow: 0 4px 12px var(--accent-glow);
@@ -1516,7 +1555,8 @@
       padding: 0;
     }
 
-    .language-toggle button {
+    .language-toggle button,
+    .language-toggle a {
       border-radius: 0;
       color: #000000;
       font-family: var(--font-mono);
@@ -2583,6 +2623,12 @@
       }
     }
   </style>
+
+  {% if json_ld %}<script type="application/ld+json">{{ json_ld | safe }}</script>{% endif %}
+
+  {# Self-hosted Umami analytics — privacy-friendly, no cookies. Inert unless
+     UMAMI_WEBSITE_ID is configured; CSP allows the stats subdomain. #}
+  {% if umami_website_id %}<script async defer src="{{ umami_script_url }}" data-website-id="{{ umami_website_id }}"></script>{% endif %}
 </head>
 
 {# ── 认证徽标宏 ── 给持国际背书的源名后跟一个细边框小方框，hover 展示详情 #}
@@ -2608,6 +2654,8 @@
 
 <body>
 
+  <h1 class="sr-only">NewsPrism · {{ report_date_display }} {{ day_name }} 全球新闻多角度解读</h1>
+
   <div class="mobile-brand-bar">
     <a class="logo" href="./" aria-label="Refresh NewsPrism" title="Refresh NewsPrism" onclick="window.location.reload(); return false;">NewsPrism</a>
     <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
@@ -2627,10 +2675,11 @@
               <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">☀️</button>
               <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">🌙</button>
             </div>
-          {% if english_available %}
-            <div class="language-toggle" aria-label="language toggle">
-              <button type="button" class="lang-btn active" data-lang-choice="zh" onclick="setLanguage('zh')">汉</button>
-              <button type="button" class="lang-btn" data-lang-choice="en" onclick="setLanguage('en')">ENG</button>
+          {# Language editions are path-isolated (root = English, /cn/ = Chinese);
+             the header link navigates to the other edition's URL. #}
+          {% if language_crosslink %}
+            <div class="language-toggle" aria-label="language edition">
+              <a class="lang-btn" href="{{ language_crosslink }}" title="{{ '切换到中文版' if default_language == 'en' else 'Switch to the English edition' }}">{{ '中文' if default_language == 'en' else 'ENG' }}</a>
             </div>
           {% endif %}
           </div>
@@ -2892,25 +2941,31 @@
       </nav>
     </div>
     <div class="footer-nav">
-      {% if day_links %}
-      <div class="day-selector" aria-label="report day selector">
-        {% for day in day_links %}
-          {% if day.available %}
-          <a class="day-link{% if day.active %} active{% endif %}" href="{{ day.href }}">
-            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
-            {% if not day.active %}
-            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
-            {% endif %}
-          </a>
-          {% else %}
-          <span class="day-link disabled" aria-disabled="true">
-            <span>{{ bilingual_text(day.label, day.label_en) }}</span>
-            <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
-          </span>
-          {% endif %}
-        {% endfor %}
-      </div>
-      {% endif %}
+       {% if day_links %}
+       <div class="day-selector" aria-label="report day selector">
+         {% for day in day_links %}
+           {% if day.available %}
+           <a class="day-link{% if day.active %} active{% endif %}" href="{{ day.href }}">
+             <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+             {% if not day.active %}
+             <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+             {% endif %}
+           </a>
+           {% else %}
+           <span class="day-link disabled" aria-disabled="true">
+             <span>{{ bilingual_text(day.label, day.label_en) }}</span>
+             <span class="date-part">{{ bilingual_text(day.date_display ~ ' ' ~ day.day_name, day.date_display_en ~ ' ' ~ day.day_name_en) }}</span>
+           </span>
+           {% endif %}
+         {% endfor %}
+         {% if archive_link %}
+         <a class="day-link" href="{{ archive_link }}">
+           <span>{{ bilingual_text('归档', 'Archive') }}</span>
+           <span class="date-part">{{ bilingual_text('全部日报', 'All reports') }}</span>
+         </a>
+         {% endif %}
+       </div>
+       {% endif %}
       <button type="button" class="back-to-top" onclick="scrollToTop()">{{ bilingual_text('回到顶部', 'Back to Top') }}</button>
     </div>
     <div class="footer-stats" aria-label="report stats">
@@ -2957,16 +3012,6 @@
         } catch (_) {}
       }
       updateThemeColor();
-    }
-
-    function setLanguage(lang) {
-      document.documentElement.dataset.lang = lang;
-      document.querySelectorAll('.lang-btn').forEach(button => {
-        button.classList.toggle('active', button.dataset.langChoice === lang);
-      });
-      try {
-        localStorage.setItem('newsprism-language', lang);
-      } catch (_) {}
     }
 
     function toggleAllPerspectives(button, panelId) {
@@ -3060,13 +3105,9 @@
     })();
 
     {% if english_available %}
-    (function restoreLanguage() {
-      let saved = null;
-      try {
-        saved = localStorage.getItem('newsprism-language');
-      } catch (_) {}
-      setLanguage(saved === 'en' ? 'en' : '{{ default_language }}');
-    })();
+    // Language is fixed per URL edition (root = English, /cn/ = Chinese);
+    // the server-rendered data-lang attribute is authoritative — no persisted
+    // client override.
     {% endif %}
   </script>
   <script>

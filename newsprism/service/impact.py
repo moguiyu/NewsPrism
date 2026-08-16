@@ -19,7 +19,6 @@ import json
 import logging
 import re
 
-import litellm
 from pydantic import BaseModel, Field
 
 from newsprism.config import Config
@@ -30,6 +29,7 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.llm_compat import completion_compat_kwargs
+from newsprism.service.llm_telemetry import record_llm_parse_failure, tracked_completion
 from newsprism.service.locales import is_recognized_country, is_territory_name
 from newsprism.types import (
     Article,
@@ -171,6 +171,7 @@ class ImpactAssessor:
         self.model = cfg.litellm_model
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
+        self.telemetry_enabled = getattr(cfg, "llm_telemetry_enabled", False)
         self.compat_kwargs = completion_compat_kwargs(self.model, self.base_url)
         self._weights_loader = weights_loader
         self._policy_loader = policy_loader
@@ -314,7 +315,11 @@ class ImpactAssessor:
         content = ""
         for attempt, suffix in enumerate(("", "\n\n最后要求：只输出紧凑 JSON，不要解释，不要 Markdown。")):
             try:
-                content = self._completion(prompt + suffix, max_tokens=min(16000, 600 + len(chunk) * 220))
+                content = self._completion(
+                    prompt + suffix,
+                    max_tokens=min(16000, 600 + len(chunk) * 220),
+                    item_count=len(chunk),
+                )
             except Exception as exc:
                 logger.warning("Impact LLM call failed (attempt %d): %s", attempt + 1, exc)
                 continue
@@ -329,11 +334,34 @@ class ImpactAssessor:
         if salvaged:
             logger.warning("Impact evaluation salvaged %d/%d items from malformed output", len(salvaged), len(chunk))
             return {offset + item.cluster_index - 1: item for item in salvaged}
+        if len(chunk) >= 20:
+            midpoint = len(chunk) // 2
+            logger.warning(
+                "Impact evaluation chunk failed (%d clusters); retrying as %d+%d",
+                len(chunk),
+                midpoint,
+                len(chunk) - midpoint,
+            )
+            recovered: dict[int, ImpactItem] = {}
+            for half_offset, half in ((offset, chunk[:midpoint]), (offset + midpoint, chunk[midpoint:])):
+                half_result = self._evaluate_chunk(half, half_offset)
+                if half_result is not None:
+                    recovered.update(half_result)
+            if recovered:
+                return recovered
+        record_llm_parse_failure(
+            stage="impact",
+            enabled=self.telemetry_enabled,
+            model=self.model,
+            item_count=len(chunk),
+        )
         logger.error("Impact evaluation failed for chunk of %d clusters — signal-only fallback", len(chunk))
         return None
 
-    def _completion(self, prompt: str, max_tokens: int) -> str:
-        response = litellm.completion(
+    def _completion(self, prompt: str, max_tokens: int, item_count: int | None = None) -> str:
+        tracked = tracked_completion(
+            stage="impact",
+            enabled=self.telemetry_enabled,
             model=self.model,
             api_key=self.api_key,
             api_base=self.base_url,
@@ -344,9 +372,10 @@ class ImpactAssessor:
             temperature=0.1,
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
+            item_count=item_count,
             **self.compat_kwargs,
         )
-        return response.choices[0].message.content or ""
+        return tracked.choices[0].message.content or ""
 
     def _system_prompt(self) -> str:
         base = (

@@ -314,6 +314,406 @@ class TestPerspectivesContext:
         assert "**Single-source story**" not in html
         assert payload["clusters"][0]["summary"] == "Body text here."
 
+    def test_render_emits_seo_meta_canonical_and_sitemap(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.grayzhang.com"
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/story",
+                        title="Single-source story",
+                        source_name="Reuters",
+                        published_at=datetime(2026, 8, 13, tzinfo=timezone.utc),
+                        content="Single-source story body.",
+                    )
+                ],
+            ),
+            summary="**美芯片政策收紧**\n\n正文内容。",
+            perspectives={},
+        )
+
+        html_path = renderer.render([summary], date(2026, 8, 13))
+        html = html_path.read_text(encoding="utf-8")
+
+        # Title carries the day's top story so each daily report has a distinct title
+        assert "<title>NewsPrism · 2026年08月13日 · 美芯片政策收紧</title>" in html
+        # Description surfaces the top headline (keyword-rich snippet)
+        assert '<meta name="description" content="NewsPrism 2026年08月13日 多角度新闻解读：美芯片政策收紧。' in html
+        # Canonical points at the public date URL (clean, no index.html)
+        assert '<link rel="canonical" href="https://news.grayzhang.com/2026-08-13/"' in html
+
+        robots = (tmp_path / "robots.txt").read_text(encoding="utf-8")
+        assert "User-agent: *" in robots
+        assert "Allow: /" in robots
+        assert "Sitemap: https://news.grayzhang.com/sitemap.xml" in robots
+
+        sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+        assert "<loc>https://news.grayzhang.com/</loc>" in sitemap
+        assert "<loc>https://news.grayzhang.com/archive/</loc>" in sitemap
+        assert "<loc>https://news.grayzhang.com/2026-08-13/</loc>" in sitemap
+        # every URL entry carries an mtime-derived lastmod (exact date covered
+        # by the dedicated lastmod test)
+        assert sitemap.count("<lastmod>") == sitemap.count("<loc>")
+
+        # Open Graph / Twitter Card for social share previews
+        assert '<meta property="og:type" content="article"' in html
+        assert '<meta property="og:url" content="https://news.grayzhang.com/2026-08-13/"' in html
+        assert '<meta property="og:image" content="https://news.grayzhang.com/og-image.png"' in html
+        assert '<meta name="twitter:card" content="summary_large_image"' in html
+        # Exactly one <h1> describing the edition
+        assert html.count("<h1") == 1
+        assert "<h1 class=\"sr-only\">NewsPrism · 2026年08月13日" in html
+        # JSON-LD NewsArticle structured data
+        assert '<script type="application/ld+json">' in html
+        assert '"@type": "NewsArticle"' in html
+        assert '"datePublished": "2026-08-13"' in html
+
+        # RSS feed autodiscovery + generated feed
+        assert '<link rel="alternate" type="application/rss+xml" title="NewsPrism" href="/feed.xml"' in html
+        feed = (tmp_path / "feed.xml").read_text(encoding="utf-8")
+        assert "<rss version=\"2.0\"" in feed
+        assert "<title>NewsPrism</title>" in feed
+        assert f"<link>https://news.grayzhang.com/2026-08-13/</link>" in feed
+        assert "<pubDate>" in feed  # RFC-822 pubDate present
+
+    def test_render_without_base_url_omits_canonical_and_sitemap(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = ""
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[
+                    Article(
+                        url="https://reuters.com/story",
+                        title="x",
+                        source_name="Reuters",
+                        published_at=datetime(2026, 8, 13, tzinfo=timezone.utc),
+                        content="body",
+                    )
+                ],
+            ),
+            summary="**headline X**\n\nbody.",
+            perspectives={},
+        )
+        html_path = renderer.render([summary], date(2026, 8, 13))
+        html = html_path.read_text(encoding="utf-8")
+
+        # No canonical emitted when the public base URL is unset
+        assert 'rel="canonical"' not in html
+        # robots.txt is still useful without a sitemap reference
+        robots = (tmp_path / "robots.txt").read_text(encoding="utf-8")
+        assert "Sitemap:" not in robots
+        # sitemap requires absolute URLs; skip it entirely without a base URL
+        assert not (tmp_path / "sitemap.xml").exists()
+
+    def test_render_emits_umami_tracker_only_when_configured(self, renderer, tmp_path):
+        def _summary():
+            return ClusterSummary(
+                cluster=ArticleCluster(
+                    topic_category="World News",
+                    articles=[Article(
+                        url="https://x", title="t", source_name="Reuters",
+                        published_at=datetime(2026, 8, 13, tzinfo=timezone.utc), content="b",
+                    )],
+                ),
+                summary="**headline**\n\nbody.",
+                perspectives={},
+            )
+
+        # Not configured → no tracker emitted
+        renderer.output_dir = tmp_path / "a"
+        renderer.umami_website_id = ""
+        renderer.umami_script_url = ""
+        html = renderer.render([_summary()], date(2026, 8, 13)).read_text(encoding="utf-8")
+        assert "data-website-id" not in html
+
+        # Configured → tracker script with both values
+        r2 = HtmlRenderer(
+            output_dir=str(tmp_path / "b"), template_dir="templates",
+            umami_website_id="abc-123", umami_script_url="https://stats.moguiyu.top/script.js",
+        )
+        html2 = r2.render([_summary()], date(2026, 8, 13)).read_text(encoding="utf-8")
+        assert 'src="https://stats.moguiyu.top/script.js"' in html2
+        assert 'data-website-id="abc-123"' in html2
+
+    def test_archive_page_generated_with_month_groups(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+        for d in ("2026-08-13", "2026-08-14", "2026-07-31"):
+            day_dir = tmp_path / d
+            day_dir.mkdir()
+            (day_dir / "index.html").write_text(f"report {d}", encoding="utf-8")
+
+        renderer._write_seo_files(date(2026, 8, 14))
+        # zh archive lives at /cn/archive/; legacy fixture dates (no en marker)
+        # are zh-primary so their hrefs stay at the root URLs
+        archive = (tmp_path / "cn" / "archive" / "index.html").read_text(encoding="utf-8")
+
+        # Month groups (newest month first) with real date URLs, newest day first
+        assert "2026年8月" in archive
+        assert "2026年7月" in archive
+        assert archive.index("08月14日") < archive.index("08月13日")
+        assert 'href="/2026-08-14/"' in archive
+        assert 'href="/2026-07-31/"' in archive
+        assert 'href="https://news.moguiyu.top/cn/archive/"' in archive  # canonical
+        assert "<h1>全部日报归档</h1>" in archive
+
+        # Archive URL listed in the sitemap alongside the date URLs
+        sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+        assert "<loc>https://news.moguiyu.top/archive/</loc>" in sitemap
+
+    def test_sitemap_lastmod_follows_index_mtime(self, renderer, tmp_path):
+        import os
+
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+        day_dir = tmp_path / "2026-08-13"
+        day_dir.mkdir()
+        idx = day_dir / "index.html"
+        idx.write_text("report", encoding="utf-8")
+        os.utime(idx, (datetime(2026, 8, 13, 8).timestamp(),) * 2)
+        renderer._write_seo_files(date(2026, 8, 14))
+        assert "<lastmod>2026-08-13</lastmod>" in (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+
+        # A replay/correction rewrites the file — lastmod must move forward
+        future = datetime(2026, 9, 1, 12, 0).timestamp()
+        os.utime(idx, (future, future))
+        renderer._write_seo_files(date(2026, 9, 2))
+        assert "<lastmod>2026-09-01</lastmod>" in (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+
+    def test_feed_pubdate_uses_schedule_timezone(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+        renderer.schedule_timezone = "Europe/Warsaw"
+        for d in ("2026-08-13", "2026-08-14"):
+            day_dir = tmp_path / d
+            day_dir.mkdir()
+            (day_dir / "index.html").write_text("x", encoding="utf-8")
+
+        renderer._write_seo_files(date(2026, 8, 14))
+        feed = (tmp_path / "feed.xml").read_text(encoding="utf-8")
+        # August in Warsaw is CEST (UTC+2), not the old hardcoded +0800
+        assert "Fri, 14 Aug 2026 08:00:00 +0200" in feed
+        assert "Thu, 13 Aug 2026 08:00:00 +0200" in feed
+        assert "+0800" not in feed
+
+    def test_zero_story_dates_excluded_from_discovery(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+        # A normal day, a zero-story day, and a legacy day without data.json
+        for d, stories in (("2026-08-13", 5), ("2026-08-14", 0), ("2026-08-15", None)):
+            day_dir = tmp_path / d
+            day_dir.mkdir()
+            (day_dir / "index.html").write_text("x", encoding="utf-8")
+            if stories is not None:
+                (day_dir / "data.json").write_text(
+                    json.dumps({"total_cluster_count": stories}), encoding="utf-8"
+                )
+
+        dates = renderer._discover_report_dates()
+        # Zero-story day excluded; legacy no-data.json day kept (fail-open)
+        assert dates == ["2026-08-13", "2026-08-15"]
+
+        renderer._write_seo_files(date(2026, 8, 15))
+        sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+        assert "/2026-08-13/" in sitemap
+        assert "/2026-08-14/" not in sitemap
+        assert "/2026-08-15/" in sitemap
+        zh_archive = (tmp_path / "cn" / "archive" / "index.html").read_text(encoding="utf-8")
+        assert 'href="/2026-08-14/"' not in zh_archive
+
+    def test_prune_old_reports_protects_symlink_targets(self, renderer, tmp_path):
+        from datetime import timedelta as _timedelta
+
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+
+        unprotected_old = (date.today() - _timedelta(days=800)).isoformat()
+        protected_old = (date.today() - _timedelta(days=900)).isoformat()  # latest target
+        recent = (date.today() - _timedelta(days=5)).isoformat()           # p/1 target
+
+        for d in (unprotected_old, protected_old, recent):
+            day_dir = tmp_path / d
+            day_dir.mkdir()
+            (day_dir / "index.html").write_text("x", encoding="utf-8")
+        (tmp_path / "latest").symlink_to(protected_old)
+        p_root = tmp_path / "p"
+        p_root.mkdir()
+        (p_root / "1").symlink_to(f"../{recent}")
+
+        deleted = renderer.prune_old_reports(730)
+
+        # Only the unprotected old dir goes; symlink targets always survive
+        assert deleted == [unprotected_old]
+        assert not (tmp_path / unprotected_old).exists()
+        assert (tmp_path / protected_old).exists()
+        assert (tmp_path / recent).exists()
+
+        # Sitemap regenerated in the same pass: survivor listed, pruned gone
+        sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+        assert f"/{protected_old}/" in sitemap
+        assert f"/{unprotected_old}/" not in sitemap
+
+        # 0 disables pruning entirely
+        assert renderer.prune_old_reports(0) == []
+
+    def test_dual_edition_root_en_cn_zh_hreflang_and_sitemap(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+        renderer.english_edition_enabled = True
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[Article(
+                    url="https://reuters.com/en-edition",
+                    title="English edition story",
+                    source_name="Reuters",
+                    published_at=datetime(2026, 8, 14, tzinfo=timezone.utc),
+                    content="Body.",
+                )],
+            ),
+            summary="**中文头条**\n\n正文。",
+            summary_en="**English Headline**\n\nEnglish body.",
+            short_topic_name="中文专题",
+            short_topic_name_en="English Topic",
+            perspectives={},
+        )
+
+        html_path = renderer.render([summary], date(2026, 8, 14))
+        root_html = html_path.read_text(encoding="utf-8")
+        cn_path = tmp_path / "cn" / "2026-08-14" / "index.html"
+        assert cn_path.exists()
+        cn_html = cn_path.read_text(encoding="utf-8")
+
+        # Root page IS the English edition (site default)
+        assert '<html lang="en-US" data-lang="en"' in root_html
+        assert '<link rel="canonical" href="https://news.moguiyu.top/2026-08-14/"' in root_html
+        assert '<meta property="og:locale" content="en_US"' in root_html
+        assert '"inLanguage": "en-US"' in root_html
+        assert "English Headline" in root_html
+        # Header crosslink navigates to the Chinese edition URL
+        assert 'href="/cn/2026-08-14/"' in root_html
+
+        # /cn page is the Chinese twin
+        assert '<html lang="zh-CN" data-lang="zh"' in cn_html
+        assert '<link rel="canonical" href="https://news.moguiyu.top/cn/2026-08-14/"' in cn_html
+        assert '<meta property="og:locale" content="zh_CN"' in cn_html
+        assert 'href="/2026-08-14/"' in cn_html  # crosslink back to English root
+        assert 'href="/cn/archive/"' in cn_html
+
+        # hreflang pair on both pages: zh→/cn/, en→root, x-default→root
+        for html in (root_html, cn_html):
+            assert '<link rel="alternate" hreflang="zh" href="https://news.moguiyu.top/cn/2026-08-14/"' in html
+            assert '<link rel="alternate" hreflang="en" href="https://news.moguiyu.top/2026-08-14/"' in html
+            assert '<link rel="alternate" hreflang="x-default" href="https://news.moguiyu.top/2026-08-14/"' in html
+
+        # data.json records the root edition marker for discovery/sitemap
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+        assert payload["default_language"] == "en"
+
+        # Sitemap: root (en) + /cn (zh) entries, hreflang-paired
+        sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+        assert 'xmlns:xhtml="http://www.w3.org/1999/xhtml"' in sitemap
+        assert "<loc>https://news.moguiyu.top/2026-08-14/</loc>" in sitemap
+        assert "<loc>https://news.moguiyu.top/cn/2026-08-14/</loc>" in sitemap
+        assert '<xhtml:link rel="alternate" hreflang="en" href="https://news.moguiyu.top/2026-08-14/"/>' in sitemap
+
+        # Archives: /archive/ lists en dates at root URLs; /cn/archive/ lists zh
+        en_archive = (tmp_path / "archive" / "index.html").read_text(encoding="utf-8")
+        assert "<h1>All daily reports</h1>" in en_archive
+        assert 'href="/2026-08-14/"' in en_archive
+        cn_archive = (tmp_path / "cn" / "archive" / "index.html").read_text(encoding="utf-8")
+        assert "<h1>全部日报归档</h1>" in cn_archive
+        assert 'href="/cn/2026-08-14/"' in cn_archive
+
+    def test_no_english_content_falls_back_to_zh_root(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+        renderer.english_edition_enabled = True
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[Article(
+                    url="https://x", title="t", source_name="Reuters",
+                    published_at=datetime(2026, 8, 14, tzinfo=timezone.utc), content="b",
+                )],
+            ),
+            summary="**中文**\n\n正文。",
+            perspectives={},  # no English content
+        )
+        html_path = renderer.render([summary], date(2026, 8, 14))
+        html = html_path.read_text(encoding="utf-8")
+
+        # Fallback: root stays Chinese, no /cn twin, no crosslink
+        assert '<html lang="zh-CN" data-lang="zh"' in html
+        assert '<link rel="canonical" href="https://news.moguiyu.top/2026-08-14/"' in html
+        assert "language_crosslink" not in html
+        assert 'class="lang-btn"' not in html
+        assert not (tmp_path / "cn" / "2026-08-14").exists()
+
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+        assert payload["default_language"] == "zh"
+
+        # Sitemap: single zh entry at the root URL
+        sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+        assert "<loc>https://news.moguiyu.top/2026-08-14/</loc>" in sitemap
+        assert "/cn/2026-08-14/" not in sitemap
+
+    def test_separate_edition_disabled_keeps_zh_root(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        renderer.report_base_url = "https://news.moguiyu.top"
+        renderer.english_edition_enabled = False  # disabled
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[Article(
+                    url="https://x", title="t", source_name="Reuters",
+                    published_at=datetime(2026, 8, 14, tzinfo=timezone.utc), content="b",
+                )],
+            ),
+            summary="**中文**\n\n正文。",
+            summary_en="**English**\n\nBody.",
+            short_topic_name="专题",
+            short_topic_name_en="Topic",
+            perspectives={},
+        )
+        renderer.render([summary], date(2026, 8, 14))
+        assert not (tmp_path / "cn" / "2026-08-14").exists()
+        sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
+        assert "/cn/2026-08-14/" not in sitemap
+
+    def test_search_console_verification_meta_conditional(self, renderer, tmp_path):
+        def _summary():
+            return ClusterSummary(
+                cluster=ArticleCluster(
+                    topic_category="World News",
+                    articles=[Article(
+                        url="https://x", title="t", source_name="Reuters",
+                        published_at=datetime(2026, 8, 13, tzinfo=timezone.utc), content="b",
+                    )],
+                ),
+                summary="**headline**\n\nbody.",
+                perspectives={},
+            )
+
+        # Not configured → no verification meta tags
+        renderer.output_dir = tmp_path / "a"
+        html = renderer.render([_summary()], date(2026, 8, 13)).read_text(encoding="utf-8")
+        assert "google-site-verification" not in html
+        assert "msvalidate.01" not in html
+
+        # Configured → tokens rendered in <head>
+        r2 = HtmlRenderer(
+            output_dir=str(tmp_path / "b"), template_dir="templates",
+            google_site_verification="g-token-123",
+            bing_site_verification="b-token-456",
+        )
+        html2 = r2.render([_summary()], date(2026, 8, 13)).read_text(encoding="utf-8")
+        assert '<meta name="google-site-verification" content="g-token-123" />' in html2
+        assert '<meta name="msvalidate.01" content="b-token-456" />' in html2
+
     def test_render_exports_quality_and_storyline_state(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         summary = ClusterSummary(
@@ -377,11 +777,13 @@ class TestPerspectivesContext:
         html = html_path.read_text(encoding="utf-8")
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
 
-        assert 'data-lang-choice="en"' in html
-        assert '>汉</button>' in html
-        assert '>ENG</button>' in html
+        # Language editions are path-isolated: no in-page toggle, no persisted
+        # override; with the separate edition off, the root stays Chinese and
+        # no crosslink anchor is rendered.
+        assert 'data-lang-choice' not in html
+        assert 'class="lang-btn"' not in html
         assert "English summary content." in html
-        assert "localStorage.setItem('newsprism-language', lang)" in html
+        assert "localStorage.setItem('newsprism-language', lang)" not in html
         assert payload["available_languages"] == ["zh", "en"]
         assert payload["default_language"] == "zh"
         assert payload["clusters"][0]["headline_en"] == "English Headline"
@@ -1763,13 +2165,15 @@ class TestHotTopics:
         positive_summary.positive_energy_reason_en = "Cute"
         positive_summary.positive_energy_score = 0.92
 
+        renderer.english_edition_enabled = True
         html_path = renderer.render([], date(2026, 5, 8), positive_summaries=[positive_summary])
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
         tree = lxml_html.fromstring(html_path.read_text(encoding="utf-8"))
 
         assert payload["english_available"] is True
         assert payload["available_languages"] == ["zh", "en"]
-        assert tree.xpath('//*[contains(@class, "language-toggle")]')
+        # Dual edition: header carries a crosslink to the other edition URL
+        assert tree.xpath('//a[contains(@class, "lang-btn") and contains(@href, "/cn/2026-05-08/")]')
         assert payload["positive_stories"][0]["headline"] == "志愿者救助可爱小狗"
 
     def test_day_selector_marks_current_and_missing_days(self, renderer, tmp_path):
@@ -1798,22 +2202,24 @@ class TestHotTopics:
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
         tree = lxml_html.fromstring(html_path.read_text(encoding="utf-8"))
 
-        # Past days only — today no longer self-links.
-        assert [day["date"] for day in payload["day_links"]] == ["2026-03-26", "2026-03-25", "2026-03-24"]
+        # Adjacent days relative to THIS page: prev exists as a real date URL,
+        # next (future) is not available yet. No /p/N/ links are emitted.
+        assert [day["date"] for day in payload["day_links"]] == ["2026-03-26", "2026-03-28"]
         assert all(day["active"] is False for day in payload["day_links"])
         assert payload["day_links"][0]["available"] is True
-        assert payload["day_links"][0]["href"] == "/p/1/"
+        assert payload["day_links"][0]["href"] == "/2026-03-26/"
         assert payload["day_links"][1]["available"] is False
         assert payload["day_links"][1]["href"] is None
-        assert payload["day_links"][2]["available"] is False
+        assert payload["archive_link"] == "/cn/archive/"
 
-        # Footer holds the selector; HTML never leaks the YYYY-MM-DD path.
+        # Footer holds the selector with real date URLs and the archive entry.
         assert not tree.xpath('//*[@class="header-tools"]//*[@aria-label="report day selector"]')
         assert tree.xpath('//footer//*[@aria-label="report day selector"]')
-        assert tree.xpath('//a[contains(@class, "day-link") and @href="/p/1/"]')
-        assert tree.xpath('//a[contains(@class, "day-link") and @href="/p/1/"]//*[contains(@class, "date-part") and contains(., "03月26日")]')
+        assert tree.xpath('//a[contains(@class, "day-link") and @href="/2026-03-26/"]')
+        assert tree.xpath('//a[contains(@class, "day-link") and @href="/2026-03-26/"]//*[contains(@class, "date-part") and contains(., "03月26日")]')
+        assert tree.xpath('//a[contains(@class, "day-link") and @href="/cn/archive/"]')
         assert tree.xpath('//span[contains(@class, "day-link") and contains(@class, "disabled")]')
-        assert not tree.xpath('//a[contains(@href, "2026-")]/@href[contains(., "../")]')
+        assert not tree.xpath('//a[contains(@href, "/p/")]')
 
         # Symlink rotation: /p/1 must point to the existing past day, /p/2 must be skipped.
         link_one = tmp_path / "p" / "1"
@@ -1857,7 +2263,7 @@ class TestHotTopics:
 
         assert payload["day_links"][0]["date"] == "2026-03-26"
         assert payload["day_links"][0]["available"] is True
-        assert payload["day_links"][0]["href"] == "/p/1/"
+        assert payload["day_links"][0]["href"] == "/2026-03-26/"
 
 
 def test_render_hot_topic_full_name_in_body_but_short_in_nav(renderer, tmp_path):

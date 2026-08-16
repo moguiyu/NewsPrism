@@ -18,7 +18,6 @@ import json
 import logging
 import re
 
-import litellm
 
 from newsprism.repo import (
     get_calibration_state,
@@ -33,6 +32,7 @@ from newsprism.repo import (
     update_calibration_weight,
 )
 from newsprism.service.llm_compat import completion_compat_kwargs
+from newsprism.service.llm_telemetry import tracked_completion
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,9 @@ def _call_policy_llm(
         '只输出 JSON：{"bullets": ["...", ...]}'
     )
 
-    response = litellm.completion(
+    tracked = tracked_completion(
+        stage="calibration_policy",
+        enabled=getattr(cfg, "llm_telemetry_enabled", False),
         model=model,
         api_key=api_key,
         api_base=base_url,
@@ -189,7 +191,7 @@ def _call_policy_llm(
         response_format={"type": "json_object"},
         **compat,
     )
-    content = (response.choices[0].message.content or "").strip()
+    content = (tracked.choices[0].message.content or "").strip()
     return _parse_bullets(content)
 
 

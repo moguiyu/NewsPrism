@@ -133,4 +133,5 @@ def test_scheduler_registers_full_delta_publish_and_push_jobs(monkeypatch):
         "push_daily",
         "calibrate_weekly",
         "retention_weekly",
+        "output_retention_weekly",
     ]

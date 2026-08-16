@@ -67,6 +67,7 @@ class Config:
 
     # Feature flags
     use_llm_clustering: bool = True
+    llm_telemetry_enabled: bool = False
 
     # From env
     litellm_api_key: str = field(default_factory=lambda: os.environ.get("LITELLM_API_KEY", ""))
@@ -75,6 +76,15 @@ class Config:
     telegram_bot_token: str = field(default_factory=lambda: os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.environ.get("TELEGRAM_CHAT_ID", ""))
     report_base_url: str = field(default_factory=lambda: os.environ.get("REPORT_BASE_URL", "http://localhost:8080"))
+    # Self-hosted Umami analytics (privacy-friendly, no cookies). Tracker renders
+    # only when UMAMI_WEBSITE_ID is set; script URL points at the stats subdomain.
+    umami_website_id: str = field(default_factory=lambda: os.environ.get("UMAMI_WEBSITE_ID", ""))
+    umami_script_url: str = field(default_factory=lambda: os.environ.get("UMAMI_SCRIPT_URL", ""))
+    # Search-console verification via <meta> tag (URL-prefix property): works for
+    # static sites without DNS access. GOOGLE_SITE_VERIFICATION / BING_SITE_VERIFICATION
+    # carry the token only (e.g. "aBcD..."); the full meta tag is built in the template.
+    google_site_verification: str = field(default_factory=lambda: os.environ.get("GOOGLE_SITE_VERIFICATION", ""))
+    bing_site_verification: str = field(default_factory=lambda: os.environ.get("BING_SITE_VERIFICATION", ""))
     
     # Active Search
     # Tavily supports key rotation: TAVILY_API_KEYS is a comma-separated list,
@@ -254,5 +264,6 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         evolution=raw.get("evolution", {}),
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
         use_llm_clustering=bool(raw.get("clustering", {}).get("use_llm_clustering", True)),
+        llm_telemetry_enabled=bool(raw.get("llm_telemetry", {}).get("enabled", False)),
         certifications=certifications,
     )

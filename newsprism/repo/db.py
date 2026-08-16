@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any, Generator
 
 from newsprism.types import (
-    Article, Cluster, ClusterQualityReport, ClusterSummary, SearchCandidateReview,
-    SearchRequestEvent, is_placeholder_article, is_placeholder_url,
+    Article, Cluster, ClusterQualityReport, ClusterSummary, LLMCallEvent,
+    SearchCandidateReview, SearchRequestEvent, is_placeholder_article,
+    is_placeholder_url,
 )
 
 DB_PATH = Path("data/newsprism.db")
@@ -240,6 +241,25 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 created_at      TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS llm_call_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT NOT NULL,
+                model TEXT NOT NULL,
+                report_date TEXT,
+                cluster_key TEXT,
+                item_count INTEGER,
+                attempt INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'ok',
+                finish_reason TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                input_chars INTEGER,
+                output_chars INTEGER,
+                duration_ms INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS storylines (
                 storyline_key TEXT PRIMARY KEY,
                 storyline_name TEXT,
@@ -285,6 +305,10 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 ON cluster_evaluations(report_date);
             CREATE INDEX IF NOT EXISTS idx_editorial_feedback_cluster
                 ON editorial_feedback(cluster_id);
+            CREATE INDEX IF NOT EXISTS idx_llm_call_events_created_at
+                ON llm_call_events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_llm_call_events_stage_date
+                ON llm_call_events(stage, report_date);
             CREATE INDEX IF NOT EXISTS idx_feedback_corrections_eval
                 ON feedback_corrections(evaluation_id);
         """)
@@ -548,6 +572,55 @@ def update_article_embedding(article_id: int, embedding: list[float], db_path: P
         conn.execute(
             "UPDATE articles SET embedding = ? WHERE id = ?",
             (json.dumps(embedding), article_id),
+        )
+
+
+def insert_llm_call_event(event: LLMCallEvent, db_path: Path = DB_PATH) -> int:
+    """Persist one LLM API call for token telemetry.
+
+    The insert is best-effort and must never fail the editorial pipeline:
+    telemetry callers therefore call this from service code, not this repo
+    layer, with their own exception handling.
+    """
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO llm_call_events (
+                   stage, model, report_date, cluster_key, item_count, attempt,
+                   status, finish_reason, prompt_tokens, completion_tokens,
+                   total_tokens, input_chars, output_chars, duration_ms, created_at
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+            (
+                event.stage,
+                event.model,
+                event.report_date,
+                event.cluster_key,
+                event.item_count,
+                event.attempt,
+                event.status,
+                event.finish_reason,
+                event.prompt_tokens,
+                event.completion_tokens,
+                event.total_tokens,
+                event.input_chars,
+                event.output_chars,
+                event.duration_ms,
+                event.created_at.isoformat() if event.created_at else None,
+            ),
+        )
+        return cur.lastrowid
+
+
+def update_llm_call_event_status(
+    event_id: int,
+    status: str,
+    db_path: Path = DB_PATH,
+) -> None:
+    """Update the terminal parse/fallback status of a tracked LLM call."""
+    with get_conn(db_path) as conn:
+        conn.execute(
+            "UPDATE llm_call_events SET status = ? WHERE id = ?",
+            (status, event_id),
         )
 
 
