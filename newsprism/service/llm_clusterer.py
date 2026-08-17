@@ -88,16 +88,31 @@ def _parse_cluster_entries(raw_content: str) -> list[dict[str, Any]]:
 def _build_clusters(entries: list[dict[str, Any]], articles: list[Article]) -> list[ArticleCluster]:
     result: list[ArticleCluster] = []
     n = len(articles)
+    assigned: set[int] = set()
     for entry in entries:
         ids = entry.get("ids", [])
         if not ids:
             continue
-        valid_indices = [idx for idx in ids if isinstance(idx, int) and 0 <= idx < n]
+        # One article belongs to one event cluster. If the model emits the
+        # same index more than once, the first complete cluster claims it and
+        # later duplicate assignments are dropped.
+        valid_indices: list[int] = []
+        seen_in_entry: set[int] = set()
+        for idx in ids:
+            if (
+                isinstance(idx, int)
+                and 0 <= idx < n
+                and idx not in assigned
+                and idx not in seen_in_entry
+            ):
+                valid_indices.append(idx)
+                seen_in_entry.add(idx)
         if not valid_indices:
             continue
         cluster_articles = _keep_one_per_source([articles[idx] for idx in valid_indices])
         if not cluster_articles:
             continue
+        assigned.update(valid_indices)
         label = str(entry.get("label") or "").strip() or cluster_articles[0].title[:60]
         result.append(ArticleCluster(topic_category=label, articles=cluster_articles))
     return result
@@ -326,9 +341,9 @@ class LLMClusterer:
             "(e.g. two different earthquakes, two unrelated political speeches).\n"
             "- Each cluster should have a concise English event label (≤8 words).\n"
             "- Include at most one article per source in each cluster.\n"
-            "- Articles that do not fit any cluster must be omitted entirely.\n\n"
+            '- Articles that do not fit any cluster go in "unclustered".\n\n'
             "Return exactly this JSON structure:\n"
-            '{"clusters": [{"label": "...", "ids": [0, 3, 7]}]}\n\n'
+            '{{"clusters": [{{"label": "...", "ids": [0, 3, 7]}}], "unclustered": [1, 2, 4]}}\n\n'
             f"Articles:\n{json.dumps(payload, ensure_ascii=False)}"
         )
 

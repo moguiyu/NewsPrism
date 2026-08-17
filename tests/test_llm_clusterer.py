@@ -89,7 +89,7 @@ def test_parse_cluster_entries_recovers_complete_objects_from_truncated_json():
     assert [entry["label"] for entry in entries] == ["one", "two"]
 
 
-def test_llm_cluster_prompt_omits_unused_unclustered_field(monkeypatch):
+def test_llm_cluster_prompt_keeps_unclustered_contract(monkeypatch):
     from types import SimpleNamespace
 
     import litellm
@@ -108,8 +108,24 @@ def test_llm_cluster_prompt_omits_unused_unclustered_field(monkeypatch):
     clusterer._llm_cluster(articles)
 
     prompt = captured["messages"][1]["content"]
-    assert '"unclustered"' not in prompt
-    assert "omitted entirely" in prompt
+    assert '"unclustered"' in prompt
+    assert 'Articles that do not fit any cluster go in "unclustered"' in prompt
+
+
+def test_build_clusters_assigns_each_article_only_once():
+    from newsprism.service.llm_clusterer import _build_clusters
+
+    articles = [_article(index) for index in range(4)]
+    entries = [
+        {"label": "first", "ids": [0, 1]},
+        {"label": "duplicate", "ids": [1, 2]},
+        {"label": "second", "ids": [2, 3]},
+    ]
+    clusters = _build_clusters(entries, articles)
+    assert [cluster.topic_category for cluster in clusters] == ["first", "duplicate", "second"]
+    assigned = {id(article) for cluster in clusters for article in cluster.articles}
+    assert assigned == {id(articles[0]), id(articles[1]), id(articles[2]), id(articles[3])}
+    assert all(len({id(a) for a in cluster.articles}) == len(cluster.articles) for cluster in clusters)
 
 
 def test_salvage_follows_up_only_with_uncovered_articles(monkeypatch):
