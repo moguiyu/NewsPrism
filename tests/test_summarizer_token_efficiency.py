@@ -49,3 +49,44 @@ def test_salvage_batch_summary_items_recovers_complete_items():
     items = summarizer._salvage_batch_summary_items(raw)
     assert [item.index for item in items] == [0, 1]
     assert items[0].headline == "A"
+
+
+def test_batch_summary_retries_non_chinese_item_per_cluster(monkeypatch):
+    from types import SimpleNamespace
+
+    import litellm
+
+    summarizer = Summarizer(_config())
+    cluster = _cluster()
+    payload = (
+        '{"clusters": [{"index": 0, "headline": "English headline", '
+        '"body": "This body is entirely in English and not Chinese.", '
+        '"short_topic_name": "English", "topic_icon_key": "globe", '
+        '"perspective_groups": []}]}'
+    )
+
+    def fake_completion(**kwargs):
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=payload))])
+
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    calls: list[bool] = []
+
+    def fake_per_cluster(cluster_arg, require_chinese=False):
+        calls.append(require_chinese)
+        from newsprism.types import ClusterSummary
+
+        return ClusterSummary(cluster=cluster_arg, summary="**中文标题**\n\n这是中文正文。", perspectives={})
+
+    monkeypatch.setattr(summarizer, "_summarize_cluster", fake_per_cluster)
+
+    results = summarizer._batch_summarize([cluster])
+    assert calls == [True]
+    assert results[0].summary == "**中文标题**\n\n这是中文正文。"
+
+
+def test_build_prompt_can_force_chinese_output():
+    summarizer = Summarizer(_config())
+    cluster = _cluster()
+    prompt = summarizer._build_prompt(cluster, summarizer._format_articles(cluster), require_chinese=True)
+    assert "强制要求" in prompt
+    assert "简体中文" in prompt
