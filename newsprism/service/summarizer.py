@@ -19,6 +19,7 @@ import litellm
 from pydantic import BaseModel, Field
 
 from newsprism.config import Config
+from newsprism.service.language import looks_like_chinese_text
 from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.service.llm_telemetry import tracked_completion
 from newsprism.service.perspectives import canonicalize_perspective_groups
@@ -289,6 +290,29 @@ class Summarizer:
 
             headline_clean = item.headline.strip().strip("*")
             summary_text = f"**{headline_clean}**\n\n{item.body}"
+            if not looks_like_chinese_text(summary_text):
+                logger.warning(
+                    "Batch summary item %d ('%s') is not Chinese; retrying per-cluster in Chinese",
+                    i,
+                    cluster.topic_category,
+                )
+                try:
+                    results.append(self._summarize_cluster(cluster, require_chinese=True))
+                except Exception as exc:
+                    logger.error(
+                        "Chinese retry also failed for '%s': %s",
+                        cluster.topic_category,
+                        exc,
+                    )
+                    results.append(
+                        ClusterSummary(
+                            cluster=cluster,
+                            summary=summary_text,
+                            perspectives={},
+                            **self._cluster_metadata_kwargs(cluster),
+                        )
+                    )
+                continue
             grouped_perspectives = self._normalize_perspective_groups(
                 cluster,
                 item.perspective_groups,
@@ -702,9 +726,13 @@ class Summarizer:
         return salvaged
 
 
-    def _summarize_cluster(self, cluster: ArticleCluster) -> ClusterSummary:
+    def _summarize_cluster(
+        self,
+        cluster: ArticleCluster,
+        require_chinese: bool = False,
+    ) -> ClusterSummary:
         articles_block = self._format_articles(cluster)
-        prompt = self._build_prompt(cluster, articles_block)
+        prompt = self._build_prompt(cluster, articles_block, require_chinese=require_chinese)
 
         tracked = tracked_completion(
             stage="summary_single",
@@ -1463,7 +1491,12 @@ class Summarizer:
             )
         return "\n".join(lines)
 
-    def _build_prompt(self, cluster: ArticleCluster, articles_block: str) -> str:
+    def _build_prompt(
+        self,
+        cluster: ArticleCluster,
+        articles_block: str,
+        require_chinese: bool = False,
+    ) -> str:
         source_list = "、".join(cluster.sources)
         is_multi = cluster.is_multi_source
         quality_block = self._quality_prompt_block(cluster)
@@ -1497,7 +1530,10 @@ class Summarizer:
                 "额外要求：headline 和 body 只负责概括事件事实；只输出 JSON，不要解释。"
             )
 
-        return f"{instruction}\n\n{quality_block}\n\n{articles_block}"
+        prompt = f"{instruction}\n\n{quality_block}\n\n{articles_block}"
+        if require_chinese:
+            prompt += "\n\n强制要求：headline、body 和所有 perspective 文本必须使用简体中文。不要输出英文或其他语言。"
+        return prompt
 
     def _quality_prompt_block(self, cluster: ArticleCluster) -> str:
         impact = getattr(cluster, "impact", None)
