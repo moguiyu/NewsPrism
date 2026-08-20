@@ -5,8 +5,10 @@ schedule:
   # Full collection runs 4/day. A smaller pre-publish delta run catches
   # important morning updates without racing the 08:00 publish.
   full_collect_cron: "15 0,4,16,20 * * *"
-  prepublish_collect_cron: "20 7 * * *"
-  publish_cron: "30 7 * * *"    # build staged report before the 08:00 push
+  # DeepSeek processing runs during the UTC non-peak window; these jobs are
+  # converted to local time by the separate llm_processing_timezone below.
+  prepublish_collect_cron: "5 5 * * *"    # 05:05 UTC delta before processing
+  publish_cron: "20 5 * * *"              # 05:20 UTC staged report
   retention_output_cron: "30 4 * * 1"  # weekly report-dir pruning (output.retention_days)
   push_cron: "0 8 * * *"        # deliver final page + Telegram at 08:00 sharp
   calibrate_cron: "30 3 * * 1"      # weekly Mon 03:30: nudge weights + refresh policy memory
@@ -16,6 +18,7 @@ schedule:
     max_attempts: 3
     retry_interval_minutes: 5
   timezone: "Europe/Warsaw"     # overridable via SCHEDULE_TIMEZONE env var
+  llm_processing_timezone: "UTC" # delta/publish only; other jobs use timezone above
 
 # ─── LLM TELEMETRY ─────────────────────────────────────────────────────────────
 llm_telemetry:
@@ -47,7 +50,7 @@ collection:
 clustering:
   # Keep structured LLM clustering responses bounded; malformed large batches
   # retry as smaller chunks before only that chunk falls back to embeddings.
-  llm_max_articles_per_call: 120
+  llm_max_articles_per_call: 60
   # Phase 2a: collapse same-source near-duplicate event updates before the
   # LLM clustering pass. Representatives are re-expanded afterwards, so the
   # final article set is unchanged. Strict on purpose.
