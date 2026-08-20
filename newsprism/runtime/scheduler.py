@@ -61,6 +61,7 @@ from newsprism.service.history import (
     StorylineStateMachine,
 )
 from newsprism.service.impact import ImpactAssessor
+from newsprism.service.llm_telemetry import llm_run_context
 from newsprism.service.seeker import ActiveSeeker
 from newsprism.service.summarizer import Summarizer
 from newsprism.types import (
@@ -73,6 +74,12 @@ from newsprism.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _run_llm_stage(telemetry_report_date: str, operation, *args, **kwargs):
+    """Run one synchronous LLM stage with report-level telemetry attribution."""
+    with llm_run_context(report_date=telemetry_report_date):
+        return operation(*args, **kwargs)
 
 
 _PUBLICATION_BLOCKED_STATUSES = {"needs_review", "seek_more_evidence", "suppress"}
@@ -494,7 +501,9 @@ class Scheduler:
                 logger.warning("No unclustered articles found — skipping %s", phase_name.lower())
                 return
 
-            clusters = self.clusterer.cluster(articles, report_date=today.isoformat())
+            clusters = _run_llm_stage(
+                today.isoformat(), self.clusterer.cluster, articles, report_date=today.isoformat()
+            )
             clusters = [cluster for cluster in clusters if _cluster_has_real_article(cluster)]
             if not clusters:
                 logger.warning("No clusters formed — skipping %s", phase_name.lower())
@@ -523,7 +532,7 @@ class Scheduler:
                 cluster._storyline_candidate_index = index  # type: ignore[attr-defined]
 
             # Impact evaluation — the selection brain.
-            self.impact_assessor.assess_clusters(candidate_clusters)
+            _run_llm_stage(today.isoformat(), self.impact_assessor.assess_clusters, candidate_clusters)
 
             if hot_cfg.get("enabled", False):
                 history_window_days = hot_cfg.get("history_window_days", 5)
@@ -536,7 +545,8 @@ class Scheduler:
                     len(historical_hot_topic_memory),
                     history_window_days,
                 )
-                self.storyline_resolver.resolve(
+                _run_llm_stage(
+                    today.isoformat(), self.storyline_resolver.resolve,
                     candidate_clusters,
                     historical_hot_topic_memory,
                     today,
@@ -558,7 +568,9 @@ class Scheduler:
             )
 
             # Phase 2.5: Actively seek missing perspectives (impact status decides where)
-            selected_clusters = self.seeker.enhance_clusters(selected_clusters)
+            selected_clusters = _run_llm_stage(
+                today.isoformat(), self.seeker.enhance_clusters, selected_clusters
+            )
             for cluster in selected_clusters:
                 # Seeker enrichment can append inline placeholders. Recompute
                 # source membership before signal/status is refreshed, while
@@ -596,7 +608,9 @@ class Scheduler:
                 today,
             )
 
-            summaries = self.summarizer.summarize_all_batch(selected_clusters)
+            summaries = _run_llm_stage(
+                today.isoformat(), self.summarizer.summarize_all_batch, selected_clusters
+            )
 
             # Phase 2.6: Evaluate freshness against historical clusters
             historical = get_recent_clusters(
@@ -692,7 +706,8 @@ class Scheduler:
             english_cfg = self.cfg.output.get("english", {}) if isinstance(self.cfg.output, dict) else {}
             english_enabled = bool(english_cfg.get("enabled", False))
             if english_enabled:
-                self.summarizer.translate_report_content(
+                _run_llm_stage(
+                    today.isoformat(), self.summarizer.translate_report_content,
                     kept_summaries,
                     hot_topics=hot_topics,
                     focus_storylines=[],
@@ -927,6 +942,10 @@ class Scheduler:
     async def _run_scheduler(self) -> None:
         """Async scheduler loop — runs inside asyncio.run()."""
         tz = self.cfg.schedule.get("timezone", "Asia/Shanghai")
+        # Keep collection, push, and maintenance jobs on the normal local
+        # schedule. DeepSeek-facing delta/publish jobs may use a separate
+        # timezone so their configured window can target non-peak pricing.
+        llm_processing_tz = self.cfg.schedule.get("llm_processing_timezone", tz)
         sched = AsyncIOScheduler(timezone=tz)
         self._apscheduler = sched
         self._cleanup_old_staging()
@@ -946,12 +965,12 @@ class Scheduler:
         if delta_collect_cron:
             sched.add_job(
                 partial(self.collect, mode="delta"),
-                CronTrigger.from_crontab(delta_collect_cron, timezone=tz),
+                CronTrigger.from_crontab(delta_collect_cron, timezone=llm_processing_tz),
                 id="collect_delta",
             )
         sched.add_job(
             partial(self.publish, push_after_render=False),
-            CronTrigger.from_crontab(publish_cron, timezone=tz),
+            CronTrigger.from_crontab(publish_cron, timezone=llm_processing_tz),
             id="publish_stage",
         )
         sched.add_job(
@@ -984,12 +1003,13 @@ class Scheduler:
 
         sched.start()
         logger.info(
-            "Scheduler started. full_collect=%s delta_collect=%s publish_stage=%s push=%s tz=%s",
+            "Scheduler started. full_collect=%s delta_collect=%s publish_stage=%s push=%s tz=%s llm_processing_tz=%s",
             full_collect_cron,
             delta_collect_cron,
             publish_cron,
             push_cron,
             tz,
+            llm_processing_tz,
         )
 
         # Block until cancelled (KeyboardInterrupt → asyncio.run cancels all tasks)

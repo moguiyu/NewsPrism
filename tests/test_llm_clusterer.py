@@ -32,6 +32,13 @@ def _article(index: int) -> Article:
     )
 
 
+def test_llm_clusterer_defaults_to_sixty_article_calls():
+    cfg = _config()
+    cfg.clustering = {"llm_min_clusters_fallback": 1}
+
+    assert LLMClusterer(cfg).max_articles_per_call == 60
+
+
 def test_llm_clusterer_retries_only_the_failed_large_chunk(monkeypatch):
     clusterer = LLMClusterer(_config())
     articles = [_article(index) for index in range(40)]
