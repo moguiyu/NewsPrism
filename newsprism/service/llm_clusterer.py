@@ -134,7 +134,7 @@ class LLMClusterer:
         self.telemetry_enabled = getattr(cfg, "llm_telemetry_enabled", False)
         self.min_clusters_fallback = cfg.clustering.get("llm_min_clusters_fallback", 3)
         self.max_articles_per_call = max(
-            20, int(cfg.clustering.get("llm_max_articles_per_call", 120))
+            20, int(cfg.clustering.get("llm_max_articles_per_call", 60))
         )
         self._compat_kwargs = completion_compat_kwargs(cfg.litellm_model, cfg.litellm_base_url)
         self._fallback = Clusterer(cfg)

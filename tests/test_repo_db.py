@@ -6,13 +6,20 @@ from newsprism.repo import (
     get_articles_by_ids,
     get_unclustered_articles,
     init_db,
+    insert_llm_call_event,
     insert_article,
     insert_cluster,
     insert_search_candidate_review,
     insert_search_request_event,
     selected_source_regions,
 )
-from newsprism.types import Article, Cluster, SearchCandidateReview, SearchRequestEvent
+from newsprism.types import (
+    Article,
+    Cluster,
+    LLMCallEvent,
+    SearchCandidateReview,
+    SearchRequestEvent,
+)
 
 
 def test_init_db_persists_searched_article_metadata_and_telemetry(tmp_path):
@@ -295,3 +302,52 @@ def test_init_db_adds_target_identity_columns_to_existing_search_tables(tmp_path
         "target_reason", "coverage_before", "restricted_domains",
     } <= request_columns
     assert {"target_role", "identity_evidence"} <= candidate_columns
+
+
+def test_init_db_migrates_llm_cache_usage_columns_race_safely(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """CREATE TABLE llm_call_events (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   stage TEXT NOT NULL,
+                   model TEXT NOT NULL,
+                   report_date TEXT,
+                   cluster_key TEXT,
+                   item_count INTEGER,
+                   attempt INTEGER NOT NULL DEFAULT 1,
+                   status TEXT NOT NULL DEFAULT 'ok',
+                   finish_reason TEXT,
+                   prompt_tokens INTEGER,
+                   completion_tokens INTEGER,
+                   total_tokens INTEGER,
+                   input_chars INTEGER,
+                   output_chars INTEGER,
+                   duration_ms INTEGER,
+                   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+               )"""
+        )
+
+    init_db(db_path)
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(llm_call_events)")}
+    assert {"prompt_cache_hit_tokens", "prompt_cache_miss_tokens"} <= columns
+
+    event_id = insert_llm_call_event(
+        LLMCallEvent(
+            stage="clustering",
+            model="deepseek/deepseek-v4-flash",
+            prompt_cache_hit_tokens=7,
+            prompt_cache_miss_tokens=13,
+        ),
+        db_path=db_path,
+    )
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT prompt_cache_hit_tokens, prompt_cache_miss_tokens "
+            "FROM llm_call_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+    assert row == (7, 13)

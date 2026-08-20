@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timezone
 
-from newsprism.config import Config, SourceConfig
+from newsprism.config import Config, SourceConfig, load_config
 from newsprism.runtime.scheduler import Scheduler
 from newsprism.service.collector import Collector
 from newsprism.types import Article, RawArticle
@@ -135,3 +135,99 @@ def test_scheduler_registers_full_delta_publish_and_push_jobs(monkeypatch):
         "retention_weekly",
         "output_retention_weekly",
     ]
+
+
+def test_config_sets_utc_deepseek_processing_window():
+    cfg = load_config("config/config.yaml")
+
+    assert cfg.schedule["llm_processing_timezone"] == "UTC"
+    assert cfg.schedule["prepublish_collect_cron"] == "5 5 * * *"
+    assert cfg.schedule["publish_cron"] == "20 5 * * *"
+    assert cfg.clustering["llm_max_articles_per_call"] == 60
+
+
+def test_scheduler_uses_processing_timezone_only_for_delta_and_publish(monkeypatch):
+    cfg = _cfg(
+        collection={},
+        schedule={
+            "timezone": "Europe/Warsaw",
+            "llm_processing_timezone": "UTC",
+            "full_collect_cron": "15 0,4,16,20 * * *",
+            "prepublish_collect_cron": "5 5 * * *",
+            "publish_cron": "20 5 * * *",
+            "push_cron": "0 8 * * *",
+        },
+    )
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.cfg = cfg
+    scheduler._apscheduler = None
+    scheduler._cleanup_old_staging = lambda: None
+
+    captured_triggers = {}
+
+    class FakeScheduler:
+        def __init__(self, timezone=None):
+            self.timezone = timezone
+
+        def add_job(self, func, trigger, id):
+            captured_triggers[id] = trigger
+
+        def start(self):
+            return None
+
+    class FakeEvent:
+        async def wait(self):
+            return None
+
+    monkeypatch.setattr("newsprism.runtime.scheduler.AsyncIOScheduler", FakeScheduler)
+    monkeypatch.setattr("newsprism.runtime.scheduler.asyncio.Event", FakeEvent)
+
+    asyncio.run(scheduler._run_scheduler())
+
+    assert str(captured_triggers["collect_full"].timezone) == "Europe/Warsaw"
+    assert str(captured_triggers["collect_delta"].timezone) == "UTC"
+    assert str(captured_triggers["publish_stage"].timezone) == "UTC"
+    assert str(captured_triggers["push_daily"].timezone) == "Europe/Warsaw"
+    assert str(captured_triggers["calibrate_weekly"].timezone) == "Europe/Warsaw"
+    assert str(captured_triggers["retention_weekly"].timezone) == "Europe/Warsaw"
+    assert str(captured_triggers["output_retention_weekly"].timezone) == "Europe/Warsaw"
+
+
+def test_scheduler_processing_timezone_falls_back_to_schedule_timezone(monkeypatch):
+    cfg = _cfg(
+        collection={},
+        schedule={
+            "timezone": "Europe/Warsaw",
+            "prepublish_collect_cron": "20 7 * * *",
+            "publish_cron": "30 7 * * *",
+            "push_cron": "0 8 * * *",
+        },
+    )
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.cfg = cfg
+    scheduler._apscheduler = None
+    scheduler._cleanup_old_staging = lambda: None
+
+    captured_triggers = {}
+
+    class FakeScheduler:
+        def __init__(self, timezone=None):
+            self.timezone = timezone
+
+        def add_job(self, func, trigger, id):
+            captured_triggers[id] = trigger
+
+        def start(self):
+            return None
+
+    class FakeEvent:
+        async def wait(self):
+            return None
+
+    monkeypatch.setattr("newsprism.runtime.scheduler.AsyncIOScheduler", FakeScheduler)
+    monkeypatch.setattr("newsprism.runtime.scheduler.asyncio.Event", FakeEvent)
+
+    asyncio.run(scheduler._run_scheduler())
+
+    assert str(captured_triggers["collect_delta"].timezone) == "Europe/Warsaw"
+    assert str(captured_triggers["publish_stage"].timezone) == "Europe/Warsaw"
