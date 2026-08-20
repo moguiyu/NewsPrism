@@ -254,6 +254,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 prompt_tokens INTEGER,
                 completion_tokens INTEGER,
                 total_tokens INTEGER,
+                prompt_cache_hit_tokens INTEGER,
+                prompt_cache_miss_tokens INTEGER,
                 input_chars INTEGER,
                 output_chars INTEGER,
                 duration_ms INTEGER,
@@ -441,6 +443,21 @@ def init_db(db_path: Path = DB_PATH) -> None:
         if "published_at" not in candidate_columns:
             _add_column("search_candidate_reviews", "published_at", "published_at TEXT")
 
+        cursor = conn.execute("PRAGMA table_info(llm_call_events)")
+        llm_event_columns = {row[1] for row in cursor.fetchall()}
+        if "prompt_cache_hit_tokens" not in llm_event_columns:
+            _add_column(
+                "llm_call_events",
+                "prompt_cache_hit_tokens",
+                "prompt_cache_hit_tokens INTEGER",
+            )
+        if "prompt_cache_miss_tokens" not in llm_event_columns:
+            _add_column(
+                "llm_call_events",
+                "prompt_cache_miss_tokens",
+                "prompt_cache_miss_tokens INTEGER",
+            )
+
         cursor = conn.execute("PRAGMA table_info(cluster_evaluations)")
         eval_columns = {row[1] for row in cursor.fetchall()}
         if "subject_regions" not in eval_columns:
@@ -587,9 +604,10 @@ def insert_llm_call_event(event: LLMCallEvent, db_path: Path = DB_PATH) -> int:
             """INSERT INTO llm_call_events (
                    stage, model, report_date, cluster_key, item_count, attempt,
                    status, finish_reason, prompt_tokens, completion_tokens,
-                   total_tokens, input_chars, output_chars, duration_ms, created_at
+                   total_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens,
+                   input_chars, output_chars, duration_ms, created_at
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
             (
                 event.stage,
                 event.model,
@@ -602,6 +620,8 @@ def insert_llm_call_event(event: LLMCallEvent, db_path: Path = DB_PATH) -> int:
                 event.prompt_tokens,
                 event.completion_tokens,
                 event.total_tokens,
+                event.prompt_cache_hit_tokens,
+                event.prompt_cache_miss_tokens,
                 event.input_chars,
                 event.output_chars,
                 event.duration_ms,

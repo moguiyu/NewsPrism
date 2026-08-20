@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +28,24 @@ from newsprism.repo import DB_PATH, insert_llm_call_event, update_llm_call_event
 from newsprism.types import LLMCallEvent
 
 logger = logging.getLogger(__name__)
+
+_run_report_date: ContextVar[str | None] = ContextVar(
+    "llm_run_report_date", default=None
+)
+
+
+@contextmanager
+def llm_run_context(*, report_date: str | None):
+    """Provide a report date for telemetry calls in the current execution context."""
+    token = _run_report_date.set(report_date)
+    try:
+        yield
+    finally:
+        _run_report_date.reset(token)
+
+
+def _effective_report_date(report_date: str | None) -> str | None:
+    return report_date if report_date is not None else _run_report_date.get()
 
 
 def _message_chars(messages: list[dict[str, str]]) -> int:
@@ -43,14 +64,58 @@ def _response_chars(response: Any) -> int:
         return 0
 
 
-def _usage_fields(response: Any) -> tuple[int | None, int | None, int | None]:
+def _lookup(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _token_count(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _first_token_count(*values: Any) -> int | None:
+    for value in values:
+        parsed = _token_count(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _usage_fields(
+    response: Any,
+) -> tuple[int | None, int | None, int | None, int | None, int | None]:
     usage = getattr(response, "usage", None)
     if usage is None:
-        return None, None, None
+        return None, None, None, None, None
+    prompt_tokens_details = _lookup(usage, "prompt_tokens_details")
+    prompt_cache_hit_tokens = _first_token_count(
+        _lookup(usage, "prompt_cache_hit_tokens"),
+        _lookup(usage, "cache_read_input_tokens"),
+        _lookup(prompt_tokens_details, "cached_tokens"),
+    )
+    prompt_cache_miss_tokens = _first_token_count(
+        _lookup(usage, "prompt_cache_miss_tokens"),
+        _lookup(usage, "cache_creation_input_tokens"),
+        _lookup(prompt_tokens_details, "cache_creation_tokens"),
+    )
     return (
-        getattr(usage, "prompt_tokens", None),
-        getattr(usage, "completion_tokens", None),
-        getattr(usage, "total_tokens", None),
+        _token_count(_lookup(usage, "prompt_tokens")),
+        _token_count(_lookup(usage, "completion_tokens")),
+        _token_count(_lookup(usage, "total_tokens")),
+        prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens,
     )
 
 
@@ -116,6 +181,7 @@ def tracked_completion(
             **kwargs,
         )
 
+    effective_report_date = _effective_report_date(report_date)
     started = time.perf_counter()
     try:
         response = litellm.completion(
@@ -132,7 +198,7 @@ def tracked_completion(
                 LLMCallEvent(
                     stage=stage,
                     model=str(model),
-                    report_date=report_date,
+                    report_date=effective_report_date,
                     cluster_key=cluster_key,
                     item_count=item_count,
                     attempt=attempt,
@@ -151,14 +217,20 @@ def tracked_completion(
             logger.debug("LLM telemetry error-row write failed for %s", stage)
         raise exc
 
-    prompt_tokens, completion_tokens, total_tokens = _usage_fields(response)
+    (
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        prompt_cache_hit_tokens,
+        prompt_cache_miss_tokens,
+    ) = _usage_fields(response)
     event_id: int | None = None
     try:
         event_id = insert_llm_call_event(
             LLMCallEvent(
                 stage=stage,
                 model=str(model),
-                report_date=report_date,
+                report_date=effective_report_date,
                 cluster_key=cluster_key,
                 item_count=item_count,
                 attempt=attempt,
@@ -167,6 +239,8 @@ def tracked_completion(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
+                prompt_cache_hit_tokens=prompt_cache_hit_tokens,
+                prompt_cache_miss_tokens=prompt_cache_miss_tokens,
                 input_chars=_message_chars(messages),
                 output_chars=_response_chars(response),
                 duration_ms=int((time.perf_counter() - started) * 1000),
@@ -203,7 +277,7 @@ def record_llm_parse_failure(
             LLMCallEvent(
                 stage=stage,
                 model=str(model),
-                report_date=report_date,
+                report_date=_effective_report_date(report_date),
                 cluster_key=cluster_key,
                 item_count=item_count,
                 attempt=attempt,

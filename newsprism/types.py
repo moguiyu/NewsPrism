@@ -104,6 +104,8 @@ class LLMCallEvent:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    prompt_cache_hit_tokens: int | None = None
+    prompt_cache_miss_tokens: int | None = None
     input_chars: int | None = None
     output_chars: int | None = None
     duration_ms: int | None = None
