@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.6.3 - 2026-08-20
+
+### Changed
+
+- Scheduled the DeepSeek publication stage explicitly in UTC off-peak hours
+  while keeping the public report publish time on the established local
+  schedule.
+- Reduced the default LLM clustering batch from 120 to 60 articles, preserving
+  recursive recovery for failed sub-batches and the final display-level
+  duplicate resolver.
+
+### Added
+
+- Persisted prompt-cache hit and miss token counts alongside LLM telemetry.
+  DeepSeek and LiteLLM cache usage shapes are recognized without converting
+  absent values into misleading zeroes.
+- Associated all staged LLM calls, including parse failures, with the report
+  date being produced so daily token-cost reporting is complete.
+
 ## v0.6.2 - 2026-08-13
 
 ### Fixed
