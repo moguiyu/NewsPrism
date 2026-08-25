@@ -622,6 +622,11 @@ class TestPerspectivesContext:
         assert 'href="/2026-08-14/"' in cn_html  # crosslink back to English root
         assert 'href="/cn/archive/"' in cn_html
 
+        root_logos = lxml_html.fromstring(root_html).xpath('//a[contains(@class, "logo")]')
+        cn_logos = lxml_html.fromstring(cn_html).xpath('//a[contains(@class, "logo")]')
+        assert root_logos and all(logo.get("href") == "/" for logo in root_logos)
+        assert cn_logos and all(logo.get("href") == "/cn/" for logo in cn_logos)
+
         # hreflang pair on both pages: zh→/cn/, en→root, x-default→root
         for html in (root_html, cn_html):
             assert '<link rel="alternate" hreflang="zh" href="https://news.moguiyu.top/cn/2026-08-14/"' in html
@@ -647,6 +652,43 @@ class TestPerspectivesContext:
         assert "<h1>全部日报归档</h1>" in cn_archive
         assert 'href="/cn/2026-08-14/"' in cn_archive
 
+    def test_staged_dual_edition_does_not_mutate_public_output(self, renderer, tmp_path):
+        """Staging both editions must leave public reports and indexes untouched."""
+        renderer.output_dir = tmp_path
+        renderer.english_edition_enabled = True
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="World News",
+                articles=[Article(
+                    url="https://reuters.com/staged-edition",
+                    title="Staged edition story",
+                    source_name="Reuters",
+                    published_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+                    content="Body.",
+                )],
+            ),
+            summary="**中文头条**\n\n正文。",
+            summary_en="**English headline**\n\nEnglish body.",
+            short_topic_name="中文专题",
+            short_topic_name_en="English topic",
+            perspectives={},
+        )
+
+        renderer.render(
+            [summary],
+            date(2026, 8, 25),
+            report_subdir=Path("staging"),
+            update_latest=False,
+            write_public_indexes=False,
+        )
+
+        assert (tmp_path / "staging" / "2026-08-25" / "index.html").exists()
+        assert (tmp_path / "staging" / "cn" / "2026-08-25" / "index.html").exists()
+        assert not (tmp_path / "cn" / "2026-08-25").exists()
+        assert not (tmp_path / "latest").exists()
+        assert not (tmp_path / "cn" / "latest").exists()
+        assert not (tmp_path / "sitemap.xml").exists()
+
     def test_no_english_content_falls_back_to_zh_root(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         renderer.report_base_url = "https://news.moguiyu.top"
@@ -665,20 +707,22 @@ class TestPerspectivesContext:
         html_path = renderer.render([summary], date(2026, 8, 14))
         html = html_path.read_text(encoding="utf-8")
 
-        # Fallback: root stays Chinese, no /cn twin, no crosslink
+        # Fallback: root stays Chinese, and /cn remains a current Chinese route.
         assert '<html lang="zh-CN" data-lang="zh"' in html
-        assert '<link rel="canonical" href="https://news.moguiyu.top/2026-08-14/"' in html
+        assert '<link rel="canonical" href="https://news.moguiyu.top/cn/2026-08-14/"' in html
         assert "language_crosslink" not in html
         assert 'class="lang-btn"' not in html
-        assert not (tmp_path / "cn" / "2026-08-14").exists()
+        cn_html = (tmp_path / "cn" / "2026-08-14" / "index.html").read_text(encoding="utf-8")
+        assert '<html lang="zh-CN" data-lang="zh"' in cn_html
+        assert '<link rel="canonical" href="https://news.moguiyu.top/cn/2026-08-14/"' in cn_html
 
         payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
         assert payload["default_language"] == "zh"
 
-        # Sitemap: single zh entry at the root URL
+        # Sitemap: the canonical Chinese entry is under /cn/.
         sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
-        assert "<loc>https://news.moguiyu.top/2026-08-14/</loc>" in sitemap
-        assert "/cn/2026-08-14/" not in sitemap
+        assert "<loc>https://news.moguiyu.top/cn/2026-08-14/</loc>" in sitemap
+        assert "<loc>https://news.moguiyu.top/2026-08-14/</loc>" not in sitemap
 
     def test_separate_edition_disabled_keeps_zh_root(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -2007,7 +2051,7 @@ class TestHotTopics:
         assert ".overview-anchors {\n        display: none;" in html
         assert '<div class="footer-stats" aria-label="report stats">' in html
         assert '<nav class="cat-tabs">' in html
-        assert '<a class="logo" href="./" aria-label="Refresh NewsPrism" title="Refresh NewsPrism" onclick="window.location.reload(); return false;">NewsPrism</a>' in html
+        assert '<a class="logo" href="/" aria-label="NewsPrism latest edition" title="NewsPrism latest edition">NewsPrism</a>' in html
         assert 'data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme(\'system\')">🖥</button>' in html
         assert 'data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme(\'light\')">☀️</button>' in html
         assert 'data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme(\'dark\')">🌙</button>' in html
@@ -2015,7 +2059,7 @@ class TestHotTopics:
         tree = lxml_html.fromstring(html)
         assert not tree.xpath('//*[@class="site-header"]//*[@aria-label="report stats"]')
         assert tree.xpath('//footer//*[@aria-label="report stats"]')
-        assert len(tree.xpath('//a[@class="logo" and @href="./" and contains(@onclick, "window.location.reload")]')) == 2
+        assert len(tree.xpath('//a[@class="logo" and @href="/"]')) == 2
         assert not tree.xpath('//*[@class="site-header"]//*[@aria-label="report day selector"]')
         assert tree.xpath('//footer//*[@aria-label="report day selector"]')
         assert tree.xpath('//footer//button[contains(@class, "back-to-top")]')

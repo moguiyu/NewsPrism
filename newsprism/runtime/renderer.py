@@ -1257,14 +1257,15 @@ class HtmlRenderer:
         positive_ctx: list[dict],
         hot_topics_ctx: list[dict],
         template,
+        output_root: Path,
+        english_available: bool,
         update_latest: bool,
     ) -> None:
-        """Render the Chinese edition at /cn/{date}/ for a dual-edition day.
+        """Render the Chinese edition at /cn/{date}/ for a published day.
 
-        The root /{date}/ page of a dual day is the English edition (site
-        default); this writes the Chinese twin with its own /cn/ canonical and
-        zh_CN SEO context. Called only when the separate edition is enabled and
-        English content exists.
+        The root /{date}/ page can be English or the Chinese fallback; this
+        page remains the stable Chinese edition and its canonical URL lives
+        under /cn/ in both cases.
         """
         date_str = report_date.isoformat()
         common_cn = dict(common)
@@ -1275,18 +1276,20 @@ class HtmlRenderer:
                     {"headline": c.get("headline"), "headline_en": c.get("headline_en")}
                     for c in clusters_ctx
                 ],
-                True,
+                english_available,
                 edition="zh",
                 zh_under_cn=True,
             )
         )
         common_cn["default_language"] = "zh"
-        common_cn["available_languages"] = ["zh", "en"]
+        common_cn["available_languages"] = ["zh", "en"] if english_available else ["zh"]
+        common_cn["home_href"] = "/cn/"
         common_cn["day_links"] = self._build_day_links(report_date, edition="zh")
         common_cn["archive_link"] = "/cn/archive/"
-        common_cn["language_crosslink"] = f"/{date_str}/"
+        if english_available:
+            common_cn["language_crosslink"] = f"/{date_str}/"
 
-        cn_dir = self.output_dir / "cn" / date_str
+        cn_dir = output_root / "cn" / date_str
         cn_dir.mkdir(parents=True, exist_ok=True)
         page = template.render(
             **common_cn,
@@ -1301,7 +1304,7 @@ class HtmlRenderer:
         cn_index.chmod(0o644)
 
         if update_latest:
-            cn_latest = self.output_dir / "cn" / "latest"
+            cn_latest = output_root / "cn" / "latest"
             if cn_latest.is_symlink():
                 cn_latest.unlink()
             try:
@@ -1423,6 +1426,7 @@ class HtmlRenderer:
         positive_summaries: list[ClusterSummary] | None = None,
         report_subdir: str | Path | None = None,
         update_latest: bool = True,
+        write_public_indexes: bool = True,
     ) -> Path:
         date_str = report_date.isoformat()
         report_base = self.output_dir / Path(report_subdir) if report_subdir else self.output_dir
@@ -1744,6 +1748,7 @@ class HtmlRenderer:
             # Root is the English edition on dual days; falls back to Chinese
             # when no English content exists (data.json records which).
             "default_language": "en" if dual_edition else "zh",
+            "home_href": "/",
             "day_links": self._build_day_links(
                 report_date, day_link_count, edition="en" if dual_edition else "zh"
             ),
@@ -1757,7 +1762,7 @@ class HtmlRenderer:
                 clusters_json,
                 english_available,
                 edition="en" if dual_edition else "zh",
-                zh_under_cn=dual_edition,
+                zh_under_cn=self.english_edition_enabled,
             )
         )
         # Umami tracker values — present only when configured (see template).
@@ -1804,7 +1809,7 @@ class HtmlRenderer:
             + common["focus_storyline_story_count"]
             + common["hot_topic_story_count"]
         )
-        if dual_edition:
+        if self.english_edition_enabled and total_story_count > 0:
             self._render_cn_edition(
                 report_date,
                 common,
@@ -1813,6 +1818,8 @@ class HtmlRenderer:
                 positive_ctx,
                 hot_topics_ctx,
                 template,
+                report_base,
+                english_available,
                 update_latest=update_latest and total_story_count > 0,
             )
         latest = self.output_dir / "latest"
@@ -1830,7 +1837,8 @@ class HtmlRenderer:
                 date_str,
             )
 
-        self._write_seo_files(report_date)
+        if write_public_indexes:
+            self._write_seo_files(report_date)
         logger.info("HTML report written: %s", html_path)
         return html_path
 

@@ -2657,7 +2657,7 @@
   <h1 class="sr-only">NewsPrism · {{ report_date_display }} {{ day_name }} 全球新闻多角度解读</h1>
 
   <div class="mobile-brand-bar">
-    <a class="logo" href="./" aria-label="Refresh NewsPrism" title="Refresh NewsPrism" onclick="window.location.reload(); return false;">NewsPrism</a>
+    <a class="logo" href="{{ home_href }}" aria-label="NewsPrism latest edition" title="NewsPrism latest edition">NewsPrism</a>
     <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
   </div>
 
@@ -2665,7 +2665,7 @@
     <div class="header-inner">
       <div class="header-top">
         <div class="header-brand">
-          <a class="logo" href="./" aria-label="Refresh NewsPrism" title="Refresh NewsPrism" onclick="window.location.reload(); return false;">NewsPrism</a>
+          <a class="logo" href="{{ home_href }}" aria-label="NewsPrism latest edition" title="NewsPrism latest edition">NewsPrism</a>
           <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
         </div>
         <div class="header-actions">

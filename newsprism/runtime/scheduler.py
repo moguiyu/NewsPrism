@@ -343,9 +343,9 @@ class Scheduler:
         data_path = self._staging_report_dir(report_date) / "data.json"
         return json.loads(data_path.read_text(encoding="utf-8"))
 
-    def _promote_staged_report(self, report_date: date) -> Path:
-        staged_dir = self._staging_report_dir(report_date)
-        final_dir = self.output_dir / report_date.isoformat()
+    def _promote_staged_report(self, report_date: date, edition_prefix: Path = Path()) -> Path:
+        staged_dir = self.staging_dir / edition_prefix / report_date.isoformat()
+        final_dir = self.output_dir / edition_prefix / report_date.isoformat()
         if not staged_dir.exists():
             raise FileNotFoundError(f"staged report directory missing: {staged_dir}")
         if final_dir.exists() or final_dir.is_symlink():
@@ -357,6 +357,15 @@ class Scheduler:
         shutil.move(str(staged_dir), str(final_dir))
         return final_dir
 
+    def _replace_latest_symlink(self, output_root: Path, report_date: date) -> None:
+        output_root.mkdir(parents=True, exist_ok=True)
+        latest = output_root / "latest"
+        if latest.is_symlink() or latest.is_file():
+            latest.unlink()
+        elif latest.exists():
+            shutil.rmtree(latest)
+        latest.symlink_to(report_date.isoformat())
+
     def _promote_latest_symlink(self, report_date: date, total_story_count: int) -> None:
         if total_story_count <= 0:
             logger.info(
@@ -364,15 +373,11 @@ class Scheduler:
                 report_date.isoformat(),
             )
             return
-        latest = self.output_dir / "latest"
-        if latest.is_symlink() or latest.is_file():
-            latest.unlink()
-        elif latest.exists():
-            shutil.rmtree(latest)
         try:
-            latest.symlink_to(report_date.isoformat())
+            self._replace_latest_symlink(self.output_dir, report_date)
+            self._replace_latest_symlink(self.output_dir / "cn", report_date)
         except OSError:
-            logger.warning("Push promotion: failed to update latest symlink", exc_info=True)
+            logger.warning("Push promotion: failed to update latest symlinks", exc_info=True)
 
         cfg_output = getattr(getattr(self, "cfg", None), "output", None)
         day_nav_cfg = cfg_output.get("day_navigation", {}) if isinstance(cfg_output, dict) else {}
@@ -380,6 +385,7 @@ class Scheduler:
         renderer = getattr(self, "renderer", None)
         if renderer is not None:
             renderer._promote_day_symlinks(report_date, day_link_count)
+            renderer._write_seo_files(report_date)
 
     def _schedule_push_retry(self, report_date: date, attempt: int) -> bool:
         if not self.push_retry_enabled or self._apscheduler is None:
@@ -756,6 +762,7 @@ class Scheduler:
                 positive_summaries=positive_summaries,
                 report_subdir=self._staging_subdir if not push_after_render else None,
                 update_latest=push_after_render,
+                write_public_indexes=push_after_render,
             )
             if push_after_render:
                 publish_summaries = [
@@ -823,7 +830,11 @@ class Scheduler:
             payload = self._load_staged_render_payload(today)
             total_story_count = int(payload.get("total_cluster_count", 0) or 0)
             data_path = staged_dir / "data.json"
+            staged_cn_dir = self.staging_dir / "cn" / today.isoformat()
+            if not (staged_cn_dir / "index.html").exists():
+                raise FileNotFoundError(f"staged Chinese report missing: {staged_cn_dir / 'index.html'}")
             final_dir = self._promote_staged_report(today)
+            self._promote_staged_report(today, Path("cn"))
             self._promote_latest_symlink(today, total_story_count)
             await self.publisher.publish_rendered(final_dir / "data.json", today)
             self._clear_publish_complete()

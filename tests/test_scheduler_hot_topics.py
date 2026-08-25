@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from datetime import date
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -48,6 +49,45 @@ def _article(source: str, title: str, hours_ago: int = 0) -> Article:
         published_at=datetime.now(tz=timezone.utc) - timedelta(hours=hours_ago),
         content=f"{title} body",
     )
+
+
+def test_push_promotes_both_latest_language_editions(tmp_path):
+    """A staged Chinese page must advance /cn/ with the root latest page."""
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler._pipeline_lock = asyncio.Lock()
+    scheduler.schedule_timezone = timezone.utc
+    scheduler.output_dir = tmp_path
+    scheduler.staging_dir = tmp_path / "staging"
+    scheduler.publish_complete_flag = scheduler.staging_dir / ".publish_complete"
+    scheduler.cfg = SimpleNamespace(output={"day_navigation": {"days": 3}})
+    scheduler.renderer = SimpleNamespace(
+        _promote_day_symlinks=lambda *_args: None,
+        _write_seo_files=lambda *_args: None,
+    )
+
+    published = []
+
+    async def publish_rendered(data_path, report_date):
+        published.append((data_path, report_date))
+
+    scheduler.publisher = SimpleNamespace(publish_rendered=publish_rendered)
+    report_date = date(2026, 8, 25)
+    staged_root = scheduler.staging_dir / report_date.isoformat()
+    staged_cn = scheduler.staging_dir / "cn" / report_date.isoformat()
+    staged_root.mkdir(parents=True)
+    staged_cn.mkdir(parents=True)
+    (staged_root / "index.html").write_text("English", encoding="utf-8")
+    (staged_root / "data.json").write_text('{"total_cluster_count": 1}', encoding="utf-8")
+    (staged_cn / "index.html").write_text("Chinese", encoding="utf-8")
+    scheduler._write_publish_complete(report_date, total_story_count=1)
+
+    asyncio.run(scheduler.push(report_date))
+
+    assert (tmp_path / "2026-08-25" / "index.html").read_text(encoding="utf-8") == "English"
+    assert (tmp_path / "cn" / "2026-08-25" / "index.html").read_text(encoding="utf-8") == "Chinese"
+    assert os.readlink(tmp_path / "latest") == "2026-08-25"
+    assert os.readlink(tmp_path / "cn" / "latest") == "2026-08-25"
+    assert published == [(tmp_path / "2026-08-25" / "data.json", report_date)]
 
 
 def _cluster(
@@ -293,5 +333,3 @@ def _positive_summary(source: str, url: str, headline: str) -> ClusterSummary:
         summary=f"**{headline}**\n\n{headline} body.",
         perspectives={},
     )
-
-
