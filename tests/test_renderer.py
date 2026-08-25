@@ -464,6 +464,25 @@ class TestPerspectivesContext:
         sitemap = (tmp_path / "sitemap.xml").read_text(encoding="utf-8")
         assert "<loc>https://news.moguiyu.top/archive/</loc>" in sitemap
 
+    def test_archive_logo_returns_to_its_edition_latest_page(self, renderer, tmp_path):
+        """Archive navigation must retain the reader's selected language."""
+        renderer.output_dir = tmp_path
+        report_dir = tmp_path / "2026-08-14"
+        report_dir.mkdir()
+        (report_dir / "index.html").write_text("report", encoding="utf-8")
+
+        renderer._write_seo_files(date(2026, 8, 14))
+
+        en_archive = lxml_html.fromstring(
+            (tmp_path / "archive" / "index.html").read_text(encoding="utf-8")
+        )
+        cn_archive = lxml_html.fromstring(
+            (tmp_path / "cn" / "archive" / "index.html").read_text(encoding="utf-8")
+        )
+
+        assert en_archive.xpath('//a[@class="logo"]')[0].get("href") == "/"
+        assert cn_archive.xpath('//a[@class="logo"]')[0].get("href") == "/cn/"
+
     def test_sitemap_lastmod_follows_index_mtime(self, renderer, tmp_path):
         import os
 
