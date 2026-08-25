@@ -32,6 +32,9 @@ def test_push_promotes_staged_report_and_updates_latest(tmp_path):
     staged_dir = scheduler._staging_report_dir(report_date)
     staged_dir.mkdir(parents=True)
     (staged_dir / "index.html").write_text("<html>staged</html>", encoding="utf-8")
+    staged_cn_dir = scheduler.staging_dir / "cn" / report_date.isoformat()
+    staged_cn_dir.mkdir(parents=True)
+    (staged_cn_dir / "index.html").write_text("<html>暂存中文报告</html>", encoding="utf-8")
     (staged_dir / "data.json").write_text(
         json.dumps(
             {
@@ -61,10 +64,14 @@ def test_push_promotes_staged_report_and_updates_latest(tmp_path):
     asyncio.run(scheduler.push(report_date=report_date))
 
     final_dir = scheduler.output_dir / report_date.isoformat()
+    final_cn_dir = scheduler.output_dir / "cn" / report_date.isoformat()
     assert final_dir.exists()
+    assert final_cn_dir.exists()
     assert not staged_dir.exists()
+    assert not staged_cn_dir.exists()
     assert not scheduler.publish_complete_flag.exists()
     assert os.readlink(scheduler.output_dir / "latest") == report_date.isoformat()
+    assert os.readlink(scheduler.output_dir / "cn" / "latest") == report_date.isoformat()
     assert scheduler.publisher.calls == [(final_dir / "data.json", report_date)]
 
 

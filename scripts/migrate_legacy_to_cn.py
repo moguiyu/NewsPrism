@@ -13,7 +13,7 @@ from pathlib import Path
 out = Path("output")
 cn = out / "cn"
 cn.mkdir(exist_ok=True)
-base = "https://news.moguiyu.top"
+base = "https://news.grayzhang.com"
 patched = linked = skipped_dual = 0
 
 DATE_HREF = re.compile(r'href="/(\d{4}-\d{2}-\d{2})/"')
