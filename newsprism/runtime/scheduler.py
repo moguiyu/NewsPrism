@@ -286,6 +286,36 @@ class Scheduler:
                     },
                 )
 
+    def _previous_clusters_for_incremental(
+        self, report_date: date
+    ) -> list[ArticleCluster]:
+        """Load the previous day's clusters as in-memory ArticleCluster objects.
+
+        Used only when ``clustering.incremental_enabled`` is true. The returned
+        clusters are passed to LLMClusterer so it can cluster only new/changed
+        articles and merge them into the existing event families.
+        """
+        if not self.cfg.clustering.get("incremental_enabled", False):
+            return []
+        previous_date = report_date - timedelta(days=1)
+        records = get_clusters_for_date(previous_date.isoformat())
+        result: list[ArticleCluster] = []
+        for record in records:
+            articles = get_articles_by_ids(list(record.article_ids or []))
+            if not articles:
+                continue
+            cluster = ArticleCluster(
+                topic_category=record.topic_category,
+                articles=articles,
+            )
+            cluster.storyline_key = record.storyline_key
+            cluster.storyline_name = record.storyline_name
+            cluster.storyline_role = record.storyline_role
+            cluster.storyline_confidence = record.storyline_confidence
+            cluster.storyline_state = record.storyline_state or cluster.storyline_state
+            result.append(cluster)
+        return result
+
     def _resolve_output_path(self, configured: str | None, default: str) -> Path:
         path = Path(configured or default)
         if path.is_absolute():
@@ -459,17 +489,22 @@ class Scheduler:
         report_date: date | None = None,
         articles_override: list | None = None,
         push_after_render: bool = True,
+        shadow: bool = False,
     ) -> None:
-        """Phase 2: Cluster → summarize → render report, then optionally push Telegram."""
+        """Phase 2: Cluster → summarize → render report, then optionally push Telegram.
+
+        In shadow mode the pipeline writes to output/shadow/<date> and does not
+        mutate the live database or push anything.
+        """
         async with self._pipeline_lock:
             started = time.perf_counter()
-            phase_name = "PUBLISH_STAGE" if not push_after_render else "PUBLISH"
+            phase_name = "SHADOW_PUBLISH" if shadow else ("PUBLISH_STAGE" if not push_after_render else "PUBLISH")
             logger.info("=== %s phase started ===", phase_name)
             today = report_date or date.today()
 
             if articles_override is None:
                 existing_article_ids = get_report_article_ids(today.isoformat())
-                if existing_article_ids:
+                if existing_article_ids and not shadow:
                     reset_count = reset_articles_clustered(existing_article_ids)
                     deleted_count = delete_clusters_for_date(today.isoformat())
                     logger.info(
@@ -478,13 +513,25 @@ class Scheduler:
                         deleted_count,
                         today.isoformat(),
                     )
-                max_age_hours = self.cfg.clustering.get("time_window_hours", 48)
-                articles = get_unclustered_articles(max_age_hours=max_age_hours)
-                logger.info(
-                    "Publish input: %d unclustered articles found within %d hours",
-                    len(articles),
-                    max_age_hours,
-                )
+                if shadow and existing_article_ids:
+                    articles = sorted(
+                        get_articles_by_ids(existing_article_ids),
+                        key=lambda article: article.published_at,
+                        reverse=True,
+                    )
+                    logger.info(
+                        "Shadow publish input: %d replay articles from published report %s",
+                        len(articles),
+                        today.isoformat(),
+                    )
+                else:
+                    max_age_hours = self.cfg.clustering.get("time_window_hours", 48)
+                    articles = get_unclustered_articles(max_age_hours=max_age_hours)
+                    logger.info(
+                        "Publish input: %d unclustered articles found within %d hours",
+                        len(articles),
+                        max_age_hours,
+                    )
             else:
                 articles = sorted(
                     articles_override,
@@ -507,8 +554,13 @@ class Scheduler:
                 logger.warning("No unclustered articles found — skipping %s", phase_name.lower())
                 return
 
+            previous_clusters = self._previous_clusters_for_incremental(today)
             clusters = _run_llm_stage(
-                today.isoformat(), self.clusterer.cluster, articles, report_date=today.isoformat()
+                today.isoformat(),
+                self.clusterer.cluster,
+                articles,
+                report_date=today.isoformat(),
+                previous_clusters=previous_clusters,
             )
             clusters = [cluster for cluster in clusters if _cluster_has_real_article(cluster)]
             if not clusters:
@@ -589,6 +641,8 @@ class Scheduler:
                         continue
                     if article.id is not None:
                         continue
+                    if shadow:
+                        continue
                     article.id = insert_article(article)
                     if article.id is None and callable(get_article_id_by_url):
                         article.id = get_article_id_by_url(article.url)
@@ -599,7 +653,8 @@ class Scheduler:
                 if _cluster_has_real_article(cluster)
                 and not (cluster.impact and cluster.impact.status == "suppress")
             ]
-            self._persist_impact_evaluations(candidate_clusters, today)
+            if not shadow:
+                self._persist_impact_evaluations(candidate_clusters, today)
             logger.info(
                 "Impact selection: %s; %d clusters retained for summarization",
                 dict(Counter(c.impact.status for c in selected_clusters if c.impact)),
@@ -664,35 +719,36 @@ class Scheduler:
                 cs.freshness_state = freshness.state
                 cs.continues_cluster_id = freshness.continues_cluster_id
 
-                # Store cluster with freshness metadata
-                cluster_record = Cluster(
-                    topic_category=cs.cluster.topic_category,
-                    article_ids=[a.id for a in cs.cluster.articles if a.id],
-                    summary=cs.summary,
-                    perspectives=cs.perspectives,
-                    report_date=today.isoformat(),
-                    freshness_state=freshness.state,
-                    continues_cluster_id=freshness.continues_cluster_id,
-                    storyline_key=cs.cluster.storyline_key,
-                    storyline_name=cs.cluster.storyline_name,
-                    storyline_role=cs.cluster.storyline_role,
-                    storyline_confidence=cs.cluster.storyline_confidence,
-                    storyline_state=cs.storyline_state or cs.cluster.storyline_state,
-                    quality_status=cs.quality_status,
-                    quality_score=cs.quality_score,
-                )
-                cluster_id = insert_cluster(cluster_record)
-                cs.cluster_db_id = cluster_id
-                if cs.cluster.impact is not None:
-                    with contextlib.suppress(Exception):
-                        link_cluster_evaluation(
-                            today.isoformat(),
-                            cs.cluster.impact.cluster_key,
-                            cluster_id,
-                            selected=True,
-                        )
-                upsert_storyline_state(cluster_id, cs, today.isoformat())
-                mark_articles_clustered([a.id for a in cs.cluster.articles if a.id])
+                if not shadow:
+                    # Store cluster with freshness metadata.
+                    cluster_record = Cluster(
+                        topic_category=cs.cluster.topic_category,
+                        article_ids=[a.id for a in cs.cluster.articles if a.id],
+                        summary=cs.summary,
+                        perspectives=cs.perspectives,
+                        report_date=today.isoformat(),
+                        freshness_state=freshness.state,
+                        continues_cluster_id=freshness.continues_cluster_id,
+                        storyline_key=cs.cluster.storyline_key,
+                        storyline_name=cs.cluster.storyline_name,
+                        storyline_role=cs.cluster.storyline_role,
+                        storyline_confidence=cs.cluster.storyline_confidence,
+                        storyline_state=cs.storyline_state or cs.cluster.storyline_state,
+                        quality_status=cs.quality_status,
+                        quality_score=cs.quality_score,
+                    )
+                    cluster_id = insert_cluster(cluster_record)
+                    cs.cluster_db_id = cluster_id
+                    if cs.cluster.impact is not None:
+                        with contextlib.suppress(Exception):
+                            link_cluster_evaluation(
+                                today.isoformat(),
+                                cs.cluster.impact.cluster_key,
+                                cluster_id,
+                                selected=True,
+                            )
+                    upsert_storyline_state(cluster_id, cs, today.isoformat())
+                    mark_articles_clustered([a.id for a in cs.cluster.articles if a.id])
 
                 kept_summaries.append(cs)
 
@@ -754,17 +810,23 @@ class Scheduler:
                 hot_topic_story_count,
             )
 
+            shadow_subdir = "shadow" if shadow else None
             html_path = self.renderer.render(
                 regular_summaries,
                 today,
                 hot_topics=hot_topics,
                 focus_storylines=[],
                 positive_summaries=positive_summaries,
-                report_subdir=self._staging_subdir if not push_after_render else None,
-                update_latest=push_after_render,
-                write_public_indexes=push_after_render,
+                report_subdir=shadow_subdir or (self._staging_subdir if not push_after_render else None),
+                update_latest=push_after_render and not shadow,
+                write_public_indexes=push_after_render and not shadow,
             )
-            if push_after_render:
+            if shadow:
+                logger.info(
+                    "Shadow report written to %s (no DB writes, no push)",
+                    html_path,
+                )
+            elif push_after_render:
                 publish_summaries = [
                     summary
                     for family in hot_topics

@@ -72,6 +72,8 @@ class Config:
     # From env
     litellm_api_key: str = field(default_factory=lambda: os.environ.get("LITELLM_API_KEY", ""))
     litellm_model: str = field(default_factory=lambda: os.environ.get("LITELLM_MODEL", "deepseek/deepseek-chat"))
+    litellm_fallback_model: str = field(default_factory=lambda: os.environ.get("LLM_FALLBACK_MODEL", os.environ.get("LITELLM_MODEL", "deepseek/deepseek-chat")))
+    litellm_stage_models: dict[str, str] = field(default_factory=dict)
     litellm_base_url: str = field(default_factory=lambda: os.environ.get("LITELLM_BASE_URL", "https://api.deepseek.com"))
     telegram_bot_token: str = field(default_factory=lambda: os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.environ.get("TELEGRAM_CHAT_ID", ""))
@@ -265,5 +267,7 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         topic_equivalence=raw.get("clustering", {}).get("topic_equivalence", {}),
         use_llm_clustering=bool(raw.get("clustering", {}).get("use_llm_clustering", True)),
         llm_telemetry_enabled=bool(raw.get("llm_telemetry", {}).get("enabled", False)),
+        litellm_fallback_model=str((raw.get("llm", {}) or {}).get("fallback_model") or os.environ.get("LLM_FALLBACK_MODEL") or os.environ.get("LITELLM_MODEL", "deepseek/deepseek-chat")),
+        litellm_stage_models=dict((raw.get("llm", {}) or {}).get("stage_models", {}) or {}),
         certifications=certifications,
     )

@@ -2622,6 +2622,46 @@
         border-bottom-color: var(--theme-strong-rule);
       }
     }
+
+    .footer-tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .footer-tools .theme-toggle,
+    .footer-tools .language-toggle {
+      border-color: var(--theme-footer-ink);
+      background: transparent;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
+    .footer-tools .theme-btn {
+      background: transparent;
+      border: 0;
+      color: var(--theme-footer-ink);
+    }
+
+    .footer-tools .theme-btn.active {
+      background: var(--theme-footer-ink);
+      color: var(--theme-footer-bg);
+    }
+
+    .footer-tools .lang-btn {
+      background: var(--theme-footer-ink);
+      color: var(--theme-footer-bg);
+    }
+
+    .footer-tools .lang-btn:hover,
+    .footer-tools .lang-btn:focus-visible {
+      background: var(--theme-footer-bg);
+      color: var(--theme-footer-ink);
+      border-color: var(--theme-footer-ink);
+    }
   </style>
 
   {% if json_ld %}<script type="application/ld+json">{{ json_ld | safe }}</script>{% endif %}
@@ -2667,22 +2707,6 @@
         <div class="header-brand">
           <a class="logo" href="{{ home_href }}" aria-label="NewsPrism latest edition" title="NewsPrism latest edition">NewsPrism</a>
           <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
-        </div>
-        <div class="header-actions">
-          <div class="header-tools">
-            <div class="theme-toggle" aria-label="theme toggle">
-              <button type="button" class="theme-btn active" data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme('system')">🖥</button>
-              <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">☀️</button>
-              <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">🌙</button>
-            </div>
-          {# Language editions are path-isolated (root = English, /cn/ = Chinese);
-             the header link navigates to the other edition's URL. #}
-          {% if language_crosslink %}
-            <div class="language-toggle" aria-label="language edition">
-              <a class="lang-btn" href="{{ language_crosslink }}" title="{{ '切换到中文版' if default_language == 'en' else 'Switch to the English edition' }}">{{ '中文' if default_language == 'en' else 'ENG' }}</a>
-            </div>
-          {% endif %}
-          </div>
         </div>
       </div>
       <nav class="cat-tabs">
@@ -2939,6 +2963,19 @@
         <a class="footer-project-link" href="https://github.com/moguiyu/NewsPrism/issues" target="_blank" rel="noopener">{{ bilingual_text('反馈建议', 'Feedback') }}</a>
         <a class="footer-project-link" href="mailto:evoke-ahoy-liquefy@duck.com">{{ bilingual_text('邮件联系', 'Email') }}</a>
       </nav>
+    </div>
+    <div class="footer-tools" aria-label="appearance and language">
+      <div class="theme-toggle" role="group" aria-label="Color scheme">
+        <button type="button" class="theme-btn active" data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme('system')">🖥</button>
+        <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">☀️</button>
+        <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">🌙</button>
+      </div>
+      {# Language editions are path-isolated (root = English, /cn/ = Chinese). #}
+      {% if language_crosslink %}
+      <div class="language-toggle" aria-label="language edition">
+        <a class="lang-btn" href="{{ language_crosslink }}" title="{{ '切换到中文版' if default_language == 'en' else 'Switch to the English edition' }}">{{ '中文' if default_language == 'en' else 'ENG' }}</a>
+      </div>
+      {% endif %}
     </div>
     <div class="footer-nav">
        {% if day_links %}

@@ -270,3 +270,56 @@ def test_tracked_completion_records_api_error(monkeypatch, tmp_path):
     with sqlite3.connect(db) as conn:
         row = conn.execute("SELECT stage, status FROM llm_call_events").fetchone()
     assert row == ("impact", "api_error")
+
+
+def test_resolve_stage_models_uses_override_and_fallback():
+    from newsprism.service.llm_telemetry import resolve_stage_models
+
+    primary, fallback = resolve_stage_models(
+        stage="seeker_keyword",
+        default_model="openai/deepseek-v4-flash",
+        fallback_model="openai/deepseek-v4-flash",
+        stage_models={"seeker_keyword": "openai/cheap"},
+    )
+    assert primary == "openai/cheap"
+    assert fallback == "openai/deepseek-v4-flash"
+
+
+def test_resolve_stage_models_uses_default_when_no_override():
+    from newsprism.service.llm_telemetry import resolve_stage_models
+
+    primary, fallback = resolve_stage_models(
+        stage="clustering",
+        default_model="openai/deepseek-v4-flash",
+        fallback_model="openai/deepseek-v4-flash",
+        stage_models={"seeker_keyword": "openai/cheap"},
+    )
+    assert primary == "openai/deepseek-v4-flash"
+    assert fallback == "openai/deepseek-v4-flash"
+
+
+def test_tracked_completion_with_fallback_uses_fallback_on_api_error(monkeypatch, tmp_path):
+    from newsprism.service.llm_telemetry import tracked_completion_with_fallback
+
+    db = tmp_path / "newsprism.db"
+    init_db(db)
+    calls: list[str] = []
+
+    def fake_completion(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "openai/cheap":
+            raise RuntimeError("primary down")
+        return _fake_response("{}")
+
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    response = tracked_completion_with_fallback(
+        stage="seeker_keyword",
+        enabled=True,
+        model="openai/deepseek-v4-flash",
+        fallback_model="openai/deepseek-v4-flash",
+        stage_models={"seeker_keyword": "openai/cheap"},
+        messages=[{"role": "user", "content": "hello"}],
+        db_path=db,
+    )
+    assert calls == ["openai/cheap", "openai/deepseek-v4-flash"]
+    assert response.choices[0].message.content == "{}"

@@ -1529,3 +1529,55 @@ def test_identity_resolution_registry_reject_skips_verifier(monkeypatch):
     domains, reason = seeker._resolve_official_domains(target)
     assert domains == []
     assert reason == "not_official_source"
+
+
+def test_verify_candidate_short_circuits_reviewed_domain(monkeypatch):
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "example.com": {
+            "verdict": "country_editorial",
+            "region": "us",
+            "entity": "Example",
+        }
+    }
+    seeker = ActiveSeeker(cfg)
+    article = _article("Example", "Title", url="https://example.com/story")
+    target = VoiceTarget(region="us", label="Example", role="company")
+
+    def fail(**kwargs):
+        raise AssertionError("LLM should not be called for reviewed domain")
+
+    monkeypatch.setattr("newsprism.service.seeker.litellm.completion", fail)
+    identity = seeker._verify_candidate(article, target, "country")
+    assert identity.source_type == "country_editorial"
+    assert identity.publisher_region == "us"
+
+
+def test_batch_localize_search_keywords(monkeypatch):
+    from types import SimpleNamespace
+
+    import litellm
+
+    seeker = ActiveSeeker(_config())
+    seeker.evaluator_model = "test-model"
+    cluster = _cluster()
+
+    def fake_completion(**kwargs):
+        # Ensure the model routing call is used for seeker_localize.
+        assert kwargs["model"] == "test-model"
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(
+                content='{"results": [{"language": "fr", "query": "requête FR"}, '
+                        '{"language": "ja", "query": "日本語クエリ"}]}'
+            ))]
+        )
+
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    results = seeker._batch_localize_search_keywords(
+        cluster=cluster,
+        region="fr",
+        keyword="test event local news",
+        languages=["fr", "ja"],
+    )
+    assert results["fr"] == "requête FR"
+    assert results["ja"] == "日本語クエリ"

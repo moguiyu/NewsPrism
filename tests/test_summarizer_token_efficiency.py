@@ -90,3 +90,35 @@ def test_build_prompt_can_force_chinese_output():
     prompt = summarizer._build_prompt(cluster, summarizer._format_articles(cluster), require_chinese=True)
     assert "强制要求" in prompt
     assert "简体中文" in prompt
+
+
+def test_format_articles_single_source_sends_only_lead_article():
+    summarizer = Summarizer(_config())
+    cluster = _cluster()
+    second = Article(
+        url="https://example.com/b",
+        title="Second article",
+        source_name="Reuters",  # same source -> single-source cluster
+        published_at=datetime.now(timezone.utc),
+        content="y" * 500,
+    )
+    cluster.articles.append(second)
+    text = summarizer._format_articles(cluster)
+    assert "Event title" in text
+    assert "Second article" not in text
+
+
+def test_format_articles_multisource_sends_all_articles():
+    summarizer = Summarizer(_config())
+    cluster = _cluster()
+    second = Article(
+        url="https://example.com/b",
+        title="Second article",
+        source_name="BBC",  # different source -> multi-source cluster
+        published_at=datetime.now(timezone.utc),
+        content="y" * 500,
+    )
+    cluster.articles.append(second)
+    text = summarizer._format_articles(cluster)
+    assert "Event title" in text
+    assert "Second article" in text

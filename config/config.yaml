@@ -26,6 +26,19 @@ llm_telemetry:
   # SQLite (llm_call_events). Runtime-only telemetry; never changes prompts.
   enabled: true
 
+# ─── LLM MODEL ROUTING ────────────────────────────────────────────────────────────────────────────
+llm:
+  # DeepSeek remains the high-quality fallback for low-stakes stages.
+  fallback_model: openai/deepseek-v4-flash
+  # Stage-specific cheaper/free primary models. Leave empty to use the default
+  # model for that stage.
+  stage_models:
+    seeker_keyword: ""
+    seeker_localize: ""
+    storyline_name: ""
+    summary_rewrite: ""
+    seeker_verify: ""
+
 # ─── EVOLUTION (P2) ─────────────────────────────────────────────────────────────
 evolution:
   calibration:
@@ -51,6 +64,12 @@ clustering:
   # Keep structured LLM clustering responses bounded; malformed large batches
   # retry as smaller chunks before only that chunk falls back to embeddings.
   llm_max_articles_per_call: 60
+  # Phase A: cap per-article snippet length sent to the clustering prompt.
+  article_snippet_chars: 240
+  # Phase A: cap output tokens per clustering call to avoid length-truncation waste.
+  llm_max_output_tokens: 4000
+  # Phase D: only cluster new/changed articles when previous clusters are supplied.
+  incremental_enabled: false
   # Phase 2a: collapse same-source near-duplicate event updates before the
   # LLM clustering pass. Representatives are re-expanded afterwards, so the
   # final article set is unchanged. Strict on purpose.
@@ -77,7 +96,7 @@ summarizer:
   language: "zh"
   # Phase 3a: cap body chars sent to the LLM per article. The local numeric
   # grounding gate still validates against the full stored article content.
-  article_content_chars: 1600
+  article_content_chars: 1400
   style_guide_file: "config/style-guide.md"
 
 # ─── OUTPUT ────────────────────────────────────────────────────────────────────
@@ -122,6 +141,11 @@ output:
     # Lowered from 5 → 3: most storyline families had 1-3 members and spilled
     # into the main lane even when they shared a clear storyline_key. (Issue #2)
     min_items_per_topic: 3
+    # Per-topic visible story cap (2026-08-17 product target).
+    max_items_per_topic: 10
+    # Post-freshness main-lane target; max_clusters_per_report remains the
+    # pre-summary candidate pool reserve.
+    main_lane_target: 15
     candidate_window: 40
     history_window_days: 5
     storyline_relation_batch_size: 8

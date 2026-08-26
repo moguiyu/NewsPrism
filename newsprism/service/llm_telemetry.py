@@ -44,6 +44,62 @@ def llm_run_context(*, report_date: str | None):
         _run_report_date.reset(token)
 
 
+def resolve_stage_models(
+    *,
+    stage: str,
+    default_model: str,
+    fallback_model: str | None = None,
+    stage_models: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Resolve the primary and fallback model for a telemetry stage.
+
+    ``stage_models`` maps stage names to optional cheaper/free primary models.
+    The fallback is always the configured high-quality model (or the same as
+    default when no explicit fallback is configured).
+    """
+    primary = (stage_models or {}).get(stage) or default_model
+    fallback = fallback_model or default_model
+    return primary, fallback
+
+
+def tracked_completion_with_fallback(
+    *,
+    stage: str,
+    enabled: bool,
+    model: str,
+    fallback_model: str | None = None,
+    stage_models: dict[str, str] | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Call tracked_completion using a stage-specific primary model.
+
+    On API-level failure, retry once with the fallback model. Parse failures
+    that occur after a successful response are still handled by callers.
+    """
+    primary, fallback = resolve_stage_models(
+        stage=stage,
+        default_model=model,
+        fallback_model=fallback_model,
+        stage_models=stage_models,
+    )
+    try:
+        return tracked_completion(
+            stage=stage,
+            enabled=enabled,
+            model=primary,
+            **kwargs,
+        )
+    except Exception:
+        if fallback and fallback != primary:
+            return tracked_completion(
+                stage=stage,
+                enabled=enabled,
+                model=fallback,
+                **kwargs,
+            )
+        raise
+
+
 def _effective_report_date(report_date: str | None) -> str | None:
     return report_date if report_date is not None else _run_report_date.get()
 

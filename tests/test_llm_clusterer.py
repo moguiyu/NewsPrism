@@ -96,7 +96,7 @@ def test_parse_cluster_entries_recovers_complete_objects_from_truncated_json():
     assert [entry["label"] for entry in entries] == ["one", "two"]
 
 
-def test_llm_cluster_prompt_keeps_unclustered_contract(monkeypatch):
+def test_llm_cluster_prompt_omits_unclustered_contract(monkeypatch):
     from types import SimpleNamespace
 
     import litellm
@@ -115,8 +115,76 @@ def test_llm_cluster_prompt_keeps_unclustered_contract(monkeypatch):
     clusterer._llm_cluster(articles)
 
     prompt = captured["messages"][1]["content"]
-    assert '"unclustered"' in prompt
-    assert 'Articles that do not fit any cluster go in "unclustered"' in prompt
+    assert '"unclustered"' not in prompt
+    assert 'Articles that do not fit any cluster are omitted entirely' in prompt
+
+
+def test_llm_cluster_uses_configured_snippet_chars():
+    cfg = _config()
+    cfg.clustering = {
+        "llm_min_clusters_fallback": 1,
+        "llm_max_articles_per_call": 60,
+        "article_snippet_chars": 20,
+    }
+    clusterer = LLMClusterer(cfg)
+    articles = [_article(1)]
+    articles[0].content = "x" * 100
+    payload = clusterer._article_payload(articles)
+    assert len(payload[0]["snippet"]) == 20
+
+
+def test_llm_cluster_uses_configured_max_output_tokens(monkeypatch):
+    from types import SimpleNamespace
+
+    import litellm
+
+    cfg = _config()
+    cfg.clustering = {
+        "llm_min_clusters_fallback": 1,
+        "llm_max_articles_per_call": 60,
+        "llm_max_output_tokens": 4000,
+    }
+    clusterer = LLMClusterer(cfg)
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"clusters": []}'))]
+        )
+
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    clusterer._llm_cluster([_article(1)])
+    assert captured["max_tokens"] == 4000
+
+
+def test_llm_cluster_followup_uses_configured_max_output_tokens(monkeypatch):
+    from types import SimpleNamespace
+
+    import litellm
+
+    cfg = _config()
+    cfg.clustering = {
+        "llm_min_clusters_fallback": 1,
+        "llm_max_articles_per_call": 60,
+        "llm_max_output_tokens": 5000,
+    }
+    clusterer = LLMClusterer(cfg)
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"clusters": []}'))]
+        )
+
+    monkeypatch.setattr(litellm, "completion", fake_completion)
+    clusterer._llm_cluster_followup(
+        [_article(1)],
+        [ArticleCluster(topic_category="existing", articles=[_article(2)])],
+        report_date=None,
+    )
+    assert captured["max_tokens"] == 5000
 
 
 def test_build_clusters_assigns_each_article_only_once():
@@ -157,3 +225,78 @@ def test_salvage_follows_up_only_with_uncovered_articles(monkeypatch):
     assert len(followup_calls) == 1
     assert len(followup_calls[0]) == 4
     assert {cluster.topic_category for cluster in result} == {"recovered event"}
+
+
+def test_clustering_user_prompt_has_stable_prefix_and_dynamic_tail():
+    from newsprism.service.llm_clusterer import build_clustering_user_prompt
+
+    prompt = build_clustering_user_prompt([_article(1)], snippet_chars=160)
+    assert "Articles that do not fit any cluster are omitted entirely" in prompt
+    assert '"unclustered"' not in prompt
+    # The dynamic article JSON should be at the very end, after the static rules.
+    assert prompt.rstrip().endswith('"snippet": "Event 1 coverage."}]')
+
+
+def test_clustering_user_prompt_is_deterministic_for_same_articles():
+    from newsprism.service.llm_clusterer import build_clustering_user_prompt
+
+    first = build_clustering_user_prompt([_article(1), _article(2)], snippet_chars=160)
+    second = build_clustering_user_prompt([_article(1), _article(2)], snippet_chars=160)
+    assert first == second
+
+
+def _cluster_with_url(label: str, urls: list[str]) -> ArticleCluster:
+    articles = []
+    for i, url in enumerate(urls):
+        article = _article(i)
+        article.url = url
+        articles.append(article)
+    return ArticleCluster(topic_category=label, articles=articles)
+
+
+def test_merge_incremental_clusters_merges_same_label_and_keeps_new():
+    from newsprism.service.llm_clusterer import merge_incremental_clusters
+
+    previous = [
+        _cluster_with_url("Event A", ["http://a/1"]),
+        _cluster_with_url("Event B", ["http://b/1"]),
+    ]
+    new = [
+        _cluster_with_url("Event A", ["http://a/2"]),
+        _cluster_with_url("Event C", ["http://c/1"]),
+    ]
+    merged = merge_incremental_clusters(previous, new)
+    assert len(merged) == 3
+    by_label = {c.topic_category: c for c in merged}
+    assert {a.url for a in by_label["Event A"].articles} == {"http://a/1", "http://a/2"}
+    assert {a.url for a in by_label["Event B"].articles} == {"http://b/1"}
+    assert {a.url for a in by_label["Event C"].articles} == {"http://c/1"}
+
+
+def test_incremental_cluster_only_new_articles_when_previous_clusters_provided(monkeypatch):
+    cfg = _config()
+    cfg.clustering = {
+        "llm_min_clusters_fallback": 1,
+        "llm_max_articles_per_call": 60,
+        "incremental_enabled": True,
+    }
+    clusterer = LLMClusterer(cfg)
+    previous = [_cluster_with_url("Event A", ["http://old/1"])]
+    old_article = _article(0)
+    old_article.url = "http://old/1"
+    new_article_1 = _article(1)
+    new_article_1.url = "http://new/1"
+    new_article_2 = _article(2)
+    new_article_2.url = "http://new/2"
+    all_articles = [old_article, new_article_1, new_article_2]
+    clustered_new: list[list[Article]] = []
+
+    def fake_cluster_chunked(articles, report_date=None):
+        clustered_new.append(articles)
+        return [_cluster_with_url("Event NEW", [a.url for a in articles])]
+
+    monkeypatch.setattr(clusterer, "_cluster_chunked", fake_cluster_chunked)
+    result = clusterer.cluster(all_articles, previous_clusters=previous)
+    assert len(clustered_new) == 1
+    assert {a.url for a in clustered_new[0]} == {"http://new/1", "http://new/2"}
+    assert {c.topic_category for c in result} == {"Event A", "Event NEW"}

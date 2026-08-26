@@ -30,7 +30,7 @@ from newsprism.config import Config
 from newsprism.repo import DB_PATH, insert_search_candidate_review, insert_search_request_event
 from newsprism.service.embeddings import get_model
 from newsprism.service.llm_compat import completion_compat_kwargs
-from newsprism.service.llm_telemetry import tracked_completion
+from newsprism.service.llm_telemetry import tracked_completion, tracked_completion_with_fallback
 from newsprism.service.locales import (
     country_name,
     is_recognized_country,
@@ -181,6 +181,8 @@ class ActiveSeeker:
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
         self.llm_telemetry_enabled = getattr(cfg, "llm_telemetry_enabled", False)
+        self.llm_fallback_model = getattr(cfg, "litellm_fallback_model", cfg.litellm_model)
+        self.llm_stage_models = getattr(cfg, "litellm_stage_models", {}) or {}
         self.completion_compat_kwargs = completion_compat_kwargs(self.evaluator_model, self.base_url)
 
         search_cfg = cfg.active_search if isinstance(cfg.active_search, dict) else {}
@@ -609,10 +611,12 @@ class ActiveSeeker:
             "Return compact JSON only: {\"keyword\": \"<3-8 words for this exact event>\"}."
         )
         try:
-            tracked = tracked_completion(
+            tracked = tracked_completion_with_fallback(
                 stage="seeker_keyword",
                 enabled=self.llm_telemetry_enabled,
                 model=self.evaluator_model,
+                fallback_model=self.llm_fallback_model,
+                stage_models=self.llm_stage_models,
                 api_key=self.api_key,
                 api_base=self.base_url,
                 messages=[{"role": "user", "content": prompt}],
@@ -1187,6 +1191,13 @@ class ActiveSeeker:
         sponsored/shadow outlets cannot be safely identified from a domain list.
         """
         host = urllib.parse.urlparse(article.url).netloc.lower().removeprefix("www.")
+        # Deterministic reviewed-binding short-circuit: avoid an LLM call for
+        # domains already registered in source_verdicts.
+        registry_identity, registry_reason = self._registry_identity(article.url, target, stage)
+        if registry_identity is not None:
+            return registry_identity
+        if registry_reason:
+            return CandidateIdentity()
         required = "official_web or official_social" if stage == "official" else "country_editorial"
         prompt = (
             "Verify one news-search candidate for a missing event voice. Return JSON only. "
@@ -1206,10 +1217,12 @@ class ActiveSeeker:
             "\"ownership_evidence\":\"short evidence\",\"confidence\":0.0}."
         )
         try:
-            tracked = tracked_completion(
+            tracked = tracked_completion_with_fallback(
                 stage="seeker_verify",
                 enabled=self.llm_telemetry_enabled,
                 model=self.evaluator_model,
+                fallback_model=self.llm_fallback_model,
+                stage_models=self.llm_stage_models,
                 api_key=self.api_key,
                 api_base=self.base_url,
                 messages=[{"role": "user", "content": prompt}],
@@ -1706,10 +1719,26 @@ class ActiveSeeker:
             localized = self._localize_search_keyword(cluster, target.region, english_query, None)
             return list(dict.fromkeys([localized, english_query]))
         queries: list[str] = []
-        for language in languages[: self.max_localized_query_variants]:
-            if language == "en":
-                continue
-            queries.append(self._localize_search_keyword(cluster, target.region, english_query, language))
+        localized_languages = [
+            language
+            for language in languages[: self.max_localized_query_variants]
+            if language != "en"
+        ]
+        if len(localized_languages) > 1:
+            localized_map = self._batch_localize_search_keywords(
+                cluster, target.region, english_query, localized_languages
+            )
+            queries.extend(
+                localized_map.get(language, "")
+                for language in localized_languages
+            )
+        else:
+            for language in localized_languages:
+                queries.append(
+                    self._localize_search_keyword(
+                        cluster, target.region, english_query, language
+                    )
+                )
         queries.append(english_query)
         return list(dict.fromkeys(query for query in queries if query))
 
@@ -1729,10 +1758,12 @@ class ActiveSeeker:
             "Return ONLY the localized search query, 3-8 words, with no explanation or quotes."
         )
         try:
-            tracked = tracked_completion(
+            tracked = tracked_completion_with_fallback(
                 stage="seeker_localize",
                 enabled=self.llm_telemetry_enabled,
                 model=self.evaluator_model,
+                fallback_model=self.llm_fallback_model,
+                stage_models=self.llm_stage_models,
                 api_key=self.api_key,
                 api_base=self.base_url,
                 messages=[{"role": "user", "content": prompt}],
@@ -1746,6 +1777,70 @@ class ActiveSeeker:
         except Exception as exc:
             logger.debug("Failed to localize search keyword for %s: %s", region, exc)
             return keyword
+
+    def _batch_localize_search_keywords(
+        self,
+        cluster: ArticleCluster,
+        region: str,
+        keyword: str,
+        languages: list[str],
+    ) -> dict[str, str]:
+        """Localize one English query into several languages in a single LLM call.
+
+        Falls back to per-language calls when batching fails or is unnecessary.
+        """
+        non_en = [lang for lang in languages if lang and lang != "en"]
+        if len(non_en) <= 1:
+            return {
+                lang: self._localize_search_keyword(cluster, region, keyword, lang)
+                for lang in non_en
+            }
+
+        region_name = country_name(region)
+        context = "\n".join(f"- {article.title}" for article in cluster.articles[:5])
+        language_names = ", ".join(language_name(lang) for lang in non_en)
+        prompt = (
+            f"Convert this English news search query into concise natural queries used by local media "
+            f"in {region_name}, one per requested language. Use native script when normal.\n\n"
+            f"Event headlines:\n{context}\n\n"
+            f"English query: {keyword}\n\n"
+            f"Requested languages: {language_names}\n\n"
+            "Return compact JSON only: {\"results\": [{\"language\": \"fr\", \"query\": \"...\"}, ...]}"
+        )
+        try:
+            tracked = tracked_completion_with_fallback(
+                stage="seeker_localize",
+                enabled=self.llm_telemetry_enabled,
+                model=self.evaluator_model,
+                fallback_model=self.llm_fallback_model,
+                stage_models=self.llm_stage_models,
+                api_key=self.api_key,
+                api_base=self.base_url,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=80 * len(non_en),
+                response_format={"type": "json_object"},
+                **self.completion_compat_kwargs,
+            )
+            content = (tracked.choices[0].message.content or "").strip()
+            parsed = json.loads(content[content.find("{"): content.rfind("}") + 1])
+            result_map = {
+                str(item.get("language") or "").strip().lower(): str(item.get("query") or "").strip()
+                for item in parsed.get("results", [])
+                if isinstance(item, dict) and item.get("language") and item.get("query")
+            }
+            for lang in non_en:
+                if not result_map.get(lang):
+                    result_map[lang] = self._localize_search_keyword(
+                        cluster, region, keyword, lang
+                    )
+            return result_map
+        except Exception as exc:
+            logger.debug("Batch localize failed (%s); using per-language calls", exc)
+            return {
+                lang: self._localize_search_keyword(cluster, region, keyword, lang)
+                for lang in non_en
+            }
 
     # ─── TAVILY ──────────────────────────────────────────────────────────────
 

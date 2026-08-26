@@ -42,6 +42,8 @@ def main() -> None:
     replay = sub.add_parser("replay", help="Replay one report date from the exact article set used in that report")
     replay.add_argument("--date", dest="report_date", help="Target report date in YYYY-MM-DD format (default: today)")
     replay.add_argument("--dry-run", action="store_true", help="Show what would be reset without changing the DB")
+    shadow_publish = sub.add_parser("shadow-publish", help="Run publish in shadow mode without DB writes or push")
+    shadow_publish.add_argument("--date", dest="report_date", help="Target report date in YYYY-MM-DD format (default: today)")
     audit_parser = sub.add_parser("audit", help="Audit source, selection, and rendered report quality")
     audit_parser.add_argument("--days", type=int, default=10, help="Number of days to audit (default: 10)")
     audit_parser.add_argument("--date", dest="audit_date", help="Anchor date in YYYY-MM-DD format (default: today)")
@@ -115,6 +117,11 @@ def main() -> None:
             _run_async_command("once", sched.run_once())
         elif args.cmd == "replay":
             _run_async_command("replay", sched.replay(report_date=target_date, dry_run=args.dry_run))
+        elif args.cmd == "shadow-publish":
+            _run_async_command(
+                "shadow-publish",
+                sched.publish(report_date=target_date, push_after_render=False, shadow=True),
+            )
         elif args.cmd == "audit":
             from newsprism.runtime.audit import audit, format_audit_report
 

@@ -223,6 +223,7 @@ def select_report_clusters(
     main_pool: list[ArticleCluster] = []
     if hot_cfg.get("enabled", False):
         max_topic_tabs = int(hot_cfg.get("max_topic_tabs", 3))
+        max_items_per_topic = max(1, int(hot_cfg.get("max_items_per_topic", 10)))
         families: dict[str, list[ArticleCluster]] = defaultdict(list)
         for cluster in ranked:
             if cluster.storyline_key and _cluster_is_hot_member(cluster):
@@ -234,13 +235,27 @@ def select_report_clusters(
             for key, members in families.items()
             if len(members) >= 2
         ]
-        eligible.sort(key=lambda item: (-len(item[1]), -max(_composite(c) for c in item[1])))
+        eligible.sort(
+            key=lambda item: (
+                -min(len(item[1]), max_items_per_topic),
+                -max(_composite(c) for c in item[1]),
+            )
+        )
         hot_keys = {key for key, _members in eligible[:max_topic_tabs]}
+        hot_claimed: dict[str, int] = defaultdict(int)
         for cluster in ranked:
-            if cluster.storyline_key in hot_keys and _cluster_is_hot_member(cluster):
+            key = cluster.storyline_key
+            if key in hot_keys and _cluster_is_hot_member(cluster):
+                if hot_claimed[key] >= max_items_per_topic:
+                    # D4: overflow beyond the per-topic cap is dropped, not
+                    # moved into the main lane.
+                    continue
                 cluster.is_hot_topic = True
-                cluster.macro_topic_member_count = len(families[cluster.storyline_key])
+                cluster.macro_topic_member_count = min(
+                    len(families[key]), max_items_per_topic
+                )
                 hot_clusters.append(cluster)
+                hot_claimed[key] += 1
             else:
                 main_pool.append(cluster)
     else:
@@ -292,7 +307,8 @@ def select_hot_topic_families(
     max_name_full_chars = int(hot_cfg.get("tab_name_full_max_chars", 60))
     max_topic_tabs = hot_cfg.get("max_topic_tabs", 3)
     min_items_per_topic = hot_cfg.get("min_items_per_topic", 5)
-    main_limit = cfg.clustering.get("max_clusters_per_report", 20)
+    max_items_per_topic = max(1, int(hot_cfg.get("max_items_per_topic", 10)))
+    main_limit = int(hot_cfg.get("main_lane_target", 15))
 
     for summary in summaries:
         summary.is_hot_topic = getattr(summary.cluster, "is_hot_topic", False)
@@ -335,12 +351,18 @@ def select_hot_topic_families(
         for key, members in grouped.items()
         if len(members) >= 2
     ]
-    hot_keys.sort(key=lambda key: (-len(grouped[key]), group_order.get(key, 0)))
+    hot_keys.sort(
+        key=lambda key: (
+            -min(len(grouped[key]), max_items_per_topic),
+            group_order.get(key, 0),
+        )
+    )
     hot_keys = hot_keys[:max_topic_tabs]
 
     hot_topics: list[dict[str, object]] = []
     for position, key in enumerate(hot_keys, 1):
-        members = sorted(grouped[key], key=_composite, reverse=True)
+        # D3/D4: cap each family at max_items_per_topic; overflow is dropped.
+        members = sorted(grouped[key], key=_composite, reverse=True)[:max_items_per_topic]
         family_name = _normalize_storyline_name(
             members[0].storyline_name or members[0].macro_topic_name,
             members[0],
@@ -379,6 +401,11 @@ def select_hot_topic_families(
             main_candidates.append(summary)
 
     main_summaries = _rank_main_summaries(main_candidates, cfg, main_limit)
+    if len(main_summaries) < 10:
+        logger.warning(
+            "Main-lane soft floor not reached: %d stories (< 10); no duplicate/backfill promotion",
+            len(main_summaries),
+        )
     return hot_topics, [], main_summaries
 
 

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from newsprism.config import Config
 from newsprism.service.language import looks_like_chinese_text
 from newsprism.service.llm_compat import completion_compat_kwargs
-from newsprism.service.llm_telemetry import tracked_completion
+from newsprism.service.llm_telemetry import tracked_completion, tracked_completion_with_fallback
 from newsprism.service.perspectives import canonicalize_perspective_groups
 from newsprism.types import ArticleCluster, ClusterSummary, PerspectiveGroup, is_real_article
 
@@ -163,9 +163,11 @@ class Summarizer:
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
         self.telemetry_enabled = getattr(cfg, "llm_telemetry_enabled", False)
+        self.fallback_model = getattr(cfg, "litellm_fallback_model", cfg.litellm_model)
+        self.stage_models = getattr(cfg, "litellm_stage_models", {}) or {}
         self.temperature = cfg.summarizer.get("temperature", 0.3)
         self.max_tokens = cfg.summarizer.get("max_tokens", 1200)
-        self.article_content_chars = max(200, int(cfg.summarizer.get("article_content_chars", 1600)))
+        self.article_content_chars = max(200, int(cfg.summarizer.get("article_content_chars", 1400)))
         self.completion_compat_kwargs = completion_compat_kwargs(self.model, self.base_url)
         self.hot_topics_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
         self.topic_icon_allowlist = self.hot_topics_cfg.get(
@@ -625,10 +627,12 @@ class Summarizer:
         max_tokens: int,
         stage: str = "storyline_relation",
     ) -> str:
-        tracked = tracked_completion(
+        tracked = tracked_completion_with_fallback(
             stage=stage,
             enabled=self.telemetry_enabled,
             model=self.model,
+            fallback_model=self.fallback_model,
+            stage_models=self.stage_models,
             api_key=self.api_key,
             api_base=self.base_url,
             messages=[
@@ -860,10 +864,12 @@ class Summarizer:
         temperature: float = 0.1,
         stage: str = "translation",
     ) -> str:
-        tracked = tracked_completion(
+        tracked = tracked_completion_with_fallback(
             stage=stage,
             enabled=self.telemetry_enabled,
             model=self.model,
+            fallback_model=self.fallback_model,
+            stage_models=self.stage_models,
             api_key=self.api_key,
             api_base=self.base_url,
             messages=[
@@ -1229,10 +1235,12 @@ class Summarizer:
             f"Unsupported values: {unsupported}\nCurrent summary:\n{summary.summary}\n\nSources:\n{evidence}"
         )
         try:
-            tracked = tracked_completion(
+            tracked = tracked_completion_with_fallback(
                 stage="summary_rewrite",
                 enabled=self.telemetry_enabled,
                 model=self.model,
+                fallback_model=self.fallback_model,
+                stage_models=self.stage_models,
                 api_key=self.api_key,
                 api_base=self.base_url,
                 messages=[{"role": "user", "content": prompt}],
@@ -1483,6 +1491,12 @@ class Summarizer:
         for article in cluster.articles:
             if not is_real_article(article):
                 continue
+            # For single-source clusters, only the lead article is needed.
+            source_count = len({
+                a.source_name for a in cluster.articles if is_real_article(a)
+            })
+            if source_count < 2 and article_index >= 1:
+                break
             article_index += 1
             lines.append(
                 f"[{article_index}] 来源：{article.source_name}\n"

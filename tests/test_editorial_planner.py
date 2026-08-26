@@ -453,3 +453,97 @@ def test_base_plan_keeps_full_storyline_name_for_body_headers():
     assert tab["macro_topic_name"] == "欧盟宣布扩大实施人工"  # capped at 10
     assert tab["macro_topic_name_full"] == long_name            # full for body
     assert tab["storyline_name_full"] == long_name
+
+
+def test_select_report_clusters_caps_each_hot_topic_at_ten():
+    cfg = _config()
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 3,
+        "max_items_per_topic": 10,
+        "main_lane_target": 15,
+        "tab_name_max_chars": 10,
+    }
+    clusters = []
+    for i in range(12):
+        cluster = _cluster(f"hot{i}", 0.95 - i * 0.01)
+        cluster.storyline_key = "war"
+        cluster.storyline_name = "战争专题"
+        cluster.storyline_role = "core" if i == 0 else "spillover"
+        clusters.append(cluster)
+
+    hot, main = select_report_clusters(clusters, cfg)
+
+    assert len(hot) == 10
+    assert [c.topic_category for c in hot] == [f"hot{i}" for i in range(10)]
+    assert main == []
+
+
+def test_base_plan_caps_each_hot_topic_at_ten_after_freshness():
+    cfg = _config(max_clusters=20)
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 3,
+        "max_items_per_topic": 10,
+        "main_lane_target": 15,
+        "tab_name_max_chars": 10,
+    }
+    summaries = []
+    for i in range(12):
+        summaries.append(
+            _storyline_summary(f"hot{i}", 0.95 - i * 0.01, "war", role="core" if i == 0 else "spillover")
+        )
+
+    plan = EditorialPlanner(cfg).base_plan(summaries)
+
+    assert len(plan.hot_topics) == 1
+    assert plan.hot_topics[0]["member_count"] == 10
+    assert [s.cluster.topic_category for s in plan.hot_topics[0]["summaries"]] == [
+        f"hot{i}" for i in range(10)
+    ]
+    assert plan.regular_summaries == []
+
+
+def test_base_plan_limits_main_lane_to_target_15():
+    cfg = _config(max_clusters=20)
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 3,
+        "max_items_per_topic": 10,
+        "main_lane_target": 15,
+        "tab_name_max_chars": 10,
+    }
+    summaries = [_summary(f"main{i}", 0.9 - i * 0.01, category="国际时政") for i in range(20)]
+
+    plan = EditorialPlanner(cfg).base_plan(summaries)
+
+    assert len(plan.regular_summaries) == 15
+    assert [s.cluster.topic_category for s in plan.regular_summaries] == [
+        f"main{i}" for i in range(15)
+    ]
+
+
+def test_hot_topic_stories_do_not_consume_main_lane_budget():
+    cfg = _config(max_clusters=20)
+    cfg.output["hot_topics"] = {
+        "enabled": True,
+        "max_topic_tabs": 3,
+        "max_items_per_topic": 10,
+        "main_lane_target": 15,
+        "tab_name_max_chars": 10,
+    }
+    summaries = [
+        _storyline_summary("hot core", 0.99, "war", role="core"),
+        _storyline_summary("hot follow 1", 0.98, "war"),
+        _storyline_summary("hot follow 2", 0.97, "war"),
+    ]
+    summaries += [_summary(f"main{i}", 0.9 - i * 0.01, category="国际时政") for i in range(20)]
+
+    plan = EditorialPlanner(cfg).base_plan(summaries)
+
+    assert len(plan.hot_topics) == 1
+    assert plan.hot_topics[0]["member_count"] == 3
+    assert len(plan.regular_summaries) == 15
+    assert [s.cluster.topic_category for s in plan.regular_summaries] == [
+        f"main{i}" for i in range(15)
+    ]

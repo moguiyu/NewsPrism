@@ -118,6 +118,74 @@ def _build_clusters(entries: list[dict[str, Any]], articles: list[Article]) -> l
     return result
 
 
+def _article_payload_for(articles: list[Article], snippet_chars: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": i,
+            "source": a.source_name,
+            "title": a.title,
+            "snippet": (a.content or "")[:snippet_chars],
+        }
+        for i, a in enumerate(articles)
+    ]
+
+
+def merge_incremental_clusters(
+    previous_clusters: list[ArticleCluster],
+    new_clusters: list[ArticleCluster],
+) -> list[ArticleCluster]:
+    """Merge newly clustered articles into existing clusters by topic label.
+
+    This is a conservative merge: same label means same event family. New
+    article URLs are appended only when not already present.
+    """
+    by_label: dict[str, ArticleCluster] = {}
+    for cluster in previous_clusters:
+        by_label.setdefault(str(cluster.topic_category or "").strip().casefold(), cluster)
+
+    for cluster in new_clusters:
+        label = str(cluster.topic_category or "").strip().casefold()
+        existing = by_label.get(label)
+        if existing is None:
+            by_label[label] = cluster
+            continue
+        existing_urls = {a.url for a in existing.articles}
+        for article in cluster.articles:
+            if article.url not in existing_urls:
+                existing.articles.append(article)
+        existing.sources = list(dict.fromkeys(a.source_name for a in existing.articles))
+
+    return list(by_label.values())
+
+
+def build_clustering_user_prompt(
+    articles: list[Article],
+    snippet_chars: int = 160,
+) -> str:
+    """Build a clustering prompt with a stable static prefix and dynamic tail.
+
+    Keeping the static rules before the dynamic JSON helps provider prompt
+    caches reuse the common prefix across calls.
+    """
+    payload = _article_payload_for(articles, snippet_chars)
+    return (
+        f"Group the following {len(articles)} news articles into clusters.\n\n"
+        "Rules:\n"
+        "- Group ONLY articles that cover the exact same real-world event or development.\n"
+        "- Articles in DIFFERENT LANGUAGES covering the same event MUST be grouped together.\n"
+        "- Tightly coupled developments of one event within the window (a strike and the "
+        "same day's response to it) belong in one cluster.\n"
+        "- Do NOT group merely topically similar articles "
+        "(e.g. two different earthquakes, two unrelated political speeches).\n"
+        "- Each cluster should have a concise English event label (\u22648 words).\n"
+        "- Include at most one article per source in each cluster.\n"
+        "- Articles that do not fit any cluster are omitted entirely.\n\n"
+        "Return exactly this JSON structure:\n"
+        '{"clusters": [{"label": "...", "ids": [0, 3, 7]}]}\n\n'
+        f"Articles:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
 class LLMClusterer:
     """Groups articles by real-world event using batched LLM calls.
 
@@ -136,6 +204,12 @@ class LLMClusterer:
         self.max_articles_per_call = max(
             20, int(cfg.clustering.get("llm_max_articles_per_call", 60))
         )
+        self.article_snippet_chars = max(
+            20, int(cfg.clustering.get("article_snippet_chars", 160))
+        )
+        self.max_output_tokens = max(
+            500, int(cfg.clustering.get("llm_max_output_tokens", 4000))
+        )
         self._compat_kwargs = completion_compat_kwargs(cfg.litellm_model, cfg.litellm_base_url)
         self._fallback = Clusterer(cfg)
 
@@ -143,9 +217,28 @@ class LLMClusterer:
         self,
         articles: list[Article],
         report_date: str | None = None,
+        previous_clusters: list[ArticleCluster] | None = None,
     ) -> list[ArticleCluster]:
         if not articles:
             return []
+        incremental_enabled = bool(self.cfg.clustering.get("incremental_enabled", False))
+        if incremental_enabled and previous_clusters:
+            existing_urls = {
+                article.url
+                for cluster in previous_clusters
+                for article in cluster.articles
+            }
+            new_articles = [a for a in articles if a.url not in existing_urls]
+            if not new_articles:
+                return previous_clusters
+            logger.info(
+                "Incremental clustering: %d new articles, %d previous clusters",
+                len(new_articles),
+                len(previous_clusters),
+            )
+            new_clusters = self._cluster_chunked(new_articles, report_date=report_date)
+            return merge_incremental_clusters(previous_clusters, new_clusters)
+
         working_articles, collapsed = compact_same_source_near_duplicates(articles, self.cfg)
         clusters = self._cluster_chunked(working_articles, report_date=report_date)
         if len(clusters) < self.min_clusters_fallback:
@@ -312,15 +405,7 @@ class LLMClusterer:
         return recovered
 
     def _article_payload(self, articles: list[Article]) -> list[dict[str, Any]]:
-        return [
-            {
-                "id": i,
-                "source": a.source_name,
-                "title": a.title,
-                "snippet": (a.content or "")[:240],
-            }
-            for i, a in enumerate(articles)
-        ]
+        return _article_payload_for(articles, self.article_snippet_chars)
 
     def _llm_cluster(
         self,
@@ -328,24 +413,7 @@ class LLMClusterer:
         report_date: str | None = None,
         attempt: int = 1,
     ) -> list[ArticleCluster]:
-        payload = self._article_payload(articles)
-
-        user_prompt = (
-            f"Group the following {len(articles)} news articles into clusters.\n\n"
-            "Rules:\n"
-            "- Group ONLY articles that cover the exact same real-world event or development.\n"
-            "- Articles in DIFFERENT LANGUAGES covering the same event MUST be grouped together.\n"
-            "- Tightly coupled developments of one event within the window (a strike and the "
-            "same day's response to it) belong in one cluster.\n"
-            "- Do NOT group merely topically similar articles "
-            "(e.g. two different earthquakes, two unrelated political speeches).\n"
-            "- Each cluster should have a concise English event label (≤8 words).\n"
-            "- Include at most one article per source in each cluster.\n"
-            '- Articles that do not fit any cluster go in "unclustered".\n\n'
-            "Return exactly this JSON structure:\n"
-            '{{"clusters": [{{"label": "...", "ids": [0, 3, 7]}}], "unclustered": [1, 2, 4]}}\n\n'
-            f"Articles:\n{json.dumps(payload, ensure_ascii=False)}"
-        )
+        user_prompt = build_clustering_user_prompt(articles, self.article_snippet_chars)
 
         tracked = tracked_completion(
             stage="clustering",
@@ -357,7 +425,7 @@ class LLMClusterer:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=8000,
+            max_tokens=self.max_output_tokens,
             temperature=0.1,
             response_format={"type": "json_object"},
             report_date=report_date,
@@ -420,7 +488,7 @@ class LLMClusterer:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=8000,
+            max_tokens=self.max_output_tokens,
             temperature=0.1,
             response_format={"type": "json_object"},
             report_date=report_date,

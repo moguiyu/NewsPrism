@@ -2043,8 +2043,7 @@ class TestHotTopics:
         assert ".site-header {\n        background: transparent;" in html
         assert "position: static;" in html
         assert ".header-brand {\n        display: none;" in html
-        assert ".header-tools {\n        justify-content: flex-start;" in html
-        assert "overflow-x: auto;" in html
+        assert ".footer-tools {\n      display: flex;" in html
         assert ".all-overview {\n        gap: 10px;" in html
         assert ".overview-list {\n        display: grid;" in html
         assert "grid-auto-flow: column;" in html
@@ -2919,3 +2918,61 @@ def test_placeholder_sources_never_render_as_broken_links(renderer, tmp_path):
     # Placeholder should still appear in the rendered HTML with the failure reason
     assert "[Japan声音待補]" in html or "[Japan声音待补]" in html
     assert "无可用结果" in html
+
+
+
+def test_footer_controls_and_logo_point_to_edition_home(renderer, tmp_path):
+    renderer.output_dir = tmp_path
+    renderer.report_base_url = "https://news.moguiyu.top"
+    renderer.english_edition_enabled = True
+    summary = ClusterSummary(
+        cluster=ArticleCluster(
+            topic_category="World News",
+            articles=[Article(
+                url="https://reuters.com/logo-home",
+                title="Logo home story",
+                source_name="Reuters",
+                published_at=datetime(2026, 8, 14, tzinfo=timezone.utc),
+                content="Body.",
+            )],
+        ),
+        summary="**中文头条**\n\n正文。",
+        summary_en="**English Headline**\n\nEnglish body.",
+        short_topic_name="中文专题",
+        short_topic_name_en="English Topic",
+        perspectives={},
+    )
+
+    html_path = renderer.render([summary], date(2026, 8, 14))
+    root_html = html_path.read_text(encoding="utf-8")
+    cn_html = (tmp_path / "cn" / "2026-08-14" / "index.html").read_text(encoding="utf-8")
+
+    root_tree = lxml_html.fromstring(root_html)
+    cn_tree = lxml_html.fromstring(cn_html)
+
+    # Header is clean: no appearance/language tools inside it.
+    assert not root_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "header-tools")]')
+    assert not cn_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "header-tools")]')
+    assert not root_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "language-toggle")]')
+    assert not root_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "theme-toggle")]')
+
+    # Footer hosts both controls.
+    assert root_tree.xpath('//footer//*[contains(@class, "footer-tools")]')
+    assert len(root_tree.xpath('//footer//button[contains(@class, "theme-btn")]')) == 3
+    assert root_tree.xpath('//footer//*[contains(@class, "language-toggle")]')
+    assert cn_tree.xpath('//footer//*[contains(@class, "footer-tools")]')
+
+    # Logo goes to edition home, not current date; no reload handler.
+    root_logos = root_tree.xpath('//a[contains(@class, "logo")]')
+    assert len(root_logos) == 2
+    assert all(a.get("href") == "/" for a in root_logos)
+    assert all("window.location.reload" not in (a.get("onclick") or "") for a in root_logos)
+
+    cn_logos = cn_tree.xpath('//a[contains(@class, "logo")]')
+    assert len(cn_logos) == 2
+    assert all(a.get("href") == "/cn/" for a in cn_logos)
+
+    # Language switch contrast is explicit in the stylesheet.
+    assert ".footer-tools .lang-btn" in root_html
+    assert "background: var(--theme-footer-ink)" in root_html
+    assert "color: var(--theme-footer-bg)" in root_html
