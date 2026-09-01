@@ -1878,12 +1878,15 @@ class ActiveSeeker:
         if self._request_count >= self.max_requests_per_run:
             return [], "request_budget_exhausted"
 
+        now = datetime.now(tz=timezone.utc)
         base_payload: dict[str, Any] = {
             "query": query,
+            "topic": "news",
+            "start_date": (now - timedelta(hours=self.result_max_age_hours)).date().isoformat(),
+            "end_date": now.date().isoformat(),
             "search_depth": "basic",
             "include_raw_content": True,
             "max_results": max(self.max_results_per_region + 2, 4),
-            "days": 3,
         }
         if normalized_domains:
             base_payload["include_domains"] = list(normalized_domains)
@@ -1921,8 +1924,8 @@ class ActiveSeeker:
                 with httpx.Client(timeout=30, follow_redirects=True) as client:
                     resp = client.post("https://api.tavily.com/search", json=payload)
                     duration_ms = int((monotonic() - started) * 1000)
-                    if resp.status_code in (401, 403):
-                        # Auth/quota issue with this key — failover to the next.
+                    if resp.status_code in (401, 403, 432, 433):
+                        # Auth or account-quota issue — fail over to the next key.
                         self._exhausted_keys.add(key_idx)
                         last_failure_reason = f"http_{resp.status_code}"
                         last_status = resp.status_code
@@ -1947,7 +1950,7 @@ class ActiveSeeker:
             except httpx.HTTPError as exc:
                 response = getattr(exc, "response", None)
                 status = getattr(response, "status_code", None)
-                if status in (401, 403):
+                if status in (401, 403, 432, 433):
                     self._exhausted_keys.add(key_idx)
                     last_failure_reason = f"http_{status}"
                     last_status = status

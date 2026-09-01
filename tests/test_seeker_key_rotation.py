@@ -74,6 +74,14 @@ def _tavily_401_response() -> httpx.Response:
     )
 
 
+def _tavily_432_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=432,
+        json={"detail": "Plan usage limit exceeded"},
+        request=httpx.Request("POST", "https://api.tavily.com/search"),
+    )
+
+
 def _tavily_200_response() -> httpx.Response:
     return httpx.Response(
         status_code=200,
@@ -112,6 +120,40 @@ def test_rotation_falls_through_401_to_working_key():
     assert calls == ["bad-key", "good-key"]
     # Active key pinned to the working one for subsequent calls.
     assert seeker._active_key_idx == 1
+
+
+def test_rotation_falls_through_432_to_working_key():
+    seeker = ActiveSeeker(_config_with_keys("exhausted", "good-key"))
+    calls: list[str] = []
+
+    def fake_post(*args, **kwargs):
+        api_key = kwargs["json"]["api_key"]
+        calls.append(api_key)
+        return _tavily_200_response() if api_key == "good-key" else _tavily_432_response()
+
+    with patch.object(httpx.Client, "post", side_effect=fake_post):
+        results, reason = seeker._search_tavily("fr", "US event news France")
+
+    assert reason is None
+    assert len(results) == 1
+    assert calls == ["exhausted", "good-key"]
+
+
+def test_search_request_uses_news_topic_and_calendar_dates():
+    seeker = ActiveSeeker(_config_with_keys("good-key"))
+    payloads: list[dict] = []
+
+    def fake_post(*args, **kwargs):
+        payloads.append(kwargs["json"])
+        return _tavily_200_response()
+
+    with patch.object(httpx.Client, "post", side_effect=fake_post):
+        seeker._search_tavily("fr", "US event news France")
+
+    assert payloads[0]["topic"] == "news"
+    assert "start_date" in payloads[0]
+    assert payloads[0]["end_date"] == datetime.now(tz=timezone.utc).date().isoformat()
+    assert "days" not in payloads[0]
 
 
 def test_rotation_short_circuits_when_all_keys_exhausted():

@@ -194,7 +194,7 @@ active_search:
   # domains. Newly discovered publishers still require search-review approval.
   use_configured_country_sources: true
   telemetry_enabled: true
-  result_max_age_hours: 72
+  result_max_age_hours: 48
   min_content_chars: 150
   max_results_per_region: 1
   max_regions_per_cluster: 3        # cap identified missing voices searched per cluster

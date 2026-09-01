@@ -158,6 +158,7 @@ _INVALID_PERSPECTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "http_401": ("鉴权失败", "Auth failed"),
     "http_403": ("鉴权失败", "Auth failed"),
+    "http_432": ("额度不足", "Quota exceeded"),
     "http_402": ("额度不足", "Quota exceeded"),
     "http_429": ("限流", "Rate limited"),
     "network": ("网络错误", "Network error"),
