@@ -14,7 +14,14 @@ from newsprism.service.llm_telemetry import (
 )
 
 
-def _fake_response(content: str) -> SimpleNamespace:
+def _fake_response(content: str, cost: float | None = None) -> SimpleNamespace:
+    usage = SimpleNamespace(
+        prompt_tokens=12,
+        completion_tokens=7,
+        total_tokens=19,
+    )
+    if cost is not None:
+        usage.cost = cost
     return SimpleNamespace(
         choices=[
             SimpleNamespace(
@@ -22,11 +29,7 @@ def _fake_response(content: str) -> SimpleNamespace:
                 finish_reason="stop",
             )
         ],
-        usage=SimpleNamespace(
-            prompt_tokens=12,
-            completion_tokens=7,
-            total_tokens=19,
-        ),
+        usage=usage,
         model="test-model",
     )
 
@@ -323,3 +326,89 @@ def test_tracked_completion_with_fallback_uses_fallback_on_api_error(monkeypatch
     )
     assert calls == ["openai/cheap", "openai/deepseek-v4-flash"]
     assert response.choices[0].message.content == "{}"
+
+
+def test_tracked_completion_persists_billed_cost(monkeypatch, tmp_path):
+    db = tmp_path / "newsprism.db"
+    init_db(db)
+    fake = _fake_response("{}", cost=0.0000125)
+
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: fake)
+    tracked_completion(
+        stage="clustering",
+        enabled=True,
+        model="m",
+        messages=[{"role": "user", "content": "hello"}],
+        db_path=db,
+    )
+
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT billed_cost_usd FROM llm_call_events"
+        ).fetchone()
+    assert row == (0.0000125,)
+
+
+def test_tracked_completion_billed_cost_null_when_provider_omits_cost(monkeypatch, tmp_path):
+    db = tmp_path / "newsprism.db"
+    init_db(db)
+    fake = _fake_response("{}")
+
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: fake)
+    tracked_completion(
+        stage="clustering",
+        enabled=True,
+        model="m",
+        messages=[{"role": "user", "content": "hello"}],
+        db_path=db,
+    )
+
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT billed_cost_usd FROM llm_call_events"
+        ).fetchone()
+    assert row == (None,)
+
+
+def test_tracked_completion_warns_when_blended_rate_exceeds_ceiling(monkeypatch, tmp_path, caplog):
+    from newsprism.service import llm_telemetry
+
+    db = tmp_path / "newsprism.db"
+    init_db(db)
+    over = llm_telemetry.BLENDED_RATE_ALERT_USD_PER_1M
+    fake = _fake_response("{}", cost=over * 2 * 19 / 1e6)  # fake usage totals 19 tokens -> blended = 2x ceiling
+
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: fake)
+    with caplog.at_level("WARNING", logger="newsprism.service.llm_telemetry"):
+        tracked_completion(
+            stage="clustering",
+            enabled=True,
+            model="m",
+            messages=[{"role": "user", "content": "hello"}],
+            db_path=db,
+        )
+    assert any("blended" in record.message.lower() for record in caplog.records)
+
+
+def test_tracked_completion_stays_quiet_at_healthy_rate(monkeypatch, tmp_path, caplog):
+    from newsprism.service import llm_telemetry
+
+    db = tmp_path / "newsprism.db"
+    init_db(db)
+    under = llm_telemetry.BLENDED_RATE_ALERT_USD_PER_1M / 2
+    fake = _fake_response("{}", cost=under * 19 / 1e6)  # blended = ceiling/2
+
+    monkeypatch.setattr(litellm, "completion", lambda **kwargs: fake)
+    with caplog.at_level("WARNING", logger="newsprism.service.llm_telemetry"):
+        tracked_completion(
+            stage="clustering",
+            enabled=True,
+            model="m",
+            messages=[{"role": "user", "content": "hello"}],
+            db_path=db,
+        )
+    assert not any("blended" in record.message.lower() for record in caplog.records)

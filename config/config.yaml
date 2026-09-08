@@ -29,15 +29,19 @@ llm_telemetry:
 # ─── LLM MODEL ROUTING ────────────────────────────────────────────────────────────────────────────
 llm:
   # DeepSeek remains the high-quality fallback for low-stakes stages.
-  fallback_model: openai/deepseek-v4-flash
+  # DeepSeek V4 Flash via OpenRouter: cheaper than the direct API and shares
+  # the OpenRouter base URL with the free stage models below.
+  fallback_model: openai/deepseek/deepseek-v4-flash
   # Stage-specific cheaper/free primary models. Leave empty to use the default
-  # model for that stage.
+  # model for that stage. dots-3-note-preview:free is the only free model
+  # verified (2026-09-08) to return valid JSON within the small per-stage
+  # token budgets when reasoning is disabled via llm_compat.
   stage_models:
-    seeker_keyword: ""
-    seeker_localize: ""
-    storyline_name: ""
+    seeker_keyword: "openai/dots-studio/dots-3-note-preview:free"
+    seeker_localize: "openai/dots-studio/dots-3-note-preview:free"
+    storyline_name: "openai/dots-studio/dots-3-note-preview:free"
     summary_rewrite: ""
-    seeker_verify: ""
+    seeker_verify: "openai/dots-studio/dots-3-note-preview:free"
 
 # ─── EVOLUTION (P2) ─────────────────────────────────────────────────────────────
 evolution:

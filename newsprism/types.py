@@ -109,6 +109,7 @@ class LLMCallEvent:
     input_chars: int | None = None
     output_chars: int | None = None
     duration_ms: int | None = None
+    billed_cost_usd: float | None = None
     created_at: datetime | None = None
 
 

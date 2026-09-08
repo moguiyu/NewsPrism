@@ -259,6 +259,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 input_chars INTEGER,
                 output_chars INTEGER,
                 duration_ms INTEGER,
+                billed_cost_usd REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -457,6 +458,12 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 "prompt_cache_miss_tokens",
                 "prompt_cache_miss_tokens INTEGER",
             )
+        if "billed_cost_usd" not in llm_event_columns:
+            _add_column(
+                "llm_call_events",
+                "billed_cost_usd",
+                "billed_cost_usd REAL",
+            )
 
         cursor = conn.execute("PRAGMA table_info(cluster_evaluations)")
         eval_columns = {row[1] for row in cursor.fetchall()}
@@ -605,9 +612,9 @@ def insert_llm_call_event(event: LLMCallEvent, db_path: Path = DB_PATH) -> int:
                    stage, model, report_date, cluster_key, item_count, attempt,
                    status, finish_reason, prompt_tokens, completion_tokens,
                    total_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens,
-                   input_chars, output_chars, duration_ms, created_at
+                   input_chars, output_chars, duration_ms, billed_cost_usd, created_at
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
             (
                 event.stage,
                 event.model,
@@ -625,6 +632,7 @@ def insert_llm_call_event(event: LLMCallEvent, db_path: Path = DB_PATH) -> int:
                 event.input_chars,
                 event.output_chars,
                 event.duration_ms,
+                event.billed_cost_usd,
                 event.created_at.isoformat() if event.created_at else None,
             ),
         )

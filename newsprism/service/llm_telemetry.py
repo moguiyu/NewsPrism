@@ -29,6 +29,12 @@ from newsprism.types import LLMCallEvent
 
 logger = logging.getLogger(__name__)
 
+# Alert ceiling for the blended per-call rate (billed cost per 1M total
+# tokens). ~2x the configured default model's listed blended rate and above
+# every healthy OpenRouter endpoint observed on 2026-09-08; free-tier stage
+# calls bill $0.00 and never trigger it.
+BLENDED_RATE_ALERT_USD_PER_1M = 0.20
+
 _run_report_date: ContextVar[str | None] = ContextVar(
     "llm_run_report_date", default=None
 )
@@ -149,12 +155,25 @@ def _first_token_count(*values: Any) -> int | None:
     return None
 
 
+def _float_or_none(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _usage_fields(
     response: Any,
-) -> tuple[int | None, int | None, int | None, int | None, int | None]:
+) -> tuple[int | None, int | None, int | None, int | None, int | None, float | None]:
     usage = getattr(response, "usage", None)
     if usage is None:
-        return None, None, None, None, None
+        return None, None, None, None, None, None
     prompt_tokens_details = _lookup(usage, "prompt_tokens_details")
     prompt_cache_hit_tokens = _first_token_count(
         _lookup(usage, "prompt_cache_hit_tokens"),
@@ -172,6 +191,7 @@ def _usage_fields(
         _token_count(_lookup(usage, "total_tokens")),
         prompt_cache_hit_tokens,
         prompt_cache_miss_tokens,
+        _float_or_none(_lookup(usage, "cost")),
     )
 
 
@@ -279,6 +299,7 @@ def tracked_completion(
         total_tokens,
         prompt_cache_hit_tokens,
         prompt_cache_miss_tokens,
+        billed_cost_usd,
     ) = _usage_fields(response)
     event_id: int | None = None
     try:
@@ -297,6 +318,7 @@ def tracked_completion(
                 total_tokens=total_tokens,
                 prompt_cache_hit_tokens=prompt_cache_hit_tokens,
                 prompt_cache_miss_tokens=prompt_cache_miss_tokens,
+                billed_cost_usd=billed_cost_usd,
                 input_chars=_message_chars(messages),
                 output_chars=_response_chars(response),
                 duration_ms=int((time.perf_counter() - started) * 1000),
@@ -305,6 +327,21 @@ def tracked_completion(
         )
     except Exception:
         logger.debug("LLM telemetry write failed for %s", stage)
+
+    if billed_cost_usd is not None and total_tokens and billed_cost_usd > 0:
+        blended = billed_cost_usd / total_tokens * 1e6
+        if blended > BLENDED_RATE_ALERT_USD_PER_1M:
+            logger.warning(
+                "LLM blended rate $%.3f/1M on stage %s exceeds the $%.2f/1M ceiling "
+                "(model=%s, cost=$%.6f, tokens=%s) — expected discounted pricing "
+                "may no longer apply",
+                blended,
+                stage,
+                BLENDED_RATE_ALERT_USD_PER_1M,
+                model,
+                billed_cost_usd,
+                total_tokens,
+            )
 
     return TrackedCompletion(response, event_id, db_path)
 

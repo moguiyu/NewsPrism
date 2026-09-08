@@ -351,3 +351,50 @@ def test_init_db_migrates_llm_cache_usage_columns_race_safely(tmp_path):
             (event_id,),
         ).fetchone()
     assert row == (7, 13)
+
+
+def test_init_db_migrates_llm_billed_cost_column_race_safely(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """CREATE TABLE llm_call_events (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   stage TEXT NOT NULL,
+                   model TEXT NOT NULL,
+                   report_date TEXT,
+                   cluster_key TEXT,
+                   item_count INTEGER,
+                   attempt INTEGER NOT NULL DEFAULT 1,
+                   status TEXT NOT NULL DEFAULT 'ok',
+                   finish_reason TEXT,
+                   prompt_tokens INTEGER,
+                   completion_tokens INTEGER,
+                   total_tokens INTEGER,
+                   input_chars INTEGER,
+                   output_chars INTEGER,
+                   duration_ms INTEGER,
+                   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+               )"""
+        )
+
+    init_db(db_path)
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(llm_call_events)")}
+    assert "billed_cost_usd" in columns
+
+    event_id = insert_llm_call_event(
+        LLMCallEvent(
+            stage="clustering",
+            model="openai/deepseek/deepseek-v4-flash",
+            billed_cost_usd=0.000123,
+        ),
+        db_path=db_path,
+    )
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT billed_cost_usd FROM llm_call_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+    assert row == (0.000123,)
