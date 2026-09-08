@@ -64,9 +64,14 @@ clustering:
   # Keep structured LLM clustering responses bounded; malformed large batches
   # retry as smaller chunks before only that chunk falls back to embeddings.
   llm_max_articles_per_call: 60
+  # Opt-in cost profile: compact rows and sparse labeled groups avoid repeated
+  # keys and singleton output. Full bodies remain available downstream. Local
+  # sampling found false event merges, so keep the established protocol default.
+  compact_protocol_enabled: false
+  compact_snippet_chars: 80
   # Phase A: cap per-article snippet length sent to the clustering prompt.
   article_snippet_chars: 240
-  # Phase A: cap output tokens per clustering call to avoid length-truncation waste.
+  # Keep output headroom; a lower cap alone does not reduce actual billed tokens.
   llm_max_output_tokens: 4000
   # Phase D: only cluster new/changed articles when previous clusters are supplied.
   incremental_enabled: false

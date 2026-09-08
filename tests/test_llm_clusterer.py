@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
 
+import json
+import pytest
+
 from newsprism.config import Config
 from newsprism.service.llm_clusterer import LLMClusterer
 from newsprism.types import Article, ArticleCluster
@@ -300,3 +303,166 @@ def test_incremental_cluster_only_new_articles_when_previous_clusters_provided(m
     assert len(clustered_new) == 1
     assert {a.url for a in clustered_new[0]} == {"http://new/1", "http://new/2"}
     assert {c.topic_category for c in result} == {"Event A", "Event NEW"}
+
+
+def _compact_config() -> Config:
+    cfg = _config()
+    cfg.clustering.update(compact_protocol_enabled=True, compact_snippet_chars=80)
+    return cfg
+
+
+def _response(content: str):
+    from litellm import ModelResponse
+
+    return ModelResponse(
+        model="deepseek-v4-flash",
+        choices=[{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        usage={"prompt_tokens": 500, "completion_tokens": 20, "total_tokens": 520},
+    )
+
+
+def test_compact_protocol_reconstructs_singletons_and_preserves_article_provenance(monkeypatch):
+    import litellm
+
+    articles = [_article(i) for i in range(4)]
+    articles[0].title = "Japan launches lunar mission"
+    articles[2].title = "日本发射月球探测器"
+    articles[2].origin_region = "jp"
+    articles[2].content = "Full evidence remains available. " * 40
+    original_content = articles[2].content
+    monkeypatch.setattr(litellm, "completion", lambda **kw: _response(
+        '{"groups":[{"label":"Japan lunar mission","ids":[0,2]}]}'
+    ))
+
+    result = LLMClusterer(_compact_config())._llm_cluster(articles)
+
+    assert [{a.url for a in c.articles} for c in result] == [
+        {articles[0].url, articles[2].url}, {articles[1].url}, {articles[3].url},
+    ]
+    assert result[0].topic_category == "Japan lunar mission"
+    assert result[0].articles[0] is articles[2]
+    assert result[0].sources == [articles[2].source_name, articles[0].source_name]
+    assert result[0].articles[0].origin_region == "jp"
+    assert articles[2].content == original_content
+
+
+def test_compact_protocol_no_matches_keeps_every_singleton(monkeypatch):
+    import litellm
+
+    articles = [_article(i) for i in range(4)]
+    monkeypatch.setattr(litellm, "completion", lambda **kw: _response('{"groups":[]}'))
+    result = LLMClusterer(_compact_config())._llm_cluster(articles)
+    assert [c.articles for c in result] == [[a] for a in articles]
+
+
+def test_compact_protocol_single_article_needs_no_paid_call(monkeypatch):
+    import litellm
+
+    def unexpected_call(**kwargs):
+        pytest.fail("A single article has no grouping decision to send to the API")
+
+    monkeypatch.setattr(litellm, "completion", unexpected_call)
+    article = _article(1)
+    result = LLMClusterer(_compact_config()).cluster([article])
+    assert result[0].articles == [article]
+    assert result[0].topic_category == article.title
+
+
+@pytest.mark.parametrize("raw", [
+    '{}', '{"groups":null}', '{"groups":[{"label":"a","ids":[]}]}',
+    '{"groups":[{"label":"a","ids":[0,4]}]}',
+    '{"groups":[{"label":"a","ids":[0,-1]}]}',
+    '{"groups":[{"label":"a","ids":[0,true]}]}',
+    '{"groups":[{"label":"a","ids":[0,"1"]}]}',
+    '{"groups":[{"label":"","ids":[0,1]}]}',
+    '{"groups":[{"ids":[0,1]}]}', '{"groups":[{"label":"a","ids":[0,1]',
+])
+def test_compact_protocol_rejects_invalid_assignments(raw, monkeypatch):
+    import litellm
+    from newsprism.service.llm_clusterer import _ClusterParseError
+
+    monkeypatch.setattr(litellm, "completion", lambda **kw: _response(raw))
+    with pytest.raises(_ClusterParseError):
+        LLMClusterer(_compact_config())._llm_cluster([_article(i) for i in range(4)])
+
+
+def test_compact_redundant_assignments_are_normalized_without_a_paid_retry(monkeypatch):
+    import litellm
+
+    calls = []
+    raw = '{"groups":[{"label":"first","ids":[0,1,1]},' \
+          '{"label":"overlap","ids":[1,2]},{"label":"singleton","ids":[3]}]}'
+
+    def completion(**kwargs):
+        calls.append(kwargs)
+        if len(calls) > 1:
+            pytest.fail("Redundant known IDs must not trigger a paid retry")
+        return _response(raw)
+
+    monkeypatch.setattr(litellm, "completion", completion)
+    articles = [_article(i) for i in range(5)]
+    result = LLMClusterer(_compact_config()).cluster(articles)
+    assert {a.url for c in result for a in c.articles} == {a.url for a in articles}
+    assert sorted(len(c.articles) for c in result) == [1, 1, 1, 2]
+    paired = next(c for c in result if len(c.articles) == 2)
+    assert {a.url for a in paired.articles} == {articles[0].url, articles[1].url}
+    assert paired.topic_category == "first"
+    assert len(calls) == 1
+
+
+def test_compact_invalid_response_recovers_locally_without_losing_unrelated_articles(monkeypatch):
+    import litellm
+
+    articles = [_article(i) for i in range(3)]
+    for i, article in enumerate(articles):
+        article.embedding = [float(i == j) for j in range(3)]
+    monkeypatch.setattr(litellm, "completion", lambda **kw: _response(
+        '{"groups":[{"label":"bad","ids":[0,99]}]}'
+    ))
+    result = LLMClusterer(_compact_config()).cluster(articles)
+    assert {a.url for c in result for a in c.articles} == {a.url for a in articles}
+    assert all(len(c.articles) == 1 for c in result)
+
+
+def test_compact_prompt_preserves_titles_and_uses_bounded_positional_rows():
+    from newsprism.service.llm_clusterer import build_compact_clustering_user_prompt
+
+    articles = [_article(i) for i in range(3)]
+    articles[2].source_name = articles[0].source_name
+    for article in articles:
+        article.content = "evidence " * 80
+    prompt = build_compact_clustering_user_prompt(articles, snippet_chars=80)
+    payload = json.loads(prompt.split("Articles:\n", 1)[1])
+    assert payload == [
+        [0, 0, "Event 0", articles[0].content[:80]],
+        [1, 1, "Event 1", articles[1].content[:80]],
+        [2, 0, "Event 2", articles[2].content[:80]],
+    ]
+
+
+def test_compact_wrong_schema_cannot_salvage_a_partial_legacy_result(monkeypatch):
+    import litellm
+
+    articles = [_article(i) for i in range(3)]
+    for i, article in enumerate(articles):
+        article.embedding = [float(i == j) for j in range(3)]
+    monkeypatch.setattr(litellm, "completion", lambda **kw: _response(
+        '{"clusters":[{"label":"wrong schema","ids":[0]}]}'
+    ))
+    result = LLMClusterer(_compact_config()).cluster(articles)
+    assert {a.url for c in result for a in c.articles} == {a.url for a in articles}
+
+
+def test_compact_truncated_legacy_response_never_enters_partial_legacy_recovery(monkeypatch):
+    import litellm
+
+    articles = [_article(i) for i in range(5)]
+    for i, article in enumerate(articles):
+        article.embedding = [float(i == j) for j in range(5)]
+    responses = iter([
+        '{"clusters":[{"ids":[0]},{"ids":[1]},{"ids":[2]},{"ids":[',
+        '{"clusters":[]}',
+    ])
+    monkeypatch.setattr(litellm, "completion", lambda **kw: _response(next(responses)))
+    result = LLMClusterer(_compact_config()).cluster(articles)
+    assert {a.url for c in result for a in c.articles} == {a.url for a in articles}
