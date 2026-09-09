@@ -44,6 +44,20 @@ def test_disables_reasoning_for_openrouter_hosted_deepseek_v4_pro() -> None:
     }
 
 
+def test_disables_reasoning_for_openrouter_hosted_dated_deepseek_v4_flash() -> None:
+    """Dated snapshots (e.g. the pinned -0731 slug) keep the reasoning quirk."""
+    assert completion_compat_kwargs("openai/deepseek/deepseek-v4-flash-0731", "https://openrouter.ai/api/v1") == {
+        "extra_body": {"reasoning": {"enabled": False}, "usage": {"include": True}}
+    }
+
+
+def test_openrouter_other_deepseek_variants_keep_usage_without_reasoning_quirk() -> None:
+    """The reasoning quirk covers only plain/dated V4 Flash/Pro, verified models."""
+    assert completion_compat_kwargs(
+        "openai/deepseek/deepseek-v4-flash-vision-exp", "https://openrouter.ai/api/v1"
+    ) == {"extra_body": {"usage": {"include": True}}}
+
+
 def test_openrouter_requests_include_usage_accounting() -> None:
     """Every OpenRouter call opts into usage accounting so billed cost lands in telemetry."""
     assert completion_compat_kwargs(

@@ -1,11 +1,16 @@
 """Provider-specific LiteLLM request compatibility helpers."""
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 
 DEEPSEEK_API_HOST = "api.deepseek.com"
 OPENROUTER_API_HOST = "openrouter.ai"
+
+# DeepSeek V4 Flash/Pro in plain or dated-snapshot form (e.g. -0731); the
+# reasoning/thinking quirks below are only verified for these models.
+_DEEPSEEK_V4_RE = re.compile(r"deepseek-v4-(?:flash|pro)(?:-\d{4})?")
 
 
 def _base_url_host(base_url: str) -> str:
@@ -18,7 +23,7 @@ def completion_compat_kwargs(model: str, base_url: str) -> dict[str, object]:
     normalized_model = model.lower().removeprefix("openai/").removeprefix("deepseek/")
     base_host = _base_url_host(base_url)
 
-    if normalized_model in {"deepseek-v4-flash", "deepseek-v4-pro"} and base_host == DEEPSEEK_API_HOST:
+    if _DEEPSEEK_V4_RE.fullmatch(normalized_model) and base_host == DEEPSEEK_API_HOST:
         # DeepSeek V4 defaults to thinking mode, which can spend short JSON-call
         # token budgets on reasoning and leave final content empty. The previous
         # deepseek-chat alias used non-thinking mode, so preserve that behavior.
@@ -31,7 +36,7 @@ def completion_compat_kwargs(model: str, base_url: str) -> dict[str, object]:
             # rate exceeds BLENDED_RATE_ALERT_USD_PER_1M.
             "usage": {"include": True},
         }
-        if normalized_model in {"deepseek-v4-flash", "deepseek-v4-pro"}:
+        if _DEEPSEEK_V4_RE.fullmatch(normalized_model):
             # OpenRouter-hosted DeepSeek V4 has the same reasoning-by-default
             # issue (verified: finish=length with empty content on short JSON
             # budgets). OpenRouter's unified `reasoning` switch is the

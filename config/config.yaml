@@ -30,8 +30,11 @@ llm_telemetry:
 llm:
   # DeepSeek remains the high-quality fallback for low-stakes stages.
   # DeepSeek V4 Flash via OpenRouter: cheaper than the direct API and shares
-  # the OpenRouter base URL with the free stage models below.
-  fallback_model: openai/deepseek/deepseek-v4-flash
+  # the OpenRouter base URL with the free stage models below. Pinned to the
+  # 0731 snapshot: the un-dated slug still serves the older 2026-04-23 build
+  # (verified 2026-09-09 via OpenRouter /models). Actual billing still varies
+  # by serving endpoint; llm_telemetry records the measured cost per call.
+  fallback_model: openai/deepseek/deepseek-v4-flash-0731
   # Stage-specific cheaper/free primary models. Leave empty to use the default
   # model for that stage. dots-3-note-preview:free is the only free model
   # verified (2026-09-08) to return valid JSON within the small per-stage
@@ -70,8 +73,10 @@ clustering:
   llm_max_articles_per_call: 60
   # Opt-in cost profile: compact rows and sparse labeled groups avoid repeated
   # keys and singleton output. Full bodies remain available downstream. Local
-  # sampling found false event merges, so keep the established protocol default.
-  compact_protocol_enabled: false
+  # sampling found false event merges, so this trades some merge precision for
+  # token cost; enabled deliberately on 2026-09-09 (clustering was 80% of LLM
+  # spend). Revert to false if report quality regresses.
+  compact_protocol_enabled: true
   compact_snippet_chars: 80
   # Phase A: cap per-article snippet length sent to the clustering prompt.
   article_snippet_chars: 240
