@@ -24,6 +24,31 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
+# Missed jobs re-run (coalesced) instead of being skipped: a slow publish once
+# overran the push trigger by 4 minutes and today's report never reached
+# Telegram. 30 min bounds how late a job may fire; coalesce prevents stampedes
+# after long stalls.
+SCHEDULER_JOB_DEFAULTS = {"coalesce": True, "misfire_grace_time": 1800}
+
+
+def _build_apscheduler(tz_name: str) -> AsyncIOScheduler:
+    return AsyncIOScheduler(timezone=tz_name)
+
+
+def _add_scheduler_job(
+    sched: AsyncIOScheduler,
+    func,
+    trigger,
+    job_id: str,
+) -> None:
+    """Register a pipeline job; missed runs fire late (coalesced) instead of skipping.
+
+    APScheduler 3.11 dropped scheduler-level job defaults (and a ctor-level
+    ``job_defaults=`` breaks job creation there), so these must be passed per
+    job — verified against the installed version.
+    """
+    sched.add_job(func, trigger, id=job_id, **SCHEDULER_JOB_DEFAULTS)
+
 from newsprism.config import Config
 from newsprism.repo import (
     delete_clusters_for_date,
@@ -1019,7 +1044,7 @@ class Scheduler:
         # schedule. DeepSeek-facing delta/publish jobs may use a separate
         # timezone so their configured window can target non-peak pricing.
         llm_processing_tz = self.cfg.schedule.get("llm_processing_timezone", tz)
-        sched = AsyncIOScheduler(timezone=tz)
+        sched = _build_apscheduler(tz)
         self._apscheduler = sched
         self._cleanup_old_staging()
         full_collect_cron = self.cfg.schedule.get(
@@ -1030,48 +1055,55 @@ class Scheduler:
         publish_cron = self.cfg.schedule.get("publish_cron", "30 7 * * *")
         push_cron = self.cfg.schedule.get("push_cron", "0 8 * * *")
 
-        sched.add_job(
+        _add_scheduler_job(
+            sched,
             partial(self.collect, mode="full"),
             CronTrigger.from_crontab(full_collect_cron, timezone=tz),
-            id="collect_full",
+            "collect_full",
         )
         if delta_collect_cron:
-            sched.add_job(
+            _add_scheduler_job(
+                sched,
                 partial(self.collect, mode="delta"),
                 CronTrigger.from_crontab(delta_collect_cron, timezone=llm_processing_tz),
-                id="collect_delta",
+                "collect_delta",
             )
-        sched.add_job(
+        _add_scheduler_job(
+            sched,
             partial(self.publish, push_after_render=False),
             CronTrigger.from_crontab(publish_cron, timezone=llm_processing_tz),
-            id="publish_stage",
+            "publish_stage",
         )
-        sched.add_job(
+        _add_scheduler_job(
+            sched,
             self.push,
             CronTrigger.from_crontab(push_cron, timezone=tz),
-            id="push_daily",
+            "push_daily",
         )
 
         # ─── Evolution loop (feedback → calibration → memory; retention) ──────
         evolution = self.cfg.evolution if isinstance(self.cfg.evolution, dict) else {}
         if evolution.get("calibration", {}).get("enabled", True):
             calibrate_cron = self.cfg.schedule.get("calibrate_cron", "30 3 * * 1")
-            sched.add_job(
+            _add_scheduler_job(
+                sched,
                 self._run_calibration,
                 CronTrigger.from_crontab(calibrate_cron, timezone=tz),
-                id="calibrate_weekly",
+                "calibrate_weekly",
             )
         retention_cron = self.cfg.schedule.get("retention_cron", "0 4 * * 1")
-        sched.add_job(
+        _add_scheduler_job(
+            sched,
             self._run_retention,
             CronTrigger.from_crontab(retention_cron, timezone=tz),
-            id="retention_weekly",
+            "retention_weekly",
         )
         output_retention_cron = self.cfg.schedule.get("retention_output_cron", "30 4 * * 1")
-        sched.add_job(
+        _add_scheduler_job(
+            sched,
             self._run_output_retention,
             CronTrigger.from_crontab(output_retention_cron, timezone=tz),
-            id="output_retention_weekly",
+            "output_retention_weekly",
         )
 
         sched.start()

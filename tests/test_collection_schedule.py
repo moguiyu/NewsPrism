@@ -111,7 +111,7 @@ def test_scheduler_registers_full_delta_publish_and_push_jobs(monkeypatch):
         def __init__(self, timezone=None):
             self.timezone = timezone
 
-        def add_job(self, func, trigger, id):
+        def add_job(self, func, trigger, id, **kwargs):
             captured_job_ids.append(id)
 
         def start(self):
@@ -169,7 +169,7 @@ def test_scheduler_uses_processing_timezone_only_for_delta_and_publish(monkeypat
         def __init__(self, timezone=None):
             self.timezone = timezone
 
-        def add_job(self, func, trigger, id):
+        def add_job(self, func, trigger, id, **kwargs):
             captured_triggers[id] = trigger
 
         def start(self):
@@ -214,7 +214,7 @@ def test_scheduler_processing_timezone_falls_back_to_schedule_timezone(monkeypat
         def __init__(self, timezone=None):
             self.timezone = timezone
 
-        def add_job(self, func, trigger, id):
+        def add_job(self, func, trigger, id, **kwargs):
             captured_triggers[id] = trigger
 
         def start(self):

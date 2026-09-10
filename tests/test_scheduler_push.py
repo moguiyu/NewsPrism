@@ -194,3 +194,25 @@ def test_publish_rendered_groups_main_clusters_by_category(tmp_path, monkeypatch
 
     # Legacy rendered categories normalize to World, World, Business in public order.
     assert [item["cluster_id"] for item in captured[0]] == [1, 3, 2]
+
+
+def test_scheduled_jobs_tolerate_publish_overrun():
+    """A slow publish must not swallow the push: registered jobs fire late
+    (coalesced) instead of being skipped as misfired.
+
+    2026-09-10: publish ran 05:20-06:04 UTC and the 06:00 UTC push (08:00 CEST)
+    was skipped as misfired, so today's report never reached Telegram.
+    """
+    from apscheduler.triggers.cron import CronTrigger
+
+    from newsprism.runtime.scheduler import _add_scheduler_job, _build_apscheduler
+
+    async def noop() -> None:
+        return None
+
+    sched = _build_apscheduler("Europe/Warsaw")
+    _add_scheduler_job(sched, noop, CronTrigger.from_crontab("0 8 * * *"), "push_daily")
+    job = sched.get_job("push_daily")
+    assert job is not None
+    assert job.misfire_grace_time == 1800
+    assert job.coalesce is True
