@@ -805,6 +805,9 @@ sources:
   - name: Techzine
     name_en: Techzine
     url: https://www.techzine.nl
+    # 2026-09-10: site 403s every non-browser client (all UAs) from this network —
+    # CDN-level block, not UA-fixable. Re-enable if the block is lifted.
+    enabled: false
     rss_url: https://www.techzine.nl/feed/                    # ✓ verified
     type: rss
     weight: 0.8
@@ -990,7 +993,8 @@ sources:
     name_en: Zaobao
     url: https://www.zaobao.com.sg
     # newsnow_id intentionally disabled: its zaobao route emits zaochenbao.com mirror URLs.
-    rss_url: https://www.zaobao.com.sg/rss/china             # fallback if newsnow unavailable
+    # Direct zaobao RSS returns 404 since ~2026-09; local rsshub route verified 2026-09-10.
+    rss_url: http://rsshub:1200/zaobao/realtime/china
     rss_fallback: https://feedx.net/rss/zaobao.xml
     type: rss
     weight: 1.0
@@ -1038,8 +1042,12 @@ sources:
   - name: AP News
     name_en: AP News
     url: https://apnews.com
+    # 2026-09-10: apnews.com 403s the rsshub upstream fetch from this network
+    # (FetchError 403 in rsshub logs) — IP-level block, route itself intact.
+    # Re-enable when apnews.com stops blocking the host IP.
+    enabled: false
     rss_url: null                                              # ✗ AP removed public RSS; rsshub.app rate-limited
-    rsshub_url: http://rsshub:1200/apnews/topics/technology    # self-hosted rsshub container (verified working in prod)
+    rsshub_url: http://rsshub:1200/apnews/topics/technology    # self-hosted rsshub container
     type: rss
     weight: 0.95
     language: en

@@ -278,7 +278,8 @@ class TestPerspectivesContext:
         zaobao = next(source for source in cfg.sources if source.name == "联合早报")
 
         assert zaobao.newsnow_id is None
-        assert zaobao.rss_url == "https://www.zaobao.com.sg/rss/china"
+        # Direct zaobao RSS is 404; the local rsshub route replaced it (2026-09-10).
+        assert zaobao.rss_url == "http://rsshub:1200/zaobao/realtime/china"
 
     def test_render_without_perspectives_stays_readable(self, renderer, tmp_path):
         renderer.output_dir = tmp_path

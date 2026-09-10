@@ -41,6 +41,12 @@ from newsprism.types import RawArticle
 
 logger = logging.getLogger(__name__)
 
+# Some feed hosts bot-filter unknown custom UAs while allowing plain clients
+# (tweakers.net verified 2026-09-10: 403 on custom UA, 200 on curl UA); on a
+# 403 the RSS fetch retries once as a plain client.
+RSS_UA = "NewsPrism/1.0 (RSS reader)"
+RSS_UA_PLAIN = "curl/8.5.0"
+
 _domain_last: dict[str, float] = {}
 
 CollectionMode = Literal["full", "delta"]
@@ -362,8 +368,17 @@ class Collector:
         logger.info("RSS: %s → %s", src.name, feed_url)
 
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-            resp = client.get(feed_url, headers={"User-Agent": "NewsPrism/1.0 (RSS reader)"})
-            resp.raise_for_status()
+            resp = client.get(feed_url, headers={"User-Agent": RSS_UA})
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 403:
+                    raise
+                # Some bot filters (e.g. tweakers.net) 403 unknown custom UAs
+                # while allowing plain clients; retry once as a plain client.
+                logger.info("RSS: %s got 403; retrying with plain client UA", src.name)
+                resp = client.get(feed_url, headers={"User-Agent": RSS_UA_PLAIN})
+                resp.raise_for_status()
 
         feed = feedparser.parse(resp.text)
         if not feed.entries:
