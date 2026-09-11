@@ -72,11 +72,17 @@ clustering:
   # retry as smaller chunks before only that chunk falls back to embeddings.
   llm_max_articles_per_call: 60
   # Opt-in cost profile: compact rows and sparse labeled groups avoid repeated
-  # keys and singleton output. Full bodies remain available downstream. Local
-  # sampling found false event merges, so this trades some merge precision for
-  # token cost; enabled deliberately on 2026-09-09 (clustering was 80% of LLM
-  # spend). Revert to false if report quality regresses.
-  compact_protocol_enabled: true
+  # keys and singleton output. Measured 2026-09-11 (539-article paired benchmark,
+  # provider-billed costs): after the coherence validator it retains 5 of the 12
+  # article pairs the standard protocol groups, and production corroboration
+  # depth fell (articles/story 4.3 -> 2.0, avg sources 3.00 -> 1.73). Reverted to
+  # false: the remaining saving is ~$0.03/day and the lost depth is the product's
+  # core value. See docs/design-docs/decisions.md (2026-09-11).
+  compact_protocol_enabled: false
+  # Snippet length is the measured lever, not the flag: 200 characters retained
+  # 9 of 12 post-validator pairs (-57% clustering cost) versus 80 characters'
+  # 5 of 12 (-75%). If this protocol is ever re-enabled, raise this to 200 at the
+  # same time; left at the code default while the protocol is off.
   compact_snippet_chars: 80
   # Phase A: cap per-article snippet length sent to the clustering prompt.
   article_snippet_chars: 240
