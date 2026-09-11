@@ -60,6 +60,18 @@ def estimate_cost(event: dict) -> float | None:
     return (hit * .05 + (prompt - hit) * 1.5 + output * 4.5) / 1_000_000 * (2 if peak else 1)
 
 
+def usage_event_fields(response: object) -> dict:
+    """Token classes and billed cost from one provider response.
+
+    Mirrors the runtime 6-field usage contract: a stale 5-field unpack here
+    silently degraded every live benchmark arm to embedding fallback.
+    """
+    prompt, output, total, hit, miss, billed = _usage_fields(response)
+    return dict(prompt_tokens=prompt, completion_tokens=output, total_tokens=total,
+                prompt_cache_hit_tokens=hit, prompt_cache_miss_tokens=miss,
+                billed_cost_usd=billed)
+
+
 def compare_clusters(baseline: list[ArticleCluster], candidate: list[ArticleCluster]) -> dict:
     def pairs(clusters):
         return {pair for c in clusters for pair in combinations(sorted({a.url for a in c.articles}), 2)}
@@ -136,17 +148,16 @@ def _live_cluster(cfg, articles: list[Article], compact: bool, cold_cache: bool 
         event = dict(model=kwargs["model"], created_at=started, status="api_error",
                      prompt_tokens=None, completion_tokens=None, total_tokens=None,
                      prompt_cache_hit_tokens=None, prompt_cache_miss_tokens=None,
-                     estimated_cny=None, finish_reason=None, response=None)
+                     billed_cost_usd=None, estimated_cny=None, finish_reason=None,
+                     response=None)
         calls.append(event)
         try:
             response = complete(**kwargs)
         except Exception as exc:
             event["error_type"] = type(exc).__name__
             raise
-        prompt, output, total, hit, miss = _usage_fields(response)
-        event.update(prompt_tokens=prompt, completion_tokens=output, total_tokens=total,
-                     prompt_cache_hit_tokens=hit, prompt_cache_miss_tokens=miss, status="ok",
-                     finish_reason=response.choices[0].finish_reason,
+        event.update(usage_event_fields(response))
+        event.update(status="ok", finish_reason=response.choices[0].finish_reason,
                      response=response.choices[0].message.content)
         event["estimated_cny"] = estimate_cost(event)
         tracked = TrackedCompletion(response, None, Path("/unused"))

@@ -31,6 +31,30 @@ def test_missing_usage_and_unknown_models_are_not_reported_as_zero_cost():
     assert estimate_cost(event) is None
 
 
+def test_live_usage_extraction_records_billed_cost_for_dated_models():
+    """The 6-field usage contract (token classes + billed cost) must survive
+    dated slugs such as -0731: a stale 5-field unpack silently degraded the
+    live benchmark arms to embedding fallback on 2026-09-11."""
+    from scripts.clustering_cost_benchmark import usage_event_fields
+
+    class FakeUsage:
+        prompt_tokens = 1200
+        completion_tokens = 300
+        total_tokens = 1500
+        prompt_cache_hit_tokens = 0
+        prompt_cache_miss_tokens = 0
+        cost = 0.00042
+
+    class FakeResponse:
+        usage = FakeUsage()
+
+    fields = usage_event_fields(FakeResponse())
+    assert fields["prompt_tokens"] == 1200
+    assert fields["completion_tokens"] == 300
+    assert fields["total_tokens"] == 1500
+    assert fields["billed_cost_usd"] == 0.00042
+
+
 def test_pair_comparison_exposes_merges_splits_and_uncovered_articles():
     from scripts.clustering_cost_benchmark import compare_clusters
 
