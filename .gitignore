@@ -22,20 +22,30 @@ build/
 .mcp.json
 .firecrawl/
 .sisyphus/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/deploying-to-fnos/
+.agents/skills/deploying-to-fnos/*
+!.agents/skills/deploying-to-fnos/SKILL.md
 .claude/
 .opencode/
 .openspec/
 .playwright-mcp/
 openspec/
 .vscode/
+# Agent instruction files stay local-only by design: they carry project design
+# rationale, not just commands, and are deliberately not published to the public
+# GitHub mirror. Never commit them; CLAUDE.md is the entry point that points here.
 AGENTS.md
 CLAUDE.md
 *.code-workspace
 .worktrees/
 
 # Local-only internal documentation and review artifacts.
-docs/
+docs/*
+!docs/agent-workflow.md
+!docs/agent-guidance-audit.md
 debug-perspectives-bug.html
 eval-report-*.png
 report-overview.png
