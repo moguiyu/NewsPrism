@@ -28,6 +28,7 @@ import numpy as np
 
 from newsprism.config import Config
 from newsprism.service.embeddings import get_model
+from newsprism.service.language import looks_like_chinese_text
 from newsprism.types import Article, ArticleCluster, Cluster, StorylineEvent
 
 logger = logging.getLogger(__name__)
@@ -1059,22 +1060,30 @@ class StorylineResolver:
                     str(profiles[idx]["lead_title"])
                     for idx in core_nodes[:3]
                 )
+                core_anchor_clusters = [clusters[idx] for idx in core_nodes]
                 if not _storyline_name_matches_content(historical_name, today_text):
-                    storyline_name = self._build_storyline_name(
-                        [clusters[idx] for idx in core_nodes]
-                    )
+                    raw_storyline_name = self._build_storyline_name(core_anchor_clusters)
                 else:
-                    storyline_name = _short_name(historical_name, self.max_name_chars)
+                    raw_storyline_name = _short_name(historical_name, self.max_name_chars)
+                storyline_name = self._finalize_storyline_name(
+                    raw_storyline_name, core_anchor_clusters
+                )
             else:
-                storyline_name = self._build_storyline_name([clusters[idx] for idx in core_nodes])
+                core_anchor_clusters = [clusters[idx] for idx in core_nodes]
+                raw_storyline_name = self._build_storyline_name(core_anchor_clusters)
+                storyline_name = self._finalize_storyline_name(
+                    raw_storyline_name, core_anchor_clusters
+                )
                 # Content-derived key (Issue #4): same anchor set → same key
                 # across days; different topic → different hash. Replaces the
                 # per-run ``storyline-{N}`` counter that collided across days.
+                # The key keeps hashing the RAW name: sanitizing the display
+                # label must never change storyline continuity across days.
                 anchor_titles = [
                     str(profiles[idx]["lead_title"])
                     for idx in core_nodes[:3]
                 ]
-                storyline_key = f"{_slugify(storyline_name)}-{_content_hash(*anchor_titles)}"
+                storyline_key = f"{_slugify(raw_storyline_name)}-{_content_hash(*anchor_titles)}"
                 storyline_counter += 1
 
             component_edges = [
@@ -1117,6 +1126,34 @@ class StorylineResolver:
         if lead.articles:
             return _short_name(lead.articles[0].title, self.max_name_chars)
         return _short_name(lead.topic_category, self.max_name_chars)
+
+    def _finalize_storyline_name(
+        self,
+        raw_name: str,
+        clusters: list[ArticleCluster],
+    ) -> str:
+        """Return a short Chinese storyline label, never a foreign-script fragment.
+
+        ``_short_name`` truncates the lead headline to ``tab_name_max_chars``
+        with no script check, so Korean/Russian/Polish leads produced labels
+        like ``NowaTeslas``, ``AsXiJinpin`` and ``Задвамесяц`` on 2026-09-13
+        (17 of 19 families). Prefer an explicit Chinese candidate from the same
+        family; keep ``raw_name`` when nothing Chinese exists so the storyline
+        key -- which is derived from the raw name -- stays stable.
+        """
+        if looks_like_chinese_text(raw_name):
+            return raw_name
+        for cluster in clusters:
+            impact = getattr(cluster, "impact", None)
+            candidate = getattr(impact, "short_topic_name", None) if impact else None
+            if candidate and looks_like_chinese_text(str(candidate)):
+                return _short_name(str(candidate), self.max_name_chars)
+        for cluster in clusters:
+            if cluster.articles:
+                title = str(cluster.articles[0].title or "")
+                if looks_like_chinese_text(title):
+                    return _short_name(title, self.max_name_chars)
+        return raw_name
 
     def _pick_icon_key(self, clusters: list[ArticleCluster]) -> str:
         counts: dict[str, int] = defaultdict(int)
@@ -1176,7 +1213,10 @@ class StorylineResolver:
             # across days (single-8 meant 4 different topics in one week).
             lead_title = str(profile.get("lead_title") or "")
             storyline_key = f"single-{_content_hash(lead_title)}"
-            storyline_name = _short_name(str(profile["lead_title"]), self.max_name_chars)
+            storyline_name = self._finalize_storyline_name(
+                _short_name(str(profile["lead_title"]), self.max_name_chars),
+                [cluster],
+            )
             confidence = 0.0
         self._apply_storyline(
             cluster,

@@ -877,3 +877,37 @@ def test_state_machine_stabilized_with_strong_impact():
     historical = [_historical_cluster("prior", ["Reuters"])]
     historical[0].storyline_key = "k"
     assert machine.resolve_state(cluster, historical) == "stabilized"
+
+
+def test_storyline_name_replaces_foreign_headline_fragment():
+    resolver = StorylineResolver(_config(), _StubSummarizer([]), lambda *_args: 0.0)
+    cluster = ArticleCluster(
+        topic_category="Technology",
+        articles=[_article("Nowa Tesla stanowi zagrożenie? Strażacy mają sporo obaw", [0.0])],
+    )
+    cluster.impact = ImpactAssessment(
+        cluster_key="tesla-cybercab",
+        short_topic_name="特斯拉无人出租车",
+    )
+
+    assert resolver._finalize_storyline_name("NowaTeslas", [cluster]) == "特斯拉无人出租车"
+
+
+def test_storyline_name_keeps_raw_when_no_chinese_candidate_exists():
+    resolver = StorylineResolver(_config(), _StubSummarizer([]), lambda *_args: 0.0)
+    cluster = ArticleCluster(
+        topic_category="Technology",
+        articles=[_article("Задвамесяц до скандального взлома Hugging Face", [0.0])],
+    )
+
+    assert resolver._finalize_storyline_name("Задвамесяц", [cluster]) == "Задвамесяц"
+
+
+def test_storyline_name_keeps_valid_chinese_label():
+    resolver = StorylineResolver(_config(), _StubSummarizer([]), lambda *_args: 0.0)
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[_article("На Київщині зафіксували пошкодження", [0.0])],
+    )
+
+    assert resolver._finalize_storyline_name("俄袭乌设施", [cluster]) == "俄袭乌设施"
