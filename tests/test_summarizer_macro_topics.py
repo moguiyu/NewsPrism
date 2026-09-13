@@ -612,6 +612,41 @@ def test_translated_numeric_grounding_accepts_cyrillic_scale_equivalence():
     assert summary.quality_status == "publishable"
 
 
+def test_numeric_values_reject_cyrillic_scale_stem_overmatch():
+    """A word that merely *begins* with a scale stem is not a scale.
+
+    ``миллион\\w*`` read "5 миллионер" (five millionaires) as 5,000,000 and
+    ``тыс\\.?`` had no trailing boundary at all. These values feed
+    ``_bare_digits_in_evidence``, which grounds a claim by value equality, so an
+    inflated evidence value can approve a fabricated figure such as 5,000,000.
+    """
+    assert Summarizer._numeric_values("5 миллионер") == [5.0]
+    assert Summarizer._numeric_values("2 миллионный") == [2.0]
+    assert Summarizer._numeric_values("3 тысячелетия") == [3.0]
+    assert Summarizer._numeric_values("10 тысчонок") == [10.0]
+    assert Summarizer._numeric_values("5 миллионеров проживает") == [5.0]
+
+
+def test_numeric_values_keep_cyrillic_scale_inflections():
+    """The boundary fix must not be "solved" by deleting inflections."""
+    cases = {
+        "на 21 тысячу человек": [21000.0],
+        "21 тысяча": [21000.0],
+        "5 тысяч": [5000.0],
+        "3 тыс.": [3000.0],
+        "2 миллиона": [2e6],
+        "более 5 миллионов жителей": [5e6],
+        "2 миллиарда": [2e9],
+        "4 млрд": [4e9],
+        "7 млн": [7e6],
+        "2 триллиона": [2e12],
+        "1 трлн": [1e12],
+        "21 млн рублей": [2.1e7],
+    }
+    for text, expected in cases.items():
+        assert Summarizer._numeric_values(text) == expected, text
+
+
 def test_numeric_grounding_fails_closed_for_live_rank_13_shape(monkeypatch):
     """The published rank-13 placeholder and orphan ``1%。`` must disappear."""
     summarizer = Summarizer(_config())

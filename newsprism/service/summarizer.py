@@ -987,10 +987,26 @@ class Summarizer:
         ("трлн", 1e12),
     )
 
+    # Explicit inflections only. ``\w*`` let "миллионер" (millionaire),
+    # "миллионный" (millionth) and "тысячелетия" (millennia) read as scales,
+    # and ``тыс\.?`` had no trailing boundary at all, so "тысчонок" matched too.
+    # An inflated evidence value grounds a claim by value equality in
+    # ``_bare_digits_in_evidence``, which can approve a fabricated figure.
+    # The trailing lookahead ends every scale word at a Cyrillic word boundary;
+    # it lives inside this group so the CJK/Korean alternatives are untouched.
+    _CYRILLIC_SCALE_WORDS = (
+        r"(?:тысяч(?:а|и|у|ей|ам|ами|ах|ью)?|тыс\.?"
+        r"|миллион(?:а|ов|ы|у|ам|ами|ах)?"
+        r"|миллиард(?:а|ов|ы|у|ам|ами|ах)?"
+        r"|триллион(?:а|ов|ы|у|ам|ами|ах)?"
+        r"|млн|млрд|трлн)(?![а-яёА-ЯЁ])"
+    )
+
+    _CYRILLIC_SCALE_WORD_RE = re.compile(_CYRILLIC_SCALE_WORDS)
+
     _NUMERIC_SCALE_PATTERN = re.compile(
         rf"(?<!\d)(?P<major>{_NUMERIC_VALUE})"
-        r"\s*(?P<scale>千|천|万|만|亿|억|兆|조"
-        r"|тысяч\w*|тыс\.?|миллион\w*|млн|миллиард\w*|млрд|триллион\w*|трлн)"
+        rf"\s*(?P<scale>千|천|万|만|亿|억|兆|조|{_CYRILLIC_SCALE_WORDS})"
         rf"(?P<minor>{_NUMERIC_VALUE})?"
     )
 
@@ -1007,13 +1023,22 @@ class Summarizer:
 
     @classmethod
     def _scale_factor(cls, scale: str) -> float | None:
-        """Map a matched scale token to its factor, including inflections."""
+        """Map a matched scale token to its factor, including inflections.
+
+        The token must match the scale alternatives *in full* before the stem
+        table is consulted. A bare ``startswith`` let "миллионер" resolve to
+        1e6 when the pattern was loose; deriving this guard from the same
+        ``_CYRILLIC_SCALE_WORDS`` string the pattern uses means widening the
+        pattern cannot silently reintroduce that over-match.
+        """
         if not scale:
             return None
         factor = cls._NUMERIC_SCALE_FACTORS.get(scale)
         if factor is not None:
             return factor
         lowered = scale.casefold()
+        if not cls._CYRILLIC_SCALE_WORD_RE.fullmatch(lowered):
+            return None
         for stem, stem_factor in cls._CYRILLIC_SCALE_STEMS:
             if lowered.startswith(stem):
                 return stem_factor
