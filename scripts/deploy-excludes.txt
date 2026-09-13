@@ -1,0 +1,46 @@
+# Paths that must never be synced to fnOS.
+# Consumed by scripts/deploy.sh via rsync --exclude-from.
+# Layout: one pattern per line; '#' starts a comment.
+#
+# Local-only project documents (project policy: never committed, never published)
+AGENTS.md
+CLAUDE.md
+docs/
+.agents/
+.superpowers/
+.remember/
+#
+# Secrets and environment files. The host keeps its own .env; deploy never writes it.
+.env
+.env.production
+.env.bak*
+.mcp.json
+#
+# Local tooling / editor / agent state
+.claude/
+.vscode/
+.opencode/
+.openspec/
+.zcode/
+.worktrees/
+.playwright-mcp/
+.ruff_cache/
+.firecrawl/
+.DS_Store
+#
+# Runtime state: bind-mounted on the host, never overwritten by a sync
+data/
+output/
+#
+# Build artefacts, caches and virtualenvs
+.git/
+.venv/
+__pycache__/
+.pytest_cache/
+dist/
+#
+# Root-level screenshots only. Anchored patterns matter: the app's own icons
+# (newsprism/static/icons/*.png, newsprism/static/og-image.png) MUST still sync.
+/*.png
+/banner-*.png
+/eval-report-*.png
