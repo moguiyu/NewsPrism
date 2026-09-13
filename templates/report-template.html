@@ -275,13 +275,6 @@
       transition: all 0.2s ease;
     }
 
-    .language-toggle button.active,
-    .language-toggle a.lang-btn {
-      background: var(--cat-active-bg);
-      color: var(--text);
-      box-shadow: 0 4px 12px var(--accent-glow);
-    }
-
     .theme-toggle button {
       min-width: 38px;
     }
@@ -1164,7 +1157,9 @@
       }
 
       .header-tools {
-        justify-content: flex-start;
+        /* The brand row is hidden at this width (.header-brand below), so the
+           language control keeps the right edge next to the date above. */
+        justify-content: flex-end;
         gap: 8px;
         overflow-x: auto;
         scrollbar-width: none;
@@ -2090,6 +2085,41 @@
       text-underline-offset: 3px;
     }
 
+    /* Footer row 1 — edition identity beside the report stats. */
+    .footer-masthead {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px 20px;
+      margin-bottom: 18px;
+    }
+
+    .footer-masthead-edition {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .footer-masthead .footer-stats {
+      margin-bottom: 0;
+    }
+
+    /* Footer row 4 — licence line beside the appearance control. */
+    .footer-fineprint {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px 20px;
+      font-size: 12px;
+    }
+
+    .footer-fineprint-text {
+      /* Dim the copy only — opacity here would dim the theme buttons too. */
+      opacity: 0.75;
+    }
+
     .footer-stats {
       justify-content: flex-start;
       margin-bottom: 16px;
@@ -2627,13 +2657,11 @@
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-end;
       gap: 10px;
-      margin-bottom: 16px;
     }
 
-    .footer-tools .theme-toggle,
-    .footer-tools .language-toggle {
+    .footer-tools .theme-toggle {
       border-color: var(--theme-footer-ink);
       background: transparent;
       backdrop-filter: none;
@@ -2649,18 +2677,6 @@
     .footer-tools .theme-btn.active {
       background: var(--theme-footer-ink);
       color: var(--theme-footer-bg);
-    }
-
-    .footer-tools .lang-btn {
-      background: var(--theme-footer-ink);
-      color: var(--theme-footer-bg);
-    }
-
-    .footer-tools .lang-btn:hover,
-    .footer-tools .lang-btn:focus-visible {
-      background: var(--theme-footer-bg);
-      color: var(--theme-footer-ink);
-      border-color: var(--theme-footer-ink);
     }
   </style>
 
@@ -2708,6 +2724,23 @@
           <a class="logo" href="{{ home_href }}" aria-label="NewsPrism latest edition" title="NewsPrism latest edition">NewsPrism</a>
           <span class="header-date">{{ bilingual_text(report_date_display ~ ' ' ~ day_name, report_date_display_en ~ ' ' ~ day_name_en) }}</span>
         </div>
+        {# Language editions are path-isolated (root = English, /cn/ = Chinese).
+           The control lives in the header, on the date row and right-aligned;
+           .header-tools is the slot that CSS always provided for it. #}
+        {% if language_crosslink %}
+        <div class="header-tools">
+          <div class="language-toggle" aria-label="language edition">
+            {# The label names the TARGET edition, so it must follow the edition,
+               not the language toggle: bilingual_text would render both spans
+               and show "ENG" in the English edition, linking to Chinese. #}
+            <a class="lang-btn" href="{{ language_crosslink }}"
+               hreflang="{{ 'zh' if default_language == 'en' else 'en' }}"
+               lang="{{ 'zh' if default_language == 'en' else 'en' }}"
+               aria-label="{{ '切换到中文版' if default_language == 'en' else 'Switch to the English edition' }}"
+               title="{{ '切换到中文版' if default_language == 'en' else 'Switch to the English edition' }}">{{ '中文' if default_language == 'en' else 'ENG' }}</a>
+          </div>
+        </div>
+        {% endif %}
       </div>
       <nav class="cat-tabs">
         <button class="cat-tab active" onclick="filterView(this,'all','all')">{{ bilingual_text('全部速览', 'All overview') }}</button>
@@ -2953,30 +2986,22 @@
   </main>
 
   <footer>
-    <div class="footer-project" aria-label="About NewsPrism">
-      <div>
-        <div class="footer-project-kicker">{{ bilingual_text('关于 NewsPrism', 'About NewsPrism') }}</div>
-        <p class="footer-project-copy">{{ bilingual_text('NewsPrism 被构建为比较不同来源如何叙述同一事件，而不只是罗列标题。', 'NewsPrism was built to compare how different sources frame the same event, not just list headlines.') }}</p>
+    {# 1. Edition identity + report stats — the masthead foot: which edition is
+       this and what does it hold. #}
+    <div class="footer-masthead">
+      <span class="footer-masthead-edition">{{ bilingual_text('本期 · ' ~ report_date_display ~ ' ' ~ day_name, 'Edition · ' ~ report_date_display_en ~ ' ' ~ day_name_en) }}</span>
+      <div class="footer-stats" aria-label="report stats">
+        <span class="header-stat">{{ bilingual_markup('<strong>' ~ cluster_count ~ '</strong> 条常规追踪', '<strong>' ~ cluster_count ~ '</strong> regular stories') }}</span>
+        {% if positive_story_count %}
+        <span class="header-stat">{{ bilingual_markup('<strong>' ~ positive_story_count ~ '</strong> 条好消息', '<strong>' ~ positive_story_count ~ '</strong> good-news stories') }}</span>
+        {% endif %}
+        {% if hot_topic_count %}
+        <span class="header-stat header-stat-hot">{{ bilingual_markup('<strong>' ~ hot_topic_count ~ '</strong> 个热点 / ' ~ hot_topic_story_count ~ ' 条专题', '<strong>' ~ hot_topic_count ~ '</strong> hot topics / ' ~ hot_topic_story_count ~ ' stories') }}</span>
+        {% endif %}
       </div>
-      <nav class="footer-project-links" aria-label="project links">
-        <a class="footer-project-link" href="https://github.com/moguiyu/NewsPrism" target="_blank" rel="noopener">{{ bilingual_text('源代码', 'Source') }}</a>
-        <a class="footer-project-link" href="https://github.com/moguiyu/NewsPrism/issues" target="_blank" rel="noopener">{{ bilingual_text('反馈建议', 'Feedback') }}</a>
-        <a class="footer-project-link" href="mailto:evoke-ahoy-liquefy@duck.com">{{ bilingual_text('邮件联系', 'Email') }}</a>
-      </nav>
     </div>
-    <div class="footer-tools" aria-label="appearance and language">
-      <div class="theme-toggle" role="group" aria-label="Color scheme">
-        <button type="button" class="theme-btn active" data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme('system')">🖥</button>
-        <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">☀️</button>
-        <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">🌙</button>
-      </div>
-      {# Language editions are path-isolated (root = English, /cn/ = Chinese). #}
-      {% if language_crosslink %}
-      <div class="language-toggle" aria-label="language edition">
-        <a class="lang-btn" href="{{ language_crosslink }}" title="{{ '切换到中文版' if default_language == 'en' else 'Switch to the English edition' }}">{{ '中文' if default_language == 'en' else 'ENG' }}</a>
-      </div>
-      {% endif %}
-    </div>
+
+    {# 2. Day navigation — the primary task once a reader reaches the foot. #}
     <div class="footer-nav">
        {% if day_links %}
        <div class="day-selector" aria-label="report day selector">
@@ -3005,16 +3030,32 @@
        {% endif %}
       <button type="button" class="back-to-top" onclick="scrollToTop()">{{ bilingual_text('回到顶部', 'Back to Top') }}</button>
     </div>
-    <div class="footer-stats" aria-label="report stats">
-      <span class="header-stat">{{ bilingual_markup('<strong>' ~ cluster_count ~ '</strong> 条常规追踪', '<strong>' ~ cluster_count ~ '</strong> regular stories') }}</span>
-      {% if positive_story_count %}
-      <span class="header-stat">{{ bilingual_markup('<strong>' ~ positive_story_count ~ '</strong> 条好消息', '<strong>' ~ positive_story_count ~ '</strong> good-news stories') }}</span>
-      {% endif %}
-      {% if hot_topic_count %}
-      <span class="header-stat header-stat-hot">{{ bilingual_markup('<strong>' ~ hot_topic_count ~ '</strong> 个热点 / ' ~ hot_topic_story_count ~ ' 条专题', '<strong>' ~ hot_topic_count ~ '</strong> hot topics / ' ~ hot_topic_story_count ~ ' stories') }}</span>
-      {% endif %}
+
+    {# 3. About + project links — secondary actions, after navigation. #}
+    <div class="footer-project" aria-label="About NewsPrism">
+      <div>
+        <div class="footer-project-kicker">{{ bilingual_text('关于 NewsPrism', 'About NewsPrism') }}</div>
+        <p class="footer-project-copy">{{ bilingual_text('每天只有十余条：不同来源互为参照，尽可能还原对世界影响最大的事实。', 'A dozen or so stories a day — different sources set side by side, to get as close to the truth as reporting can.') }}</p>
+      </div>
+      <nav class="footer-project-links" aria-label="project links">
+        <a class="footer-project-link" href="https://github.com/moguiyu/NewsPrism" target="_blank" rel="noopener">{{ bilingual_text('源代码', 'Source') }}</a>
+        <a class="footer-project-link" href="https://github.com/moguiyu/NewsPrism/issues" target="_blank" rel="noopener">{{ bilingual_text('反馈建议', 'Feedback') }}</a>
+        <a class="footer-project-link" href="mailto:evoke-ahoy-liquefy@duck.com">{{ bilingual_text('邮件联系', 'Email') }}</a>
+      </nav>
     </div>
-    <div>{{ bilingual_text('NewsPrism · ' ~ report_date_display ~ ' · AI 多视角聚合', 'NewsPrism · ' ~ report_date_display_en ~ ' · AI Multi-Perspective Aggregation') }}</div>
+
+    {# 4. Fine print + appearance preference — lowest frequency, so last, and the
+       language control now lives in the header where readers look for it. #}
+    <div class="footer-fineprint">
+      <span class="footer-fineprint-text">{{ bilingual_text('MIT 许可 · 2026 NewsPrism 贡献者', 'MIT License · 2026 NewsPrism contributors') }}</span>
+      <div class="footer-tools" aria-label="appearance">
+        <div class="theme-toggle" role="group" aria-label="Color scheme">
+          <button type="button" class="theme-btn active" data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme('system')">🖥</button>
+          <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">☀️</button>
+          <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">🌙</button>
+        </div>
+      </div>
+    </div>
   </footer>
 
   <script>

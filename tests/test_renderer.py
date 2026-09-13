@@ -2931,7 +2931,7 @@ def test_placeholder_sources_never_render_as_broken_links(renderer, tmp_path):
 
 
 
-def test_footer_controls_and_logo_point_to_edition_home(renderer, tmp_path):
+def test_edition_controls_and_logo_point_to_edition_home(renderer, tmp_path):
     renderer.output_dir = tmp_path
     renderer.report_base_url = "https://news.moguiyu.top"
     renderer.english_edition_enabled = True
@@ -2960,16 +2960,33 @@ def test_footer_controls_and_logo_point_to_edition_home(renderer, tmp_path):
     root_tree = lxml_html.fromstring(root_html)
     cn_tree = lxml_html.fromstring(cn_html)
 
-    # Header is clean: no appearance/language tools inside it.
-    assert not root_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "header-tools")]')
-    assert not cn_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "header-tools")]')
-    assert not root_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "language-toggle")]')
-    assert not root_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "theme-toggle")]')
+    # 2026-09-13 design change: the language control moved into the header, on
+    # the date row and right-aligned, because a footer is not where readers look
+    # for it. .header-tools is the slot the stylesheet always provided for it.
+    for tree in (root_tree, cn_tree):
+        assert tree.xpath('//*[contains(@class, "header-top")]//*[contains(@class, "header-tools")]')
+        assert tree.xpath('//*[contains(@class, "header-top")]//*[contains(@class, "language-toggle")]')
+    # Exactly one language control per edition, and never in the footer.
+    assert len(root_tree.xpath('//*[contains(@class, "language-toggle")]')) == 1
+    assert not root_tree.xpath('//footer//*[contains(@class, "language-toggle")]')
+    assert not cn_tree.xpath('//footer//*[contains(@class, "language-toggle")]')
 
-    # Footer hosts both controls.
+    # The label names the TARGET edition and the crosslink points at it. Using
+    # bilingual_text here instead would render both spans and show "ENG" in the
+    # English edition while linking to Chinese.
+    root_lang = root_tree.xpath('//a[contains(@class, "lang-btn")]')[0]
+    assert (root_lang.text or "").strip() == "中文"
+    assert root_lang.get("href") == "/cn/2026-08-14/"
+    assert root_lang.get("hreflang") == "zh"
+    cn_lang = cn_tree.xpath('//a[contains(@class, "lang-btn")]')[0]
+    assert (cn_lang.text or "").strip() == "ENG"
+    assert cn_lang.get("href") == "/2026-08-14/"
+    assert cn_lang.get("hreflang") == "en"
+
+    # The appearance control stays in the footer; the header never gains it.
+    assert not root_tree.xpath('//*[contains(@class, "site-header")]//*[contains(@class, "theme-toggle")]')
     assert root_tree.xpath('//footer//*[contains(@class, "footer-tools")]')
     assert len(root_tree.xpath('//footer//button[contains(@class, "theme-btn")]')) == 3
-    assert root_tree.xpath('//footer//*[contains(@class, "language-toggle")]')
     assert cn_tree.xpath('//footer//*[contains(@class, "footer-tools")]')
 
     # Logo goes to edition home, not current date; no reload handler.
@@ -2982,10 +2999,15 @@ def test_footer_controls_and_logo_point_to_edition_home(renderer, tmp_path):
     assert len(cn_logos) == 2
     assert all(a.get("href") == "/cn/" for a in cn_logos)
 
-    # Language switch contrast is explicit in the stylesheet.
-    assert ".footer-tools .lang-btn" in root_html
-    assert "background: var(--theme-footer-ink)" in root_html
-    assert "color: var(--theme-footer-bg)" in root_html
+    # Contrast regression guard — and the lesson from how this shipped broken.
+    # The previous check here asserted that a `.footer-tools .lang-btn` rule
+    # EXISTED in the stylesheet. It did exist, so the check passed -- but
+    # `.language-toggle a.lang-btn` outranked it on specificity, so the button
+    # actually rendered #1a1a1a text on a #000000 background (contrast 1.21:1,
+    # effectively invisible) sitting on the #1a1a1a footer. Assert that the
+    # conflicting selector is gone instead of that some rule is present.
+    assert ".language-toggle a.lang-btn" not in root_html
+    assert ".footer-tools .lang-btn" not in root_html
 
 
 def test_public_hot_topic_label_rejects_korean_headline_fragment():
