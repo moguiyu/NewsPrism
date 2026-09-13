@@ -165,6 +165,54 @@ def _cluster_storyline_headline(cluster: ArticleCluster) -> str:
     return cluster.topic_category
 
 
+def _drop_blocked_summaries(
+    regular_summaries: list[ClusterSummary],
+    positive_summaries: list[ClusterSummary],
+    hot_topics: list[dict[str, object]],
+) -> tuple[list[ClusterSummary], list[ClusterSummary], list[dict[str, object]], list[str]]:
+    """Second publication gate for stages that run after the freshness check.
+
+    ``_summary_publication_rejection`` is applied once, inside the freshness
+    loop. Numeric grounding on the translated text runs later and can set
+    ``needs_review`` -- a status in ``_PUBLICATION_BLOCKED_STATUSES`` -- after
+    that loop already admitted the summary: on 2026-09-13 cluster 7299 shipped
+    carrying exactly that status. Re-check the final render set so no blocked
+    card reaches a reader.
+    """
+    dropped: list[str] = []
+    dropped_ids: set[int] = set()
+
+    def keep(summary: ClusterSummary) -> bool:
+        reason = _summary_publication_rejection(summary)
+        if not reason:
+            return True
+        # A summary can be reachable from more than one collection; withhold it
+        # once and report it once.
+        if id(summary) not in dropped_ids:
+            dropped_ids.add(id(summary))
+            dropped.append(f"{reason}|{_cluster_storyline_headline(summary.cluster)}")
+        return False
+
+    kept_regular = [summary for summary in regular_summaries if keep(summary)]
+    kept_positive = [summary for summary in positive_summaries if keep(summary)]
+
+    kept_hot: list[dict[str, object]] = []
+    for family in hot_topics:
+        members = family.get("summaries", [])
+        if not isinstance(members, list):
+            continue
+        kept_members = [
+            summary for summary in members if isinstance(summary, ClusterSummary) and keep(summary)
+        ]
+        if not kept_members:
+            continue
+        family["summaries"] = kept_members
+        family["member_count"] = len(kept_members)
+        kept_hot.append(family)
+
+    return kept_regular, kept_positive, kept_hot, dropped
+
+
 def _storyline_group_key(cluster: ArticleCluster, index: int) -> str:
     return cluster.storyline_key or cluster.macro_topic_key or f"single-{index + 1}"
 
@@ -799,6 +847,19 @@ class Scheduler:
                     hot_topics=hot_topics,
                     focus_storylines=[],
                 )
+
+            # The translation stage can downgrade a summary after the freshness
+            # gate admitted it, so gate the final render set as well.
+            regular_summaries, positive_summaries, hot_topics, post_gate_dropped = (
+                _drop_blocked_summaries(regular_summaries, positive_summaries, hot_topics)
+            )
+            if post_gate_dropped:
+                logger.warning(
+                    "Post-translation gate withheld %d summary: %s",
+                    len(post_gate_dropped),
+                    "; ".join(post_gate_dropped),
+                )
+
             hot_topic_story_count = sum(
                 len(family.get("summaries", []))
                 for family in hot_topics
