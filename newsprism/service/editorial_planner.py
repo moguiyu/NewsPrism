@@ -730,15 +730,20 @@ def resolve_display_duplicates(
 
     # Funnel accounting. 2026-09-13 lost 4 of 22 surviving candidates between
     # dedup and render with no log line explaining where they went; this makes
-    # every hand-off countable from the logs alone.
+    # every hand-off countable from the logs alone. `displayed` counts hot-topic
+    # AND focus-storyline members, so the breakdown counts both as well: omitting
+    # focus members logged `kept=0` for a family that was in fact kept, i.e. the
+    # exact phantom-loss signature this line exists to expose.
     kept_hot_members = sum(len(family.get("summaries", [])) for family in kept_hot)
+    kept_focus_members = sum(len(family.get("summaries", [])) for family in kept_focus)
     logger.info(
         "Display dedup accounting: displayed=%d suppressed=%d kept=%d "
-        "(hot_topic_members=%d, main=%d, positive=%d)",
+        "(hot_topic_members=%d, focus_members=%d, main=%d, positive=%d)",
         len(displayed),
         len(suppressed_ids),
-        kept_hot_members + len(kept_regular) + len(kept_positive),
+        kept_hot_members + kept_focus_members + len(kept_regular) + len(kept_positive),
         kept_hot_members,
+        kept_focus_members,
         len(kept_regular),
         len(kept_positive),
     )

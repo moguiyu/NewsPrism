@@ -579,6 +579,12 @@ def test_hot_topic_stories_do_not_consume_main_lane_budget():
     ]
 
 
+def _accounting_line(caplog) -> str:
+    accounting = [message for message in caplog.messages if "Display dedup accounting:" in message]
+    assert len(accounting) == 1, accounting
+    return accounting[0]
+
+
 def test_display_dedup_logs_funnel_accounting(caplog):
     left = _storyline_summary("event A", 0.9, "family-a", role="core")
     right = _storyline_summary("event B", 0.5, "family-a")
@@ -589,8 +595,57 @@ def test_display_dedup_logs_funnel_accounting(caplog):
     with caplog.at_level(logging.INFO):
         resolve_display_duplicates([family], [], [], [])
 
-    accounting = [message for message in caplog.messages if "Display dedup accounting:" in message]
-    assert len(accounting) == 1
-    assert "displayed=2" in accounting[0]
-    assert "suppressed=0" in accounting[0]
-    assert "kept=2" in accounting[0]
+    # The full breakdown is asserted, not just the totals: `kept` must equal the
+    # sum of its components, or the line reports a phantom loss.
+    assert _accounting_line(caplog) == (
+        "Display dedup accounting: displayed=2 suppressed=0 kept=2 "
+        "(hot_topic_members=2, focus_members=0, main=0, positive=0)"
+    )
+
+
+def test_display_dedup_accounting_counts_focus_members(caplog):
+    """A focus-storyline member is displayed AND kept, so it must be counted.
+
+    ``displayed`` is built from hot_topic *and* focus families, so any breakdown
+    that omits focus members under-reports ``kept`` -- the exact phantom-loss
+    signature this accounting exists to expose.
+    """
+    focus = _storyline_summary("focus A", 0.7, "focus-family", role="core")
+    family = {"macro_topic_key": "focus-family", "storyline_key": "focus-family", "summaries": [focus]}
+
+    with caplog.at_level(logging.INFO):
+        _hot, focus_out, _regular, _positive = resolve_display_duplicates([], [family], [], [])
+
+    assert _accounting_line(caplog) == (
+        "Display dedup accounting: displayed=1 suppressed=0 kept=1 "
+        "(hot_topic_members=0, focus_members=1, main=0, positive=0)"
+    )
+    assert sum(len(f["summaries"]) for f in focus_out) == 1
+
+
+def test_display_dedup_accounting_counts_positive_lane(caplog):
+    positive_story = _summary("good news", 0.6)
+
+    with caplog.at_level(logging.INFO):
+        resolve_display_duplicates([], [], [], [positive_story])
+
+    assert _accounting_line(caplog) == (
+        "Display dedup accounting: displayed=1 suppressed=0 kept=1 "
+        "(hot_topic_members=0, focus_members=0, main=0, positive=1)"
+    )
+
+
+def test_display_dedup_accounting_counts_suppressions(caplog):
+    """A suppressed duplicate must show up in both suppressed and kept."""
+    shared = "https://wire.example/same-event"
+    kept = _summary("event one", 0.9, url=shared)
+    dropped = _summary("event one update", 0.8, url=shared)
+
+    with caplog.at_level(logging.INFO):
+        _hot, _focus, regular, _positive = resolve_display_duplicates([], [], [kept, dropped], [])
+
+    assert _accounting_line(caplog) == (
+        "Display dedup accounting: displayed=2 suppressed=1 kept=1 "
+        "(hot_topic_members=0, focus_members=0, main=1, positive=0)"
+    )
+    assert regular == [kept]
