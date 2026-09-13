@@ -723,9 +723,23 @@ def resolve_display_duplicates(
                 break
 
     keep_ids = {id(summary) for summary in displayed} - suppressed_ids
-    return (
-        _filter_family_summaries(hot_topics, keep_ids),
-        _filter_family_summaries(focus_storylines, keep_ids),
-        [summary for summary in regular_summaries if id(summary) in keep_ids],
-        [summary for summary in positive_summaries if id(summary) in keep_ids],
+    kept_hot = _filter_family_summaries(hot_topics, keep_ids)
+    kept_focus = _filter_family_summaries(focus_storylines, keep_ids)
+    kept_regular = [summary for summary in regular_summaries if id(summary) in keep_ids]
+    kept_positive = [summary for summary in positive_summaries if id(summary) in keep_ids]
+
+    # Funnel accounting. 2026-09-13 lost 4 of 22 surviving candidates between
+    # dedup and render with no log line explaining where they went; this makes
+    # every hand-off countable from the logs alone.
+    kept_hot_members = sum(len(family.get("summaries", [])) for family in kept_hot)
+    logger.info(
+        "Display dedup accounting: displayed=%d suppressed=%d kept=%d "
+        "(hot_topic_members=%d, main=%d, positive=%d)",
+        len(displayed),
+        len(suppressed_ids),
+        kept_hot_members + len(kept_regular) + len(kept_positive),
+        kept_hot_members,
+        len(kept_regular),
+        len(kept_positive),
     )
+    return kept_hot, kept_focus, kept_regular, kept_positive

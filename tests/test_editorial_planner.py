@@ -1,4 +1,5 @@
 """Tests for the impact-driven editorial planner: selection, 正能量, display dedup."""
+import logging
 from datetime import datetime, timezone
 
 from newsprism.config import Config
@@ -576,3 +577,20 @@ def test_hot_topic_stories_do_not_consume_main_lane_budget():
     assert [s.cluster.topic_category for s in plan.regular_summaries] == [
         f"main{i}" for i in range(15)
     ]
+
+
+def test_display_dedup_logs_funnel_accounting(caplog):
+    left = _storyline_summary("event A", 0.9, "family-a", role="core")
+    right = _storyline_summary("event B", 0.5, "family-a")
+    left.cluster.articles[0].embedding = [1.0, 0.0, 0.0]
+    right.cluster.articles[0].embedding = [0.99, 0.01, 0.0]
+    family = {"macro_topic_key": "family-a", "storyline_key": "family-a", "summaries": [left, right]}
+
+    with caplog.at_level(logging.INFO):
+        resolve_display_duplicates([family], [], [], [])
+
+    accounting = [message for message in caplog.messages if "Display dedup accounting:" in message]
+    assert len(accounting) == 1
+    assert "displayed=2" in accounting[0]
+    assert "suppressed=0" in accounting[0]
+    assert "kept=2" in accounting[0]
