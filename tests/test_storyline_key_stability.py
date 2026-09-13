@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from newsprism.config import Config
 from newsprism.service.history import StorylineResolver, _content_hash
-from newsprism.types import Article, ArticleCluster
+from newsprism.types import Article, ArticleCluster, ImpactAssessment
 
 
 def _config() -> Config:
@@ -193,3 +193,55 @@ def test_singleton_keys_differ_for_different_titles():
     ).resolve(cluster_b, [], datetime(2026, 7, 22, tzinfo=timezone.utc).date())
 
     assert resolved_a[0].storyline_key != resolved_b[0].storyline_key
+
+
+# ── The key slug hashes the RAW label, not the sanitized one ────────────────
+
+
+class _UnnamedStubSummarizer(_StubSummarizer):
+    """_StubSummarizer always returns a Chinese name, which collapses the slug
+    to the constant ``storyline`` and makes the slug's source untestable.
+    Returning no name lets the raw label fall through to the lead headline.
+    """
+
+    def name_storyline(self, _anchor_clusters):
+        return None
+
+
+def test_key_slug_comes_from_raw_name_not_sanitized_label():
+    """The key's slug segment must hash the RAW label, never the sanitized one.
+
+    ``_slugify`` collapses any Chinese label to the constant ``storyline``, so a
+    regression that fed ``storyline_name`` into the key would silently turn every
+    Chinese-named family into ``storyline-<hash>`` and break cross-day
+    continuity. This fixture discriminates: the lead is a foreign headline, the
+    family carries a Chinese ``short_topic_name`` for display, and the slug must
+    still come from the raw foreign name.
+    """
+    clusters = [
+        ArticleCluster(
+            topic_category="Technology",
+            articles=[_article("Nowa Tesla stanowi zagrożenie?", [1.0, 0.0, 0.0])],
+        ),
+        ArticleCluster(
+            topic_category="Technology",
+            articles=[_article("Tesla Cybercab w Tokio", [0.95, 0.05, 0.0])],
+        ),
+    ]
+    clusters[1].impact = ImpactAssessment(
+        cluster_key="tesla-cybercab",
+        short_topic_name="特斯拉无人出租车",
+    )
+    edges = [
+        {"left_index": 0, "right_index": 1, "relation": "same_core_storyline", "confidence": 0.85}
+    ]
+
+    resolved = StorylineResolver(
+        _config(), summarizer=_UnnamedStubSummarizer(edges), similarity_fn=lambda _t, _h: 0.0
+    ).resolve(clusters, [], datetime(2026, 7, 21, tzinfo=timezone.utc).date())
+
+    left, right = resolved
+
+    assert left.storyline_key == right.storyline_key  # one family
+    assert left.storyline_key.startswith("nowateslas-")  # slug from the RAW foreign name
+    assert left.storyline_name == "特斯拉无人出租车"  # display label sanitized

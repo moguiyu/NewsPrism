@@ -911,3 +911,61 @@ def test_storyline_name_keeps_valid_chinese_label():
     )
 
     assert resolver._finalize_storyline_name("俄袭乌设施", [cluster]) == "俄袭乌设施"
+
+
+def test_singleton_history_reuse_sanitizes_persisted_fragment():
+    """A fragment already persisted in the storylines table must not be re-adopted.
+
+    ``_storyline_name_matches_content`` grants the benefit of the doubt when the
+    name and today's content are in different scripts, so live fragments such as
+    ``AsXiJinpin`` still match and were reused verbatim: the 17 polluted rows in
+    the production ``storylines`` table would never self-heal.
+
+    The fixture is deliberately cross-script (latin fragment, Chinese content).
+    A same-script pair such as ``NowaTeslas`` against the Polish lead title does
+    NOT match, so it falls through to the else-branch and never reaches the
+    reuse arm this test covers.
+    """
+    resolver = StorylineResolver(_config(), _StubSummarizer([]), lambda *_args: 0.0)
+    cluster = ArticleCluster(
+        topic_category="World",
+        articles=[_article("习近平会见印度总理莫迪", [0.0])],
+    )
+    cluster.impact = ImpactAssessment(
+        cluster_key="brics-xi-modi",
+        short_topic_name="习近平莫迪会晤",
+    )
+    profile = {"lead_title": "习近平会见印度总理莫迪", "text": ""}
+    history_match = {
+        "storyline_key": "single-6fe11743",
+        "storyline_name": "AsXiJinpin",
+        "score": 0.9,
+    }
+
+    resolver._apply_singleton(cluster, profile, history_match)
+
+    assert cluster.storyline_key == "single-6fe11743"
+    assert cluster.storyline_name == "习近平莫迪会晤"
+
+
+def test_storyline_name_rejects_japanese_kana_headline():
+    """A kana headline used to pass looks_like_chinese_text and become the label.
+
+    ``looks_like_chinese_text`` weighs CJK ideographs against latin letters, so a
+    Japanese headline (kana plus kanji) scored as "Chinese" and the truncated
+    headline became the storyline label.
+    """
+    resolver = StorylineResolver(_config(), _StubSummarizer([]), lambda *_args: 0.0)
+    cluster = ArticleCluster(
+        topic_category="World",
+        articles=[_article("北朝鮮が日本海に向けて弾道ミサイル", [0.0])],
+    )
+
+    name = resolver._finalize_storyline_name("美주택대출금리6.8", [cluster])
+
+    # No Chinese candidate exists anywhere in this family, so the raw name is
+    # retained rather than replaced by the kana headline.
+    assert name == "美주택대출금리6.8"
+    assert name == "美주택대출금리6.8" or name == "World" or all(
+        ord(ch) < 0x3040 or ord(ch) > 0x30FF for ch in name
+    )

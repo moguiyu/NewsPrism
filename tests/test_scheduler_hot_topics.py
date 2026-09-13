@@ -110,12 +110,26 @@ def _cluster(
     return cluster
 
 
-def _summary(cluster: ArticleCluster, headline: str, freshness_state: str = "new") -> ClusterSummary:
+def _summary(
+    cluster: ArticleCluster,
+    headline: str,
+    freshness_state: str = "new",
+    *,
+    quality_status: str = "unknown",
+    body: str | None = None,
+) -> ClusterSummary:
+    # The defaults keep the historical fixture shape. A test that drives the real
+    # publish path must opt in to a contract-clean summary: both the freshness
+    # gate and the post-translation gate reject any status other than
+    # "publishable" and any body under 20 non-whitespace characters (see
+    # publication_validator._text_issues).
+    body_text = body if body is not None else f"{headline} body."
     return ClusterSummary(
         cluster=cluster,
-        summary=f"**{headline}**\n\n{headline} body.",
+        summary=f"**{headline}**\n\n{body_text}",
         perspectives={article.source_name: f"{article.source_name} angle" for article in cluster.articles},
         freshness_state=freshness_state,
+        quality_status=quality_status,
         storyline_key=cluster.storyline_key,
         storyline_name=cluster.storyline_name,
         storyline_role=cluster.storyline_role,
@@ -208,10 +222,37 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
     cfg.output["english"] = {"enabled": True}
     today = date(2026, 6, 19)
 
-    hot_summary = _summary(_cluster("Hot", storyline_key="hot", storyline_name="热点"), "Hot")
+    # These three fixtures must genuinely clear the publication contract: this
+    # test drives the real publish path (renderer + publisher), and both the
+    # freshness gate and the post-translation gate call
+    # `_summary_publication_rejection`, which rejects any status other than
+    # "publishable" and any body under 20 non-whitespace characters.
+    # Do not "simplify" them back to the short default body — that only passed
+    # before because the monkeypatched planner below bypasses the gates, and it
+    # would silently stop asserting what actually ships.
+    publishable_body = "Several independent sources describe the development and its consequences."
+    hot_summary = _summary(
+        _cluster("Hot", storyline_key="hot", storyline_name="热点"),
+        "Hot",
+        quality_status="publishable",
+        body=publishable_body,
+    )
+    # Left non-publishable on purpose: excluding the focus storyline from the
+    # public report is exactly what this test asserts.
     focus_summary = _summary(_cluster("Focus", storyline_key="focus", storyline_name="兼容主线"), "Focus")
-    regular_summary = _summary(_cluster("Regular"), "Regular")
-    positive_summary = _positive_summary("Reuters", "https://example.com/positive", "Positive")
+    regular_summary = _summary(
+        _cluster("Regular"),
+        "Regular",
+        quality_status="publishable",
+        body=publishable_body,
+    )
+    positive_summary = _positive_summary(
+        "Reuters",
+        "https://example.com/positive",
+        "Positive",
+        quality_status="publishable",
+        body=publishable_body,
+    )
     summaries = [hot_summary, focus_summary, regular_summary, positive_summary]
 
     scheduler = Scheduler.__new__(Scheduler)
@@ -315,7 +356,14 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
     assert "3 kept stories after freshness (1 regular main, 1 positive, 1 hot topic stories)" in caplog.text
 
 
-def _positive_summary(source: str, url: str, headline: str) -> ClusterSummary:
+def _positive_summary(
+    source: str,
+    url: str,
+    headline: str,
+    *,
+    quality_status: str = "unknown",
+    body: str | None = None,
+) -> ClusterSummary:
     cluster = ArticleCluster(
         topic_category="Culture",
         articles=[
@@ -328,8 +376,10 @@ def _positive_summary(source: str, url: str, headline: str) -> ClusterSummary:
             )
         ],
     )
+    body_text = body if body is not None else f"{headline} body."
     return ClusterSummary(
         cluster=cluster,
-        summary=f"**{headline}**\n\n{headline} body.",
+        summary=f"**{headline}**\n\n{body_text}",
         perspectives={},
+        quality_status=quality_status,
     )

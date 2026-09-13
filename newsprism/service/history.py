@@ -28,7 +28,7 @@ import numpy as np
 
 from newsprism.config import Config
 from newsprism.service.embeddings import get_model
-from newsprism.service.language import looks_like_chinese_text
+from newsprism.service.language import looks_like_chinese_label
 from newsprism.types import Article, ArticleCluster, Cluster, StorylineEvent
 
 logger = logging.getLogger(__name__)
@@ -1141,17 +1141,17 @@ class StorylineResolver:
         family; keep ``raw_name`` when nothing Chinese exists so the storyline
         key -- which is derived from the raw name -- stays stable.
         """
-        if looks_like_chinese_text(raw_name):
+        if looks_like_chinese_label(raw_name):
             return raw_name
         for cluster in clusters:
             impact = getattr(cluster, "impact", None)
             candidate = getattr(impact, "short_topic_name", None) if impact else None
-            if candidate and looks_like_chinese_text(str(candidate)):
+            if candidate and looks_like_chinese_label(str(candidate)):
                 return _short_name(str(candidate), self.max_name_chars)
         for cluster in clusters:
             if cluster.articles:
                 title = str(cluster.articles[0].title or "")
-                if looks_like_chinese_text(title):
+                if looks_like_chinese_label(title):
                     return _short_name(title, self.max_name_chars)
         return raw_name
 
@@ -1204,8 +1204,15 @@ class StorylineResolver:
         )
         if history_matches_content:
             storyline_key = str(history_match["storyline_key"])
-            storyline_name = _short_name(
-                historical_name, self.max_name_chars
+            # The persisted name may itself be a foreign-script fragment written
+            # before _finalize_storyline_name existed, and
+            # _storyline_name_matches_content grants cross-script benefit of the
+            # doubt -- so the row would otherwise be re-adopted forever.
+            # Sanitising here lets existing rows self-heal on reuse
+            # (upsert_storyline_state writes summary.storyline_name back).
+            storyline_name = self._finalize_storyline_name(
+                _short_name(historical_name, self.max_name_chars),
+                [cluster],
             )
             confidence = float(history_match.get("score", 0.0))
         else:

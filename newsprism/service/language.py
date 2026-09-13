@@ -25,3 +25,27 @@ def looks_like_chinese_text(text: str, *, min_cjk: int = 4, min_ratio: float = 0
     if signal_count == 0:
         return False
     return (cjk_count / signal_count) >= min_ratio
+
+
+_JAPANESE_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
+_HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
+
+
+def looks_like_chinese_label(text: str, *, min_cjk: int = 2) -> bool:
+    """Stricter than looks_like_chinese_text: reject any foreign script present.
+
+    looks_like_chinese_text only weighs CJK against Latin letters, so a Japanese
+    headline full of kana passes it. Labels derived from a headline need the
+    stronger test.
+    """
+    value = (text or "").strip()
+    if not value:
+        return False
+    if (
+        _JAPANESE_KANA_RE.search(value)
+        or _CYRILLIC_RE.search(value)
+        or _HANGUL_RE.search(value)
+    ):
+        return False
+    return looks_like_chinese_text(value, min_cjk=min_cjk)
