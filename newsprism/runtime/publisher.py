@@ -36,9 +36,21 @@ MAX_MSG_LEN = 4000  # leave headroom below Telegram's 4096-char limit
 # The Good News lane is its own trailing group in the digest, after all news categories.
 _POSITIVE_CATEGORY = "今日好消息"
 
-# Build emoji lookup from renderer metadata
-_CAT_EMOJI: dict[str, str] = {cat: emoji for cat, emoji, _ in _CATEGORY_META}
-_CAT_EMOJI[_POSITIVE_CATEGORY] = "🌟"
+# The Telegram digest is a chat surface: Bot API HTML mode supports no SVG and
+# no icon font, so this surface keeps emoji. The map is explicit and
+# independent of the report's sprite slugs (_CATEGORY_META now carries slugs);
+# tests/test_publisher.py asserts full category coverage.
+_TELEGRAM_CATEGORY_EMOJI: dict[str, str] = {
+    "World": "🌍",
+    "Business": "💰",
+    "Technology": "🔬",
+    "Science & Health": "🔭",
+    "Society": "🏛️",
+    "Culture & Sports": "🎭",
+    _POSITIVE_CATEGORY: "🌟",
+}
+# Kept so existing _CAT_EMOJI[...] call sites compile unchanged.
+_CAT_EMOJI = _TELEGRAM_CATEGORY_EMOJI
 
 # Canonical category order for the digest — mirrors the report's _CATEGORY_META,
 # with Good News last. Unknown categories sort between the known ones and positive.

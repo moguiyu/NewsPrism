@@ -179,10 +179,18 @@ class TestCertBadgeMacroRendering:
 
     def _render_badge(self, src_dict):
         from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+        from newsprism.runtime import icons
+
         env = Environment(
             loader=FileSystemLoader("templates"),
             autoescape=select_autoescape(["html"]),
         )
+        # Mirror the real renderer's context: the template body emits the inline
+        # Hugeicons sprite and calls {{ icon(...) }}, so those globals must exist
+        # before .module compiles the template.
+        env.globals["icon"] = icons.icon
+        env.globals["icon_sprite"] = icons.sprite_markup()
         template = env.get_template("report-template.html")
         return str(template.module.cert_badge(src_dict))
 

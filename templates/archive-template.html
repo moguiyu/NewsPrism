@@ -58,6 +58,19 @@
       -webkit-font-smoothing: antialiased;
     }
 
+    /* Inline Hugeicons sprite (see newsprism/runtime/icons.py): flat, monochrome,
+       colour inherited from the surrounding link/text. */
+    svg.icon {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      flex: none;
+      vertical-align: -0.125em;
+      color: inherit;
+      stroke-width: 1.5;
+      overflow: visible;
+    }
+
     .wrap {
       max-width: 720px;
       margin: 0 auto;
@@ -171,6 +184,7 @@
 </head>
 
 <body>
+{{ icon_sprite }}
   <div class="wrap">
     <div class="site-header">
       <a class="logo" href="{{ '/' if edition == 'en' else '/cn/' }}">NewsPrism</a>
@@ -197,7 +211,7 @@
     </section>
     {% endfor %}
 
-    <a class="back-latest" href="{{ '/' if edition == 'en' else '/cn/' }}">← {{ 'Back to latest report' if edition == 'en' else '返回今日报告 · Latest report' }}</a>
+    <a class="back-latest" href="{{ '/' if edition == 'en' else '/cn/' }}">{{ icon('ui-arrow-left') }} {{ 'Back to latest report' if edition == 'en' else '返回今日报告 · Latest report' }}</a>
 
     <footer>
       <span>NewsPrism · {{ 'Daily News, Many Perspectives' if edition == 'en' else '每日新闻多角度解读' }}</span>

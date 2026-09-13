@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup
 
+from newsprism.runtime import icons
 from newsprism.service.categories import (
     DEFAULT_DISPLAY_CATEGORY,
     DISPLAY_CATEGORIES,
@@ -113,26 +114,27 @@ _BROAD_CATEGORY_EN_MAP: dict[str, str] = {
 }
 
 _CATEGORY_META: list[tuple[str, str, str]] = [
-    # (broad_category, emoji, css_key)
-    ("World", "🌍", "world"),
-    ("Business", "💰", "finance"),
-    ("Technology", "🔬", "tech"),
-    ("Science & Health", "🔭", "science"),
-    ("Society", "🏛️", "society"),
-    ("Culture & Sports", "🎭", "culture"),
+    # (broad_category, icon slug from newsprism.runtime.icons, css_key)
+    ("World", "category-world", "world"),
+    ("Business", "category-business", "finance"),
+    ("Technology", "category-technology", "tech"),
+    ("Science & Health", "category-science-health", "science"),
+    ("Society", "category-society", "society"),
+    ("Culture & Sports", "category-culture-sports", "culture"),
 ]
 
 # ── REGION → FLAG EMOJI ───────────────────────────────────────────────────────
 
 _REGION_FLAG: dict[str, str] = region_flags()
 
+# LLM/config icon keys (config.yaml hot_topics.icon_allowlist) -> sprite slugs.
 _HOT_TOPIC_ICON_MAP: dict[str, str] = {
-    "globe": "🌍",
-    "war": "⚠️",
-    "trade": "📦",
-    "chip": "🧠",
-    "ai": "🤖",
-    "energy": "⚡",
+    "globe": "topic-globe",
+    "war": "topic-war",
+    "trade": "topic-trade",
+    "chip": "topic-chip",
+    "ai": "topic-ai",
+    "energy": "topic-energy",
 }
 
 # Full-length hot-topic family label for in-body headers (overview + topic
@@ -1369,6 +1371,8 @@ class HtmlRenderer:
         cn_dir.mkdir(parents=True, exist_ok=True)
         page = template.render(
             **common_cn,
+            icon_sprite=icons.sprite_markup(),
+            icon=icons.icon,
             clusters=clusters_ctx,
             sections=sections,
             main_sections=sections,
@@ -1561,14 +1565,14 @@ class HtmlRenderer:
 
         present_categories = {cluster["broad_category"] for cluster in clusters_ctx}
         sections = []
-        for label, emoji, css_key in _CATEGORY_META:
+        for label, icon_slug, css_key in _CATEGORY_META:
             if label in present_categories:
                 sections.append(
                     {
                         "label": label,
                         "label_zh": display_category_label_zh(label),
                         "label_en": _BROAD_CATEGORY_EN_MAP.get(label, label),
-                        "emoji": emoji,
+                        "icon": icon_slug,
                         "css_key": css_key,
                     }
                 )
@@ -1860,6 +1864,8 @@ class HtmlRenderer:
         template = self.env.get_template(self.template_file)
         page_html = template.render(
             **common,
+            icon_sprite=icons.sprite_markup(),
+            icon=icons.icon,
             clusters=clusters_ctx,
             sections=sections,
             main_sections=sections,
@@ -2283,6 +2289,8 @@ class HtmlRenderer:
         try:
             template = self.env.get_template("archive-template.html")
             page = template.render(
+                icon_sprite=icons.sprite_markup(),
+                icon=icons.icon,
                 months=months,
                 recent=recent,
                 total_count=total,

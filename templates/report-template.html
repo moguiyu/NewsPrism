@@ -52,7 +52,6 @@
     :root {
       /* Report Dark Theme */
       --font-sans: 'Outfit', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
-      --font-emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
       --bg: #0a0b10;
       --surface: rgba(20, 22, 31, 0.7);
       --surface-hover: rgba(28, 32, 46, 0.9);
@@ -131,10 +130,30 @@
       -webkit-font-smoothing: antialiased;
     }
 
+    /* Inline Hugeicons sprite (see newsprism/runtime/icons.py): flat, monochrome,
+       colour inherited from the label. Sizes come from the surrounding font-size,
+       so no layout box changes.
+       NOTE: do not strip stroke="currentColor" from the sprite's geometry — SVG
+       defaults stroke to none and every icon would paint nothing. */
+    svg.icon {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      flex: none;
+      vertical-align: -0.125em;
+      color: inherit;
+      stroke-width: 1.5;      /* overrides the sprite's presentation attribute */
+      overflow: visible;
+    }
+
+    /* 10 px cert badge only: keeps 1 px strokes legible */
+    svg.icon--sm { stroke-width: 2; }
+
+    /* Country-flag inline box ONLY — no font-family and no emoji-presentation
+       property: the operating-system colour-emoji font stack is gone from this
+       page. Task 4 replaces the flag emoji with an ISO alpha-2 chip. */
     .emoji {
       display: inline-block;
-      font-family: var(--font-emoji);
-      font-variant-emoji: emoji;
       line-height: 1;
       vertical-align: -0.08em;
     }
@@ -479,7 +498,6 @@
       border-radius: 999px;
       background: rgba(255, 255, 255, 0.1);
       font-size: 12px;
-      font-family: var(--font-emoji);
       line-height: 1;
       margin-right: 8px;
     }
@@ -940,6 +958,22 @@
       color: var(--theme-source-label);
       cursor: help;
       user-select: none;
+    }
+
+    /* ── 来源地区码：与 .cert-badge 同款细边框小方框（Task 4 起替代国旗 emoji）── */
+    .region-code {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 0.72em;
+      font-weight: 600;
+      line-height: 1;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 1px 3px;
+      margin-right: 4px;
+      vertical-align: 1px;
+      border: 1px solid var(--theme-source-label);
+      color: var(--theme-source-label);
     }
 
     .src-chip {
@@ -2705,10 +2739,11 @@
    Placeholders (missing regional perspectives) render muted with a tooltip
    carrying the failure reason; flat styling, no card/lift/shadow per AGENTS.md. #}
 {% macro source_chip_body(src) -%}
-{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}<span class="emoji" aria-hidden="true">🔍</span>{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ src.source }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
+{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}{{ icon('ui-searched') }}{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ src.source }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
 {%- endmacro %}
 
 <body>
+{{ icon_sprite }}
 
   <h1 class="sr-only">NewsPrism · {{ report_date_display }} {{ day_name }} 全球新闻多角度解读</h1>
 
@@ -2745,13 +2780,13 @@
       <nav class="cat-tabs">
         <button class="cat-tab active" onclick="filterView(this,'all','all')">{{ bilingual_text('全部速览', 'All overview') }}</button>
         {% if positive_stories %}
-        <button class="cat-tab positive-tab" onclick="filterView(this,'positive','positive')"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日好消息', 'Good News') }}</button>
+        <button class="cat-tab positive-tab" onclick="filterView(this,'positive','positive')">{{ icon('ui-good-news') }} {{ bilingual_text('今日好消息', 'Good News') }}</button>
         {% endif %}
         {% for hot in hot_topics %}
-        <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</button>
+        <button class="cat-tab hot-tab" data-hot-target="{{ hot.dom_id }}" onclick="filterView(this,'hot','{{ hot.dom_id }}')"><span class="hot-icon">{{ icon(hot.topic_icon) }}</span>{{ bilingual_text(hot.macro_topic_name, hot.macro_topic_name_en or hot.macro_topic_name) }}</button>
         {% endfor %}
         {% for sec in main_sections %}
-        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')"><span class="emoji" aria-hidden="true">{{ sec.emoji }}</span> {{ bilingual_text(sec.label_zh, sec.label_en) }}</button>
+        <button class="cat-tab" onclick="filterView(this,'category','{{ sec.label }}')">{{ icon(sec.icon) }} {{ bilingual_text(sec.label_zh, sec.label_en) }}</button>
         {% endfor %}
       </nav>
     </div>
@@ -2770,7 +2805,7 @@
         {% for hot in hot_topics %}
         <article class="overview-item">
           <div>
-            <button class="overview-title" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')"><span class="hot-icon"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span></span>{{ bilingual_text(hot.macro_topic_name_full or hot.macro_topic_name, hot.macro_topic_name_full_en or hot.macro_topic_name_en or hot.macro_topic_name_full or hot.macro_topic_name) }}</button>
+            <button class="overview-title" type="button" data-hot-target="{{ hot.dom_id }}" onclick="activateHotTopic('{{ hot.dom_id }}')"><span class="hot-icon">{{ icon(hot.topic_icon) }}</span>{{ bilingual_text(hot.macro_topic_name_full or hot.macro_topic_name, hot.macro_topic_name_full_en or hot.macro_topic_name_en or hot.macro_topic_name_full or hot.macro_topic_name) }}</button>
             <div class="overview-meta">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
             <div class="overview-summary">{{ bilingual_text(hot.scope_summary, hot.scope_summary_en or hot.scope_summary) }}</div>
             <div class="overview-anchors">
@@ -2866,7 +2901,7 @@
     {% if positive_stories %}
     <section class="positive-energy" data-positive-energy="true">
       <div class="positive-header">
-        <div class="cat-label"><span class="emoji" aria-hidden="true">✨</span> {{ bilingual_text('今日好消息', 'Good News') }}</div>
+        <div class="cat-label">{{ icon('ui-good-news') }} {{ bilingual_text('今日好消息', 'Good News') }}</div>
         <div class="positive-counter">{{ bilingual_text(positive_story_count ~ ' 条轻量好消息', positive_story_count ~ ' uplifting stories') }}</div>
       </div>
       <div class="positive-grid">
@@ -2911,7 +2946,7 @@
       {% for hot in hot_topics %}
       <div class="hot-topic-block" data-hot-id="{{ hot.dom_id }}" style="display:none;">
         <div class="hot-topic-header">
-          <div class="cat-label"><span class="emoji" aria-hidden="true">{{ hot.topic_icon }}</span> {{ bilingual_text(hot.macro_topic_name_full or hot.macro_topic_name, hot.macro_topic_name_full_en or hot.macro_topic_name_en or hot.macro_topic_name_full or hot.macro_topic_name) }}</div>
+          <div class="cat-label">{{ icon(hot.topic_icon) }} {{ bilingual_text(hot.macro_topic_name_full or hot.macro_topic_name, hot.macro_topic_name_full_en or hot.macro_topic_name_en or hot.macro_topic_name_full or hot.macro_topic_name) }}</div>
           <div class="hot-topic-counter">{{ bilingual_text(hot.member_count ~ ' 条专题追踪', hot.member_count ~ ' story threads') }}</div>
         </div>
         <div class="cards">
@@ -3050,9 +3085,9 @@
       <span class="footer-fineprint-text">{{ bilingual_text('MIT 许可 · 2026 NewsPrism 贡献者', 'MIT License · 2026 NewsPrism contributors') }}</span>
       <div class="footer-tools" aria-label="appearance">
         <div class="theme-toggle" role="group" aria-label="Color scheme">
-          <button type="button" class="theme-btn active" data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme('system')">🖥</button>
-          <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">☀️</button>
-          <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">🌙</button>
+          <button type="button" class="theme-btn active" data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme('system')">{{ icon('ui-theme-system') }}</button>
+          <button type="button" class="theme-btn" data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme('light')">{{ icon('ui-theme-light') }}</button>
+          <button type="button" class="theme-btn" data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme('dark')">{{ icon('ui-theme-dark') }}</button>
         </div>
       </div>
     </div>

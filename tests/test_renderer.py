@@ -1497,6 +1497,23 @@ class TestHotTopics:
         assert tree.xpath('//button[contains(@class, "hot-tab") and @data-hot-target="hot-topic-1"]')
         assert tree.xpath('//button[contains(@class, "overview-cta") and @data-hot-target="hot-topic-1"]')
 
+    def test_category_meta_carries_icon_slugs(self):
+        from newsprism.runtime.icons import ICON_SLUGS
+        from newsprism.runtime.renderer import _CATEGORY_META
+
+        for label, slug, _css_key in _CATEGORY_META:
+            assert slug in ICON_SLUGS, (label, slug)
+            assert slug.startswith("category-")
+
+    def test_hot_topic_icon_map_carries_slugs(self):
+        from newsprism.runtime.icons import ICON_SLUGS
+        from newsprism.runtime.renderer import _HOT_TOPIC_ICON_MAP
+
+        assert set(_HOT_TOPIC_ICON_MAP) == {"globe", "war", "trade", "chip", "ai", "energy"}
+        for key, slug in _HOT_TOPIC_ICON_MAP.items():
+            assert slug == f"topic-{key}"
+            assert slug in ICON_SLUGS
+
     def test_template_sanitizes_hot_topic_name_and_icon_fallback(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
 
@@ -1537,7 +1554,7 @@ class TestHotTopics:
 
         assert "全球贸易紧张升级" in html
         assert "热点专题-全球贸易紧张升级" not in html
-        assert '<span class="hot-icon"><span class="emoji" aria-hidden="true">🌍</span></span>' in html
+        assert '<span class="hot-icon"><svg class="icon" aria-hidden="true"><use href="#hi-topic-globe"/></svg></span>' in html
 
     def test_template_repairs_invalid_hot_topic_name_from_current_family(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
@@ -1736,7 +1753,7 @@ class TestHotTopics:
         ]
         assert len({topic["macro_topic_name"] for topic in payload["hot_topics"]}) == 2
 
-    def test_template_wraps_emoji_with_fallback_spans(self, renderer, tmp_path):
+    def test_template_uses_hugeicons_sprite_and_has_no_emoji(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
 
         summary = ClusterSummary(
@@ -1816,17 +1833,40 @@ class TestHotTopics:
         tree = lxml_html.fromstring(html)
 
         assert "--font-sans: 'Outfit', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;" in html
-        assert "--font-emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;" in html
         assert "body {\n      font-family: var(--font-sans);" in html
-        assert ".emoji {\n      display: inline-block;" in html
-        assert "font-variant-emoji: emoji;" in html
-        assert tree.xpath('//button[contains(@class, "cat-tab") and not(contains(@class, "hot-tab"))]//span[@class="emoji" and text()="🌍"]')
-        assert tree.xpath('//button[contains(@class, "hot-tab")]//span[@class="emoji" and text()="⚠️"]')
-        assert tree.xpath('//*[contains(@class, "overview-title")]//span[@class="emoji" and text()="⚠️"]')
+        # The flag span keeps ONLY its inline-box geometry until Task 4 replaces
+        # the emoji with an ISO alpha-2 chip: no font-family, no font-variant.
+        assert ".emoji {\n      display: inline-block;\n      line-height: 1;\n      vertical-align: -0.08em;\n    }" in html
+        # sprite inlined exactly once, before first use
+        assert html.count('<symbol id="hi-category-world"') == 1
+        assert 'class="icon"' in html
+        # no operating-system emoji font may remain
+        assert "--font-emoji" not in html
+        assert "Apple Color Emoji" not in html
+        assert "font-variant-emoji" not in html
+        # country flags are still OS emoji until Task 4 rewrites them
         assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="emoji" and text()="🇯🇵"]')
-        assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="emoji" and text()="🔍"]')
-        assert tree.xpath('//*[contains(@class, "persp-src")]//span[@class="emoji" and text()="🇯🇵"]')
-        assert tree.xpath('//*[contains(@class, "persp-src")]//span[@class="emoji" and text()="🔍"]')
+        # category and hot-topic icons resolve to sprite references
+        assert tree.xpath(
+            '//button[contains(@class, "cat-tab") and not(contains(@class, "hot-tab"))]'
+            '//svg[@class="icon"]/use[@href="#hi-category-world"]'
+        )
+        assert tree.xpath(
+            '//button[contains(@class, "hot-tab")]'
+            '//svg[@class="icon"]/use[@href="#hi-topic-war"]'
+        )
+        assert tree.xpath(
+            '//*[contains(@class, "overview-title")]'
+            '//svg[@class="icon"]/use[@href="#hi-topic-war"]'
+        )
+        assert tree.xpath(
+            '//a[contains(@class, "src-chip-link")]'
+            '//svg[@class="icon"]/use[@href="#hi-ui-searched"]'
+        )
+        assert tree.xpath(
+            '//div[@class="theme-toggle"]//svg[@class="icon"]/use[@href="#hi-ui-theme-dark"]'
+        )
+        # provenance detail is never baked into an emoji span
         assert not tree.xpath('//span[@class="emoji" and contains(text(), "搜索补充")]')
 
     def test_template_does_not_render_focus_storyline_section(self, renderer, tmp_path):
@@ -2061,9 +2101,9 @@ class TestHotTopics:
         assert '<div class="footer-stats" aria-label="report stats">' in html
         assert '<nav class="cat-tabs">' in html
         assert '<a class="logo" href="/" aria-label="NewsPrism latest edition" title="NewsPrism latest edition">NewsPrism</a>' in html
-        assert 'data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme(\'system\')">🖥</button>' in html
-        assert 'data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme(\'light\')">☀️</button>' in html
-        assert 'data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme(\'dark\')">🌙</button>' in html
+        assert 'data-theme-choice="system" aria-label="System theme" title="System theme" onclick="setTheme(\'system\')"><svg class="icon" aria-hidden="true"><use href="#hi-ui-theme-system"/></svg></button>' in html
+        assert 'data-theme-choice="light" aria-label="Light theme" title="Light theme" onclick="setTheme(\'light\')"><svg class="icon" aria-hidden="true"><use href="#hi-ui-theme-light"/></svg></button>' in html
+        assert 'data-theme-choice="dark" aria-label="Dark theme" title="Dark theme" onclick="setTheme(\'dark\')"><svg class="icon" aria-hidden="true"><use href="#hi-ui-theme-dark"/></svg></button>' in html
         assert 'class="back-to-top" onclick="scrollToTop()"' in html
         tree = lxml_html.fromstring(html)
         assert not tree.xpath('//*[@class="site-header"]//*[@aria-label="report stats"]')
@@ -2480,10 +2520,10 @@ def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer
     assert placeholder_rows[0]["search_stage_trace"] == placeholder.search_stage_trace
 
     # Rendered HTML includes the placeholder source name + the 🇫🇷 flag +
-    # the search marker + the failure-detail label, flat (no card/lift).
+    # the Hugeicons search marker + the failure-detail label, flat (no card/lift).
     assert "[France视角待补]" in html
     assert "🇫🇷" in html
-    assert "🔍" in html
+    assert 'use href="#hi-ui-searched"' in html
     assert "官方：结果过旧；当地：实体不匹配" in html
 
     # A normal perspective list must not hide the failed-target marker.
@@ -2550,7 +2590,7 @@ def test_failed_target_remains_visible_with_two_real_perspectives(renderer, tmp_
     assert card["distinct_perspective_count"] == 2
     assert "查看 2 个视角" in html
     assert "🇫🇷" in html
-    assert "🔍" in html
+    assert 'use href="#hi-ui-searched"' in html
     assert "未确认官方归属" in html
 
 
