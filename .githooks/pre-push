@@ -6,8 +6,12 @@ set -e
 remote_name="$1"
 remote_url="$2"
 
+# NOTE: match both URL spellings. The old pattern `*:github.com/<owner>/<repo>.git*`
+# only matched the SSH form (`git@github.com:owner/repo.git`); with the HTTPS remote
+# (`https://github.com/owner/repo.git`) the colon is followed by `//`, so a push via
+# the `github` remote bypassed this hook entirely. `[:/]` covers SSH and HTTPS.
 case "$remote_name:$remote_url" in
-    origin:*|*:github.com/moguiyu/NewsPrism.git*)
+    origin:*|*github.com[:/]moguiyu/NewsPrism.git*)
         ;;
     *)
         exit 0
@@ -23,7 +27,14 @@ esac
 # Deliberate trade-off: this is default-allow for NEW top-level docs files, so a
 # sensitive document added at `docs/<name>.md` WILL be pushable. Put sensitive
 # documents in one of the blocked subtrees instead.
-BLOCKED_PATH_RE='^(docs/(reference|reviews|plans|superpowers|design-docs|generated)/|debug-perspectives-bug\.html$|eval-report-.*\.png$|report-overview\.png$)'
+#
+# Agent instruction files (added 2026-09-13 after AGENTS.md was purged from
+# history): AGENTS.md and CLAUDE.md are local-only by design -- they document
+# project design rationale, not just commands. They are deliberately untracked,
+# so this rule is a backstop against `git add -f`, a re-added file, or pushing a
+# stale ref (`git push --all`, `--mirror`, a leftover tool snapshot ref) that
+# still contains them. Matched at any depth because agents files may be nested.
+BLOCKED_PATH_RE='((^|/)(AGENTS|CLAUDE)\.md$|^docs/(reference|reviews|plans|superpowers|design-docs|generated)/|^debug-perspectives-bug\.html$|^eval-report-.*\.png$|^report-overview\.png$)'
 zero_sha='0000000000000000000000000000000000000000'
 
 check_paths() {
