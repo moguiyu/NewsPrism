@@ -330,6 +330,7 @@ def _normalize_hot_topic_name(name: str | None, summary: ClusterSummary | None =
 
 _JAPANESE_KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
+_HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _REFINERY_RE = re.compile(r"(製油|炼油|炼厂|油库|refiner|oil depot)", re.IGNORECASE)
 _RUSSIA_RE = re.compile(r"(俄罗斯|俄军|俄方|俄国防部|莫斯科|克里米亚|Russia|Russian|Moscow|Crimea)", re.IGNORECASE)
@@ -349,9 +350,13 @@ def _is_public_chinese_hot_topic_name(name: str) -> bool:
     compact = (name or "").strip()
     if not compact:
         return False
-    if _JAPANESE_KANA_RE.search(compact) or _CYRILLIC_RE.search(compact):
+    if (
+        _JAPANESE_KANA_RE.search(compact)
+        or _CYRILLIC_RE.search(compact)
+        or _HANGUL_RE.search(compact)
+    ):
         return False
-    return bool(_CJK_RE.search(compact))
+    return looks_like_chinese_text(compact)
 
 
 def _hot_topic_family_text(summaries: list[ClusterSummary]) -> str:

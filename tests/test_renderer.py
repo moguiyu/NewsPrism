@@ -8,7 +8,12 @@ from lxml import html as lxml_html
 import pytest
 
 from newsprism.config import load_config
-from newsprism.runtime.renderer import HtmlRenderer, _REGION_FLAG, _broad_category
+from newsprism.runtime.renderer import (
+    HtmlRenderer,
+    _REGION_FLAG,
+    _broad_category,
+    _is_public_chinese_hot_topic_name,
+)
 from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
 
 
@@ -2977,3 +2982,17 @@ def test_footer_controls_and_logo_point_to_edition_home(renderer, tmp_path):
     assert ".footer-tools .lang-btn" in root_html
     assert "background: var(--theme-footer-ink)" in root_html
     assert "color: var(--theme-footer-bg)" in root_html
+
+
+def test_public_hot_topic_label_rejects_korean_headline_fragment():
+    """2026-09-13 live defect: hotspot tab 2 rendered as '"美CIA국장,우크'."""
+    assert _is_public_chinese_hot_topic_name('"美CIA국장,우크') is False
+    assert _is_public_chinese_hot_topic_name("Новийраунд") is False
+    assert _is_public_chinese_hot_topic_name("北朝鮮が日本海に向けて") is False
+    assert _is_public_chinese_hot_topic_name("") is False
+
+
+def test_public_hot_topic_label_accepts_real_chinese_labels():
+    assert _is_public_chinese_hot_topic_name("AI开发放缓呼吁") is True
+    assert _is_public_chinese_hot_topic_name("俄袭乌设施") is True
+    assert _is_public_chinese_hot_topic_name("iPhone折叠屏发") is True
