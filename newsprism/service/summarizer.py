@@ -966,9 +966,24 @@ class Summarizer:
         re.IGNORECASE,
     )
 
+    # Inflected Cyrillic scale words carry the same magnitude as the CJK/Korean
+    # forms already handled below, so a Russian source can ground an English
+    # or Chinese claim ("21 тысячу" == "21,000" == "2.1万").
+    _CYRILLIC_SCALE_STEMS: tuple[tuple[str, float], ...] = (
+        ("тысяч", 1e3),
+        ("тыс", 1e3),
+        ("миллион", 1e6),
+        ("млн", 1e6),
+        ("миллиард", 1e9),
+        ("млрд", 1e9),
+        ("триллион", 1e12),
+        ("трлн", 1e12),
+    )
+
     _NUMERIC_SCALE_PATTERN = re.compile(
         rf"(?<!\d)(?P<major>{_NUMERIC_VALUE})"
-        r"(?P<scale>千|천|万|만|亿|억|兆|조)"
+        r"\s*(?P<scale>千|천|万|만|亿|억|兆|조"
+        r"|тысяч\w*|тыс\.?|миллион\w*|млн|миллиард\w*|млрд|триллион\w*|трлн)"
         rf"(?P<minor>{_NUMERIC_VALUE})?"
     )
 
@@ -982,6 +997,20 @@ class Summarizer:
         "兆": 1e12,
         "조": 1e12,
     }
+
+    @classmethod
+    def _scale_factor(cls, scale: str) -> float | None:
+        """Map a matched scale token to its factor, including inflections."""
+        if not scale:
+            return None
+        factor = cls._NUMERIC_SCALE_FACTORS.get(scale)
+        if factor is not None:
+            return factor
+        lowered = scale.casefold()
+        for stem, stem_factor in cls._CYRILLIC_SCALE_STEMS:
+            if lowered.startswith(stem):
+                return stem_factor
+        return None
 
     @classmethod
     def _numeric_claims(cls, text: str) -> list[str]:
@@ -1029,8 +1058,12 @@ class Summarizer:
                 major = float(match.group("major").replace(",", ""))
                 minor_text = match.group("minor")
                 minor = float(minor_text.replace(",", "")) if minor_text else 0.0
-                factor = cls._NUMERIC_SCALE_FACTORS[match.group("scale")]
-            except (KeyError, ValueError):
+            except ValueError:
+                continue
+            factor = cls._scale_factor(match.group("scale"))
+            if factor is None:
+                # Unknown scale word: leave the span uncovered so the generic
+                # digit pass below still reads the bare number.
                 continue
             values.append(major * factor + minor)
             covered_spans.append(match.span())

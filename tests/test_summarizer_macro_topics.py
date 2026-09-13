@@ -576,6 +576,42 @@ def test_numeric_grounding_accepts_korean_cjk_scale_equivalence():
     assert summary.quality_status == "publishable"
 
 
+def test_numeric_values_read_cyrillic_scale_words():
+    assert Summarizer._numeric_values("на 21 тысячу человек") == [21000.0]
+    assert Summarizer._numeric_values("21,000") == [21000.0]
+    assert Summarizer._numeric_values("более 5 миллионов жителей") == [5000000.0]
+
+
+def test_translated_numeric_grounding_accepts_cyrillic_scale_equivalence():
+    """2026-09-13 live defect: the Oracle card was flagged because the English
+    translation said "21,000" while the Russian source said "на 21 тысячу"."""
+    summarizer = Summarizer(_config())
+    cluster = ArticleCluster(
+        topic_category="Business",
+        articles=[
+            Article(
+                url="https://3dnews.ru/1148389",
+                title="ИИ-гигастройка обходится Oracle слишком дорого",
+                source_name="3DNews",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Oracle снизила численность персонала на 21 тысячу человек.",
+            ),
+        ],
+    )
+    summary = ClusterSummary(
+        cluster=cluster,
+        summary="**甲骨文裁员**\n\n甲骨文员工数量已减少2.1万人。",
+        summary_en="**Oracle layoffs**\n\nOracle has cut 21,000 jobs.",
+        quality_status="publishable",
+    )
+
+    summarizer._enforce_translated_numeric_grounding(summary)
+
+    assert "unsupported_numeric_claim" not in summary.quality_flags
+    assert "numeric_safety_failed" not in summary.quality_flags
+    assert summary.quality_status == "publishable"
+
+
 def test_numeric_grounding_fails_closed_for_live_rank_13_shape(monkeypatch):
     """The published rank-13 placeholder and orphan ``1%。`` must disappear."""
     summarizer = Summarizer(_config())
