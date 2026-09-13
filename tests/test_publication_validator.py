@@ -11,6 +11,7 @@ def _summary(
     *,
     url: str = "https://example.com/story",
     summary: str = "**A confirmed event**\n\nSeveral sources describe the development and its immediate consequences for the public.",
+    summary_en: str | None = None,
     quality_status: str = "publishable",
     quality_flags: list[str] | None = None,
     is_placeholder: bool = False,
@@ -31,6 +32,7 @@ def _summary(
     return ClusterSummary(
         cluster=cluster,
         summary=summary,
+        summary_en=summary_en,
         quality_status=quality_status,
         quality_flags=list(quality_flags or []),
     )
@@ -91,4 +93,32 @@ def test_explicit_human_approval_only_waives_review_status():
         issue.code
         for issue in validate_publication_contract([malformed], human_approval=lambda _summary: True)
     }
+    assert "orphan_numeric_fragment" in codes
+
+
+def test_english_text_checks_run_by_default():
+    """``include_english`` defaults to True, so every pre-existing caller keeps
+    validating the translated field.
+
+    Ordinary grammatical English satisfies
+    ``_MALFORMED_NUMERIC_REMNANT_PATTERN``'s English alternative
+    (``\\b(?:kills?|killed|dead|deaths?|injured?)\\s*[,.;:]``), which is exactly
+    why a caller that publishes a Chinese-only render set must opt out.
+    """
+    summary = _summary(summary_en="Several people were killed, according to local officials.")
+
+    codes = {issue.code for issue in validate_publication_contract([summary])}
+
+    assert "malformed_numeric_remnant" in codes
+
+
+def test_include_english_false_still_validates_the_chinese_text():
+    """Opting out of the English field must not weaken the Chinese checks."""
+    summary = _summary(summary="**A story**\n\n70,000.", summary_en=None)
+
+    codes = {
+        issue.code
+        for issue in validate_publication_contract([summary], include_english=False)
+    }
+
     assert "orphan_numeric_fragment" in codes

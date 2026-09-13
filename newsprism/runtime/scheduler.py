@@ -121,9 +121,18 @@ def _cluster_has_real_article(cluster: ArticleCluster) -> bool:
     return any(_is_real_article(article) for article in cluster.articles)
 
 
-def _summary_publication_rejection(summary: ClusterSummary) -> str | None:
-    """Fail closed on unresolved quality or visibly corrupted summary text."""
-    contract_issues = validate_publication_contract([summary])
+def _summary_publication_rejection(
+    summary: ClusterSummary,
+    *,
+    include_english: bool = True,
+) -> str | None:
+    """Fail closed on unresolved quality or visibly corrupted summary text.
+
+    ``include_english=False`` restricts the text checks to the Chinese summary.
+    Gate 2 needs that: it decides the Chinese render set, and ``summary_en`` is
+    only a translation of it filled in later by the translation stage.
+    """
+    contract_issues = validate_publication_contract([summary], include_english=include_english)
     if contract_issues:
         return ";".join(issue.code for issue in contract_issues)
 
@@ -135,7 +144,10 @@ def _summary_publication_rejection(summary: ClusterSummary) -> str | None:
         if "unsupported_numeric_claim" in flags:
             return "unsupported_numeric_claim"
 
-    for text in (getattr(summary, "summary", ""), getattr(summary, "summary_en", "") or ""):
+    texts = [getattr(summary, "summary", "")]
+    if include_english:
+        texts.append(getattr(summary, "summary_en", "") or "")
+    for text in texts:
         for pattern in _PUBLICATION_REJECTION_PATTERNS:
             if pattern.search(text):
                 return f"malformed_summary={pattern.pattern}"
@@ -181,9 +193,15 @@ def _drop_blocked_summaries(
     """
     dropped: list[str] = []
     dropped_ids: set[int] = set()
+    unrecognised: list[str] = []
 
     def keep(summary: ClusterSummary) -> bool:
-        reason = _summary_publication_rejection(summary)
+        # Gate 2 decides the Chinese render set, so the English translation must
+        # not remove a card from it: `summary_en` is filled by the translation
+        # stage whether or not the English edition is published, and ordinary
+        # grammatical English trips the validator's English numeric-remnant
+        # pattern. Status and flags still apply (F3).
+        reason = _summary_publication_rejection(summary, include_english=False)
         if not reason:
             return True
         # A summary can be reachable from more than one collection; withhold it
@@ -201,14 +219,31 @@ def _drop_blocked_summaries(
         members = family.get("summaries", [])
         if not isinstance(members, list):
             continue
-        kept_members = [
-            summary for summary in members if isinstance(summary, ClusterSummary) and keep(summary)
-        ]
+        kept_members: list[object] = []
+        for member in members:
+            if not isinstance(member, ClusterSummary):
+                # The contract is "drop blocked summaries", not "drop anything
+                # unrecognised": keep the member and name it, so an unexpected
+                # shape is visible instead of silently shrinking the family.
+                unrecognised.append(
+                    f"{type(member).__name__} in {family.get('macro_topic_key')}"
+                )
+                kept_members.append(member)
+                continue
+            if keep(member):
+                kept_members.append(member)
         if not kept_members:
             continue
         family["summaries"] = kept_members
         family["member_count"] = len(kept_members)
         kept_hot.append(family)
+
+    if unrecognised:
+        logger.warning(
+            "Post-translation gate kept %d unrecognised family member(s): %s",
+            len(unrecognised),
+            "; ".join(unrecognised),
+        )
 
     return kept_regular, kept_positive, kept_hot, dropped
 

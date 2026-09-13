@@ -125,8 +125,19 @@ def publication_issues(
     *,
     summary_index: int = 0,
     human_approved: bool = False,
+    include_english: bool = True,
 ) -> list[PublicationIssue]:
-    """Return publication issues for one summary without changing it."""
+    """Return publication issues for one summary without changing it.
+
+    ``include_english`` gates the ``summary_en`` text checks.  English-text
+    *pattern* defects must not remove a card from the Chinese edition: the
+    translation stage fills ``summary_en`` even when the English edition is
+    later withheld, and ordinary grammatical English ("... were killed,
+    according to local officials.") satisfies
+    ``_MALFORMED_NUMERIC_REMNANT_PATTERN``'s English alternative.  A caller that
+    publishes a Chinese-only render set passes ``include_english=False``; the
+    default keeps every pre-existing caller validating both languages.
+    """
     topic = str(getattr(summary.cluster, "topic_category", "") or "")
     issues: list[PublicationIssue] = []
 
@@ -155,7 +166,10 @@ def publication_issues(
                 )
             )
 
-    for language, text in (("Chinese", getattr(summary, "summary", "")), ("English", getattr(summary, "summary_en", None))):
+    texts: list[tuple[str, object]] = [("Chinese", getattr(summary, "summary", ""))]
+    if include_english:
+        texts.append(("English", getattr(summary, "summary_en", None)))
+    for language, text in texts:
         if not text:
             continue
         for code, message in _text_issues(str(text), language):
@@ -167,12 +181,15 @@ def validate_publication_contract(
     summaries: Iterable[ClusterSummary],
     *,
     human_approval: Callable[[ClusterSummary], bool] | None = None,
+    include_english: bool = True,
 ) -> list[PublicationIssue]:
     """Validate summaries in order and return auditable, stable issue records.
 
     ``human_approval`` is intentionally explicit and per-summary.  It can
     waive review status for a future operator workflow, but structural source
     and text-safety failures remain hard blockers.
+
+    ``include_english`` is forwarded to :func:`publication_issues`.
     """
     issues: list[PublicationIssue] = []
     for index, summary in enumerate(summaries):
@@ -182,6 +199,7 @@ def validate_publication_contract(
                 summary,
                 summary_index=index,
                 human_approved=approved,
+                include_english=include_english,
             )
         )
     return issues
