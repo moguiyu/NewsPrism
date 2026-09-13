@@ -491,6 +491,13 @@ class Summarizer:
             headline_clean = item.headline.strip().strip("*")
             body_clean = item.body.strip()
             if not headline_clean or not body_clean:
+                # Silent before: a blank translation dropped the item and the
+                # whole English edition was withheld with no trace of why.
+                logger.warning(
+                    "Translation batch returned empty text for index %d ('%s'); keeping Chinese-only",
+                    index,
+                    summary.cluster.topic_category,
+                )
                 continue
             summary.summary_en = f"**{headline_clean}**\n\n{body_clean}"
             summary.grouped_perspectives_en = self._align_translated_perspective_groups(

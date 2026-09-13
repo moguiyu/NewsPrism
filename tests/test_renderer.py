@@ -12,6 +12,7 @@ from newsprism.runtime.renderer import (
     HtmlRenderer,
     _REGION_FLAG,
     _broad_category,
+    _chinese_label_fallback,
     _disambiguate_hot_topic_label,
     _is_public_chinese_hot_topic_name,
     _repair_hot_topic_label,
@@ -3069,3 +3070,77 @@ def test_disambiguate_hot_topic_label_fails_closed_for_fragment_storyline():
 
     assert _is_public_chinese_hot_topic_name(label) is True
     assert label == "科技"
+
+
+def test_chinese_label_fallback_stays_compliant_when_truncation_is_too_tight():
+    """The gate ran before truncation, so a tight cap broke the contract.
+
+    ``_chinese_label_fallback([...], 1)`` returned ``"科"``, which fails
+    ``_is_public_chinese_hot_topic_name`` (one CJK char), contradicting the
+    helper's guarantee. Unreachable at production config (caps are 10 and 60),
+    but the contract must hold for any cap.
+    """
+    summary = _english_only_summary("Technology")
+
+    label = _chinese_label_fallback([summary], 1)
+
+    assert _is_public_chinese_hot_topic_name(label) is True
+
+
+def _english_fixture(summary_en: str | None, title: str = "美海军谈核潜艇") -> ClusterSummary:
+    article = Article(
+        url=f"https://example.com/{title}",
+        title=title,
+        source_name="Yonhap",
+        published_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+        content=f"{title} body",
+    )
+    return ClusterSummary(
+        cluster=ArticleCluster(topic_category="World", articles=[article]),
+        summary=f"**{title}**\n\n正文内容足够长以通过中文判定。",
+        summary_en=summary_en,
+        quality_status="publishable",
+    )
+
+
+def test_english_gaps_is_empty_when_everything_is_translated(renderer):
+    summary = _english_fixture("**US Navy on ROK submarines**\n\nBody text.")
+
+    assert renderer._english_gaps([summary], [], [], []) == []
+
+
+def test_english_gaps_names_summaries_missing_translation(renderer):
+    translated = _english_fixture("**Title**\n\nBody.")
+    missing = _english_fixture(None, title="胡塞武装占领岛屿")
+
+    gaps = renderer._english_gaps([translated, missing], [], [], [])
+
+    assert len(gaps) == 1
+    assert gaps[0].startswith("missing_summary_en=1:")
+
+
+def test_english_gaps_names_family_without_english_label(renderer):
+    summary = _english_fixture("**Title**\n\nBody.")
+    family = {
+        "macro_topic_key": "single-60907745",
+        "macro_topic_name": "美CIA국장,우크",
+        "storyline_name": "美CIA국장,우크",
+        "summaries": [summary],
+    }
+
+    gaps = renderer._english_gaps([summary], [family], [], [])
+
+    assert any(gap.startswith("untranslated_family_label=") for gap in gaps)
+
+
+def test_english_available_mirrors_english_gaps(renderer):
+    """The boolean view keeps its contract after the gaps split.
+
+    ``render()`` now reads ``_english_gaps`` directly, so this pins the
+    documented ``not gaps`` semantics of the retained wrapper.
+    """
+    translated = _english_fixture("**Title**\n\nBody.")
+    missing = _english_fixture(None, title="胡塞武装占领岛屿")
+
+    assert renderer._english_available([translated], [], [], []) is True
+    assert renderer._english_available([translated, missing], [], [], []) is False

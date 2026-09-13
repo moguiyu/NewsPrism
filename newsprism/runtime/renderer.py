@@ -411,13 +411,16 @@ def _chinese_label_fallback(summaries: list[ClusterSummary], max_chars: int) -> 
 
     Fail closed: when no family member yields a compliant label, returning the
     rejected label is exactly how a Korean headline fragment reached a reader
-    on 2026-09-13.
+    on 2026-09-13. The gate is applied to the *truncated* value, so a cap too
+    tight to keep two CJK characters falls through to the constant rather than
+    returning a slice that no longer passes.
     """
     for summary in summaries:
         category = getattr(summary, "display_category", None) or summary.cluster.topic_category
         label = display_category_label_zh(str(category))
-        if _is_public_chinese_hot_topic_name(label):
-            return label[:max_chars]
+        truncated = label[:max_chars]
+        if _is_public_chinese_hot_topic_name(truncated):
+            return truncated
     return "全球焦点"
 
 
@@ -1097,13 +1100,21 @@ class HtmlRenderer:
                     zh_group["perspective_en"] = en_group.get("perspective", "")
                     zh_group["label_en"] = en_group.get("label_en", zh_group.get("label_en", ""))
 
-    def _english_available(
+    def _english_gaps(
         self,
         summaries: list[ClusterSummary],
         hot_topics: list[dict[str, object]],
         focus_storylines: list[dict[str, object]],
         positive_summaries: list[ClusterSummary] | None = None,
-    ) -> bool:
+    ) -> list[str]:
+        """Return every reason the English edition cannot be published.
+
+        The edition is all-or-nothing by design (bilingual publishing
+        invariant), which used to collapse four different failures into one
+        silent ``False``. On 2026-09-13 the translation stage billed 12,643
+        tokens and the English edition was still dropped without a single log
+        line, so the reasons are reported explicitly here.
+        """
         positive_summaries = positive_summaries or []
         visible_summaries = list(summaries) + list(positive_summaries)
         for family in hot_topics:
@@ -1113,15 +1124,34 @@ class HtmlRenderer:
                     summary for summary in family_summaries if isinstance(summary, ClusterSummary)
                 )
         if not visible_summaries:
-            return False
-        if any(not summary.summary_en for summary in visible_summaries):
-            return False
+            return ["no_visible_summaries"]
+
+        gaps: list[str] = []
+        missing_en = [
+            str(summary.cluster.topic_category)
+            for summary in visible_summaries
+            if not summary.summary_en
+        ]
+        if missing_en:
+            gaps.append(f"missing_summary_en={len(missing_en)}:{'|'.join(missing_en[:3])}")
         if any(not looks_like_chinese_text(summary.summary) for summary in visible_summaries):
-            return False
+            gaps.append("non_chinese_source_summary")
         for family in hot_topics:
             if not family.get("macro_topic_name_en") or not family.get("storyline_name_en"):
-                return False
-        return True
+                name = str(family.get("macro_topic_name") or family.get("storyline_name") or "?")
+                gaps.append(f"untranslated_family_label={name}")
+        return gaps
+
+    def _english_available(
+        self,
+        summaries: list[ClusterSummary],
+        hot_topics: list[dict[str, object]],
+        focus_storylines: list[dict[str, object]],
+        positive_summaries: list[ClusterSummary] | None = None,
+    ) -> bool:
+        return not self._english_gaps(
+            summaries, hot_topics, focus_storylines, positive_summaries
+        )
 
     def _build_grouped_perspectives(self, summary: ClusterSummary) -> list[dict]:
         if not summary.cluster.is_multi_source:
@@ -1475,7 +1505,13 @@ class HtmlRenderer:
 
         hot_topics = hot_topics or []
         positive_summaries = positive_summaries or []
-        english_available = self._english_available(summaries, hot_topics, [], positive_summaries)
+        english_gaps = self._english_gaps(summaries, hot_topics, [], positive_summaries)
+        english_available = not english_gaps
+        if english_gaps:
+            logger.warning(
+                "English edition withheld; rendering Chinese-only report: %s",
+                "; ".join(english_gaps),
+            )
         clusters_ctx = []
         clusters_json: list[dict] = []
 
