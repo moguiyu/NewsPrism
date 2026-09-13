@@ -883,11 +883,11 @@ class HtmlRenderer:
         ):
             provenance_label = "待核验"
             provenance_label_en = "Review only"
+        # The searched state is a boolean on the entry (is_searched) and is
+        # drawn by the template as icon('ui-searched'); the label stays a plain
+        # source name so no glyph is baked into the data contract.
         compact_label = source_name
         compact_label_en = source_name
-        if is_searched:
-            compact_label = f"🔍{compact_label}"
-            compact_label_en = f"🔍{compact_label_en}"
         if provenance_label:
             compact_label = f"{compact_label} · {provenance_label}"
         if provenance_label_en:
@@ -899,8 +899,8 @@ class HtmlRenderer:
         # inline "missing perspective" marker with the failure detail on hover.
         placeholder_reason_zh, placeholder_reason_en = _placeholder_failure_label(acceptance_reason)
         if is_placeholder:
-            compact_label = f"🔍{source_name}"
-            compact_label_en = f"🔍{_placeholder_source_label_en(source_name)}"
+            compact_label = source_name
+            compact_label_en = _placeholder_source_label_en(source_name)
             stage_detail = _placeholder_stage_detail(meta.get("search_stage_trace"))
             provenance_label, provenance_label_en = stage_detail or (
                 placeholder_reason_zh,

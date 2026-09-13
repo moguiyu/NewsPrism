@@ -126,7 +126,8 @@ class TestPerspectivesContext:
         perspectives_list = renderer._build_perspectives_list(summary)
 
         assert len(grouped) == 2
-        assert grouped[1]["label"] == "🔍NHKニュース · 搜索补充 / 🔍Japan MOFA Web · 官方网站 / 🔍Japan MOFA · 官方X"
+        assert grouped[1]["label"] == "NHKニュース · 搜索补充 / Japan MOFA Web · 官方网站 / Japan MOFA · 官方X"
+        assert "\U0001F50D" not in grouped[1]["label"]
 
         reuters_p = next(p for p in perspectives_list if p["source"] == "Reuters")
         assert reuters_p["is_searched"] is False
@@ -2647,7 +2648,9 @@ def test_render_counts_real_articles_separately_from_placeholders_and_localizes_
     placeholder_source = next(
         source for source in card["footer_sources"] if source["is_placeholder"]
     )
-    assert placeholder_source["compact_label_en"] == "🔍[Ukraine voice pending]"
+    assert placeholder_source["compact_label_en"] == "[Ukraine voice pending]"
+    assert "\U0001F50D" not in placeholder_source["compact_label_en"]
+    assert "\U0001F50D" not in placeholder_source["compact_label"]
 
 
 def test_accepted_search_without_materiality_evidence_is_not_an_angle(renderer, tmp_path):
