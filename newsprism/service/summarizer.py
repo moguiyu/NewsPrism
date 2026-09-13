@@ -1044,6 +1044,20 @@ class Summarizer:
                 return stem_factor
         return None
 
+    @staticmethod
+    def _canonical_number(text: str) -> float:
+        """Parse a matched numeric token, disambiguating comma decimal vs thousands.
+
+        ``1,5 миллиарда`` is 1.5 billion in ru/de/nl/fr sources, while
+        ``1,500`` is fifteen hundred in English ones.  Treat a lone comma
+        followed by exactly one or two digits as a decimal separator; every
+        other comma form keeps the historical thousands-separator reading.
+        """
+        value = unicodedata.normalize("NFKC", (text or "").strip()).replace(" ", "")
+        if re.fullmatch(r"\d+,\d{1,2}", value):
+            return float(value.replace(",", "."))
+        return float(value.replace(",", ""))
+
     @classmethod
     def _numeric_claims(cls, text: str) -> list[str]:
         claims: list[str] = []
@@ -1087,9 +1101,9 @@ class Summarizer:
         covered_spans: list[tuple[int, int]] = []
         for match in cls._NUMERIC_SCALE_PATTERN.finditer(text):
             try:
-                major = float(match.group("major").replace(",", ""))
+                major = cls._canonical_number(match.group("major"))
                 minor_text = match.group("minor")
-                minor = float(minor_text.replace(",", "")) if minor_text else 0.0
+                minor = cls._canonical_number(minor_text) if minor_text else 0.0
             except ValueError:
                 continue
             factor = cls._scale_factor(match.group("scale"))
@@ -1104,7 +1118,7 @@ class Summarizer:
             if any(start <= match.start() and match.end() <= end for start, end in covered_spans):
                 continue
             try:
-                values.append(float(match.group(0).replace(",", "")))
+                values.append(cls._canonical_number(match.group(0)))
             except ValueError:
                 continue
         return values
@@ -1188,7 +1202,7 @@ class Summarizer:
             if not currency:
                 continue
             try:
-                value = float(match.group("num").replace(",", ""))
+                value = cls._canonical_number(match.group("num"))
             except ValueError:
                 continue
             scale = match.group("scale")

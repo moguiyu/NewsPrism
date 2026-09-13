@@ -754,3 +754,67 @@ def test_translated_numeric_grounding_fails_closed_for_live_fragment(monkeypatch
     assert "70,000." not in (summary.summary_en or "")
     assert not summarizer._numeric_safety_violations(summary.summary_en or "")
     assert summary.quality_status == "needs_review"
+
+
+def test_canonical_number_distinguishes_comma_decimal_from_thousands():
+    """A lone comma followed by 1-2 digits is a decimal separator."""
+    assert Summarizer._canonical_number("1,5") == 1.5
+    assert Summarizer._canonical_number("1,50") == 1.5
+    assert Summarizer._canonical_number("1,500") == 1500.0
+    assert Summarizer._canonical_number("1,500,000") == 1500000.0
+    assert Summarizer._canonical_number("21") == 21.0
+    # Cases the brief did not list; the rule must not get these wrong either.
+    assert Summarizer._canonical_number("1,5000") == 15000.0      # malformed both ways -> historical reading
+    assert Summarizer._canonical_number("1,500,000.5") == 1500000.5
+    assert Summarizer._canonical_number("12,34") == 12.34
+
+
+def test_numeric_values_reads_comma_decimals_across_scripts():
+    assert Summarizer._numeric_values("1,5 миллиарда") == [1.5e9]
+    assert Summarizer._numeric_values("3,5 тысячи") == [3500.0]
+    assert Summarizer._numeric_values("2,5 млн") == [2.5e6]
+    assert Summarizer._numeric_values("1,5亿") == [1.5e8]
+    assert Summarizer._numeric_values("1,500万") == [1.5e7]
+    # thousands separators must keep working
+    assert Summarizer._numeric_values("1,500") == [1500.0]
+    assert Summarizer._numeric_values("1,500,000") == [1500000.0]
+
+
+def test_comma_decimal_source_grounds_the_correct_magnitude_end_to_end(monkeypatch):
+    """F4's two directions against a comma-decimal source.
+
+    Reading "1,5 млрд" as 15 billion made the CORRECT claim 15亿美元 look
+    unsupported (the Disputed badge F4 exists to remove) while the
+    10x-overstated 150亿美元 passed the anti-fabrication check.
+    """
+    summarizer = Summarizer(_config())
+
+    def build(zh_claim: str) -> ClusterSummary:
+        cluster = ArticleCluster(
+            topic_category="Business",
+            articles=[
+                Article(
+                    url="https://3dnews.ru/1148389",
+                    title="Oracle",
+                    source_name="3DNews",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="расходы достигли 1,5 млрд",
+                )
+            ],
+        )
+        return ClusterSummary(
+            cluster=cluster,
+            summary=f"**甲骨文重组**\n\n重组成本达到{zh_claim}，公司同时面临现金压力。",
+            quality_status="publishable",
+        )
+
+    monkeypatch.setattr(summarizer, "_rewrite_grounded_summary", lambda *_args: None)
+
+    correct = build("15亿美元")
+    summarizer._enforce_numeric_grounding(correct)
+    assert "unsupported_numeric_claim" not in correct.quality_flags
+    assert correct.quality_status == "publishable"
+
+    overstated = build("150亿美元")
+    summarizer._enforce_numeric_grounding(overstated)
+    assert "unsupported_numeric_claim" in overstated.quality_flags
