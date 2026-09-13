@@ -151,7 +151,7 @@ _INVALID_PERSPECTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 # Seeker placeholder failure reasons → bilingual short label. Surfaced as the
-# provenance label of an inline ⚠️ placeholder article so the reader sees WHY
+# provenance label of an inline placeholder article so the reader sees WHY
 # a regional perspective is missing (tooltip), without polluting the page.
 _PLACEHOLDER_FAILURE_LABELS: dict[str, tuple[str, str]] = {
     "http_401": ("鉴权失败", "Auth failed"),
