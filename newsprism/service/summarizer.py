@@ -1077,15 +1077,18 @@ class Summarizer:
 
     @staticmethod
     def _normalized_claim_text(text: str) -> str:
-        return (
-            unicodedata.normalize("NFKC", text or "")
-            .casefold()
-            .replace("–", "-")
-            .replace("—", "-")
-            .replace("％", "%")
-            .replace(",", "")
-            .replace(" ", "")
-        )
+        """Normalise text for substring comparison, keeping decimal commas distinct.
+
+        Every comma used to be stripped, which made ``"$28"`` a substring of
+        evidence reading ``"$2,8 млрд"`` -- so a 10x-overstated claim was judged
+        supported before any numeric comparison ran. Comma handling now mirrors
+        :meth:`_canonical_number`: a lone comma followed by one or two digits is
+        a decimal point, every other comma is a thousands separator.
+        """
+        value = unicodedata.normalize("NFKC", text or "")
+        value = value.casefold().replace("–", "-").replace("—", "-").replace("％", "%")
+        value = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", value)
+        return value.replace(",", "").replace(" ", "")
 
     @classmethod
     def _numeric_values(cls, text: str) -> list[float]:

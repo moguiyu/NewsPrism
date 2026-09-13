@@ -818,3 +818,52 @@ def test_comma_decimal_source_grounds_the_correct_magnitude_end_to_end(monkeypat
     overstated = build("150亿美元")
     summarizer._enforce_numeric_grounding(overstated)
     assert "unsupported_numeric_claim" in overstated.quality_flags
+
+
+def test_normalized_claim_text_keeps_comma_decimals_distinct():
+    """The substring shortcut must not equate "$28" with evidence reading "$2,8".
+
+    Stripping every comma made norm("$28") a substring of norm("... $2,8 ..."),
+    so a 10x-overstated claim was judged supported before any numeric
+    comparison ran.
+    """
+    norm = Summarizer._normalized_claim_text
+    assert norm("$28") not in norm("расходы достигли $2,8 млрд")
+    assert norm("1,5") == norm("1.5")
+    assert norm("1,500") == norm("1500")
+    assert norm("1,500,000") == norm("1500000")
+
+
+def test_comma_decimal_evidence_rejects_a_tenfold_overstatement(monkeypatch):
+    """End-to-end: $28 billion must NOT be grounded by a source saying $2,8 млрд."""
+    summarizer = Summarizer(_config())
+
+    def build(en: str) -> ClusterSummary:
+        cluster = ArticleCluster(
+            topic_category="Business",
+            articles=[
+                Article(
+                    url="https://3dnews.ru/1148389",
+                    title="Oracle",
+                    source_name="3DNews",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="расходы достигли $2,8 млрд",
+                )
+            ],
+        )
+        return ClusterSummary(
+            cluster=cluster,
+            summary="**甲骨文**\n\n公司面临现金压力，重组计划规模庞大。",
+            summary_en=f"**Oracle**\n\n{en}",
+            quality_status="publishable",
+        )
+
+    monkeypatch.setattr(summarizer, "_rewrite_grounded_summary", lambda *_args: None)
+
+    matching = build("The restructuring will cost $2.8 billion.")
+    summarizer._enforce_translated_numeric_grounding(matching)
+    assert "unsupported_numeric_claim" not in matching.quality_flags
+
+    overstated = build("The restructuring will cost $28 billion.")
+    summarizer._enforce_translated_numeric_grounding(overstated)
+    assert "unsupported_numeric_claim" in overstated.quality_flags
