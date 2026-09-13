@@ -14,7 +14,16 @@ case "$remote_name:$remote_url" in
         ;;
 esac
 
-BLOCKED_PATH_RE='^(docs/|debug-perspectives-bug\.html$|eval-report-.*\.png$|report-overview\.png$)'
+# Local-only policy (narrowed 2026-09-13): top-level `docs/*.md` files are
+# PUBLISHABLE -- `.gitignore` deliberately whitelists docs/agent-workflow.md and
+# docs/agent-guidance-audit.md. Everything under the subtrees below stays
+# local-only because it carries operational detail: internal hostnames and SSH
+# access, the admin portal, decision logs, plans, and review evidence.
+#
+# Deliberate trade-off: this is default-allow for NEW top-level docs files, so a
+# sensitive document added at `docs/<name>.md` WILL be pushable. Put sensitive
+# documents in one of the blocked subtrees instead.
+BLOCKED_PATH_RE='^(docs/(reference|reviews|plans|superpowers|design-docs|generated)/|debug-perspectives-bug\.html$|eval-report-.*\.png$|report-overview\.png$)'
 zero_sha='0000000000000000000000000000000000000000'
 
 check_paths() {
