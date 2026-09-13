@@ -149,15 +149,6 @@
     /* 10 px cert badge only: keeps 1 px strokes legible */
     svg.icon--sm { stroke-width: 2; }
 
-    /* Country-flag inline box ONLY — no font-family and no emoji-presentation
-       property: the operating-system colour-emoji font stack is gone from this
-       page. Task 4 replaces the flag emoji with an ISO alpha-2 chip. */
-    .emoji {
-      display: inline-block;
-      line-height: 1;
-      vertical-align: -0.08em;
-    }
-
     /* Visually hidden but available to crawlers / screen readers — carries the
        page's single primary heading without disturbing the flat editorial layout. */
     .sr-only {
@@ -2735,11 +2726,11 @@
 {%- endmacro %}
 
 {# ── 源条目内容宏 ──
-   flag + 🔍 for searched/placeholder + source name + cert badge + provenance label.
+   ISO region code + 🔍 for searched/placeholder + source name + cert badge + provenance label.
    Placeholders (missing regional perspectives) render muted with a tooltip
    carrying the failure reason; flat styling, no card/lift/shadow per AGENTS.md. #}
 {% macro source_chip_body(src) -%}
-{% if src.flag %}<span class="emoji" aria-hidden="true">{{ src.flag }}</span> {% endif %}{% if src.is_searched %}{{ icon('ui-searched') }}{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ src.source }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
+{% if src.region_code %}<span class="region-code">{{ src.region_code }}</span> {% endif %}{% if src.is_searched %}{{ icon('ui-searched') }}{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ src.source }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
 {%- endmacro %}
 
 <body>

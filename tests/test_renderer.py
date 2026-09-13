@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 
 from lxml import html as lxml_html
 import pytest
@@ -11,13 +12,13 @@ import pytest
 from newsprism.config import load_config
 from newsprism.runtime.renderer import (
     HtmlRenderer,
-    _REGION_FLAG,
     _broad_category,
     _chinese_label_fallback,
     _disambiguate_hot_topic_label,
     _is_public_chinese_hot_topic_name,
     _repair_hot_topic_label,
 )
+from newsprism.service.locales import region_flags
 from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
 
 
@@ -36,18 +37,18 @@ def renderer():
     )
 
 
-class TestSourceFlag:
-    def test_flag_for_organic_article(self, renderer):
-        assert renderer._source_flag("Reuters") == "🇺🇸"
+class TestSourceRegionCode:
+    def test_region_code_for_organic_article(self, renderer):
+        assert renderer._source_region_code("Reuters") == "US"
 
-    def test_flag_for_searched_article_with_region(self, renderer):
-        assert renderer._source_flag("Unknown Source", search_region="jp") == "🇯🇵"
+    def test_region_code_for_searched_article_with_region(self, renderer):
+        assert renderer._source_region_code("Unknown Source", search_region="jp") == "JP"
 
-    def test_flag_for_searched_article_unknown_region(self, renderer):
-        assert renderer._source_flag("Unknown Source", search_region="xx") == "🌐"
+    def test_region_code_for_searched_article_unknown_region(self, renderer):
+        assert renderer._source_region_code("Unknown Source", search_region="xx") == ""
 
-    def test_flag_for_unknown_source_no_region(self, renderer):
-        assert renderer._source_flag("Unknown Source") == ""
+    def test_region_code_for_unknown_source_no_region(self, renderer):
+        assert renderer._source_region_code("Unknown Source") == ""
 
 
 class TestPerspectivesContext:
@@ -130,7 +131,8 @@ class TestPerspectivesContext:
         reuters_p = next(p for p in perspectives_list if p["source"] == "Reuters")
         assert reuters_p["is_searched"] is False
         assert reuters_p["provenance_label"] is None
-        assert reuters_p["flag"] == "🇺🇸"
+        assert reuters_p["region_code"] == "US"
+        assert "flag" not in reuters_p
 
         nhk_p = next(p for p in perspectives_list if p["source"] == "NHKニュース")
         assert nhk_p["is_searched"] is True
@@ -1363,19 +1365,23 @@ class TestPerspectivesContext:
 
 
 class TestRegionFlagMapping:
-    def test_common_regions_have_flags(self):
-        assert _REGION_FLAG["cn"] == "🇨🇳"
-        assert _REGION_FLAG["us"] == "🇺🇸"
-        assert _REGION_FLAG["jp"] == "🇯🇵"
-        assert _REGION_FLAG["kr"] == "🇰🇷"
-        assert _REGION_FLAG["ru"] == "🇷🇺"
-        assert _REGION_FLAG["de"] == "🇩🇪"
-        assert _REGION_FLAG["gb"] == "🇬🇧"
+    """`region_flags()` stays in service/locales.py for other callers; the
+    renderer no longer uses it (Task 4 renders ISO alpha-2 codes instead)."""
 
-    def test_iso_regions_outside_old_static_table_have_flags(self, renderer):
-        assert renderer._source_flag("Unknown", search_region="af") == "🇦🇫"
-        assert renderer._source_flag("Unknown", search_region="ir") == "🇮🇷"
-        assert renderer._source_flag("Unknown", search_region="ua") == "🇺🇦"
+    def test_common_regions_have_flags(self):
+        flags = region_flags()
+        assert flags["cn"] == "🇨🇳"
+        assert flags["us"] == "🇺🇸"
+        assert flags["jp"] == "🇯🇵"
+        assert flags["kr"] == "🇰🇷"
+        assert flags["ru"] == "🇷🇺"
+        assert flags["de"] == "🇩🇪"
+        assert flags["gb"] == "🇬🇧"
+
+    def test_iso_regions_outside_old_static_table_have_region_codes(self, renderer):
+        assert renderer._source_region_code("Unknown", search_region="af") == "AF"
+        assert renderer._source_region_code("Unknown", search_region="ir") == "IR"
+        assert renderer._source_region_code("Unknown", search_region="ua") == "UA"
 
 
 class TestHotTopics:
@@ -1834,9 +1840,6 @@ class TestHotTopics:
 
         assert "--font-sans: 'Outfit', 'Noto Sans SC', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;" in html
         assert "body {\n      font-family: var(--font-sans);" in html
-        # The flag span keeps ONLY its inline-box geometry until Task 4 replaces
-        # the emoji with an ISO alpha-2 chip: no font-family, no font-variant.
-        assert ".emoji {\n      display: inline-block;\n      line-height: 1;\n      vertical-align: -0.08em;\n    }" in html
         # sprite inlined exactly once, before first use
         assert html.count('<symbol id="hi-category-world"') == 1
         assert 'class="icon"' in html
@@ -1844,8 +1847,8 @@ class TestHotTopics:
         assert "--font-emoji" not in html
         assert "Apple Color Emoji" not in html
         assert "font-variant-emoji" not in html
-        # country flags are still OS emoji until Task 4 rewrites them
-        assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="emoji" and text()="🇯🇵"]')
+        # country provenance is an ISO alpha-2 chip, never a colour-flag emoji
+        assert tree.xpath('//a[contains(@class, "src-chip-link")]//span[@class="region-code" and text()="JP"]')
         # category and hot-topic icons resolve to sprite references
         assert tree.xpath(
             '//button[contains(@class, "cat-tab") and not(contains(@class, "hot-tab"))]'
@@ -1866,6 +1869,10 @@ class TestHotTopics:
         assert tree.xpath(
             '//div[@class="theme-toggle"]//svg[@class="icon"]/use[@href="#hi-ui-theme-dark"]'
         )
+        # no emoji-presentation codepoint anywhere in the published report, and
+        # no legacy globe fallback for a source without a resolved region
+        assert not re.search("[\U0001F000-\U0001FAFF\u2600-\u27BF]", html)
+        assert "🌐" not in html
         # provenance detail is never baked into an emoji span
         assert not tree.xpath('//span[@class="emoji" and contains(text(), "搜索补充")]')
 
@@ -2470,8 +2477,8 @@ def test_render_copies_fonts_to_output(tmp_path):
 
 def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer, tmp_path):
     """Issue #1: when a regional perspective search fails, the reader sees a
-    flat inline search placeholder with the country flag + failure reason tooltip
-    instead of silent absence.
+    flat inline search placeholder with the ISO alpha-2 region chip + failure
+    reason tooltip instead of silent absence.
     """
     renderer.output_dir = tmp_path
     organic = Article(
@@ -2519,10 +2526,11 @@ def test_render_seeker_placeholder_appears_with_flag_and_reason_tooltip(renderer
     assert placeholder_rows[0]["search_acceptance_reason"] == "entity_mismatch"
     assert placeholder_rows[0]["search_stage_trace"] == placeholder.search_stage_trace
 
-    # Rendered HTML includes the placeholder source name + the 🇫🇷 flag +
-    # the Hugeicons search marker + the failure-detail label, flat (no card/lift).
+    # Rendered HTML includes the placeholder source name + the ISO alpha-2
+    # region chip + the Hugeicons search marker + the failure-detail label,
+    # flat (no card/lift).
     assert "[France视角待补]" in html
-    assert "🇫🇷" in html
+    assert '<span class="region-code">FR</span>' in html
     assert 'use href="#hi-ui-searched"' in html
     assert "官方：结果过旧；当地：实体不匹配" in html
 
@@ -2589,7 +2597,7 @@ def test_failed_target_remains_visible_with_two_real_perspectives(renderer, tmp_
     )
     assert card["distinct_perspective_count"] == 2
     assert "查看 2 个视角" in html
-    assert "🇫🇷" in html
+    assert '<span class="region-code">FR</span>' in html
     assert 'use href="#hi-ui-searched"' in html
     assert "未确认官方归属" in html
 

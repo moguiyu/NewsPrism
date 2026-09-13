@@ -30,7 +30,7 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.language import looks_like_chinese_text
-from newsprism.service.locales import region_flag, region_flags
+from newsprism.service.locales import is_recognized_country
 from newsprism.types import ClusterSummary, SourceCertification, is_real_article
 
 logger = logging.getLogger(__name__)
@@ -122,10 +122,6 @@ _CATEGORY_META: list[tuple[str, str, str]] = [
     ("Society", "category-society", "society"),
     ("Culture & Sports", "category-culture-sports", "culture"),
 ]
-
-# ── REGION → FLAG EMOJI ───────────────────────────────────────────────────────
-
-_REGION_FLAG: dict[str, str] = region_flags()
 
 # LLM/config icon keys (config.yaml hot_topics.icon_allowlist) -> sprite slugs.
 _HOT_TOPIC_ICON_MAP: dict[str, str] = {
@@ -776,16 +772,21 @@ class HtmlRenderer:
             path.write_bytes(favicon_bytes)
             path.chmod(0o644)
 
-    def _source_flag(self, source_name: str, search_region: str | None = None) -> str:
-        """Get flag emoji for a source.
+    def _source_region_code(self, source_name: str, search_region: str | None = None) -> str:
+        """Uppercase ISO 3166-1 alpha-2 code for a source, or "" when unknown.
 
-        For searched articles, use search_region directly.
-        For organic articles, look up region from source_regions mapping.
+        Hugeicons has no country-flag set and the report no longer uses the OS
+        colour-emoji font, so provenance is shown as a mono micro-chip (e.g. JP)
+        styled like .cert-badge. For searched articles use search_region
+        directly; for organic articles look the region up in source_regions.
+        A searched source without a resolved region already carries the
+        ui-searched icon plus a provenance label, so there is no fallback glyph.
         """
-        if search_region:
-            return region_flag(search_region) or "🌐"
-        region = self.source_regions.get(source_name, "")
-        return region_flag(region)
+        region = (search_region or "").strip()
+        if not region:
+            region = self.source_regions.get(source_name, "")
+        code = region.strip().upper()
+        return code if is_recognized_country(code) else ""
 
     def _provenance_label(
         self,
@@ -908,7 +909,7 @@ class HtmlRenderer:
             url = None  # Nullify synthetic placeholder URL to prevent broken links in template
         return {
             "source": source_name,
-            "flag": self._source_flag(source_name, search_region),
+            "region_code": self._source_region_code(source_name, search_region),
             "is_searched": is_searched,
             "is_placeholder": is_placeholder,
             "search_acceptance_status": acceptance_status,
