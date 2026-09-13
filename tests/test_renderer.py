@@ -1,6 +1,7 @@
 """Tests for renderer searched article attribution."""
 from datetime import date, datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -3144,3 +3145,22 @@ def test_english_available_mirrors_english_gaps(renderer):
 
     assert renderer._english_available([translated], [], [], []) is True
     assert renderer._english_available([translated, missing], [], [], []) is False
+
+
+def test_render_logs_why_the_english_edition_was_withheld(renderer, caplog):
+    """The point of F5: withholding English must leave a trace.
+
+    On 2026-09-13 the translation stage billed 12,643 tokens and the English
+    edition was still dropped with no log line at all, so the spend could not
+    be diagnosed.
+    """
+    summary = _english_fixture(None, title="美海军谈核潜艇")
+
+    with caplog.at_level(logging.WARNING, logger="newsprism.runtime.renderer"):
+        renderer.render([summary], date(2026, 9, 14))
+
+    withheld = [
+        message for message in caplog.messages if "English edition withheld" in message
+    ]
+    assert len(withheld) == 1
+    assert "missing_summary_en=1:" in withheld[0]
