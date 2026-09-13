@@ -84,6 +84,12 @@ def _summary_urls(summary: ClusterSummary) -> set[str]:
     return {article.url for article in summary.cluster.articles}
 
 
+def _storyline_key(summary: ClusterSummary) -> str | None:
+    """Storyline family key carried by the cluster, if the resolver set one."""
+    key = getattr(summary.cluster, "storyline_key", None)
+    return str(key) if key else None
+
+
 def _source_overlap(left: ClusterSummary, right: ClusterSummary) -> int:
     return len(set(left.cluster.sources) & set(right.cluster.sources))
 
@@ -668,8 +674,14 @@ def resolve_display_duplicates(
         for right in displayed[left_index + 1 :]:
             if id(right) in suppressed_ids:
                 continue
-            left_fam = family_id_by_summary.get(id(left))
-            right_fam = family_id_by_summary.get(id(right))
+            # The planner only indexes families that claimed a hot-topic or
+            # focus tab. Main-lane members of a storyline still belong to one
+            # family, so fall back to the key the resolver stamped on the
+            # cluster: without it, two members of one family were merged at
+            # 0.78 embedding similarity (2026-09-13 DPRK missile cluster was
+            # absorbed into the ROK submarine card).
+            left_fam = family_id_by_summary.get(id(left)) or _storyline_key(left)
+            right_fam = family_id_by_summary.get(id(right)) or _storyline_key(right)
             duplicate, reason, confidence = _display_duplicate(left, right, centroids)
             if left_fam and right_fam and left_fam == right_fam:
                 # Within one storyline, preserve distinct daily incidents. But

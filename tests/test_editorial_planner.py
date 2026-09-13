@@ -301,6 +301,35 @@ def test_display_dedup_preserves_within_family_members():
     assert regular == []
 
 
+def test_display_dedup_preserves_same_storyline_members_in_main_lane():
+    """2026-09-13: two clusters the resolver put in ONE storyline were merged
+    at 0.78 because that family never claimed a hot-topic tab.
+
+    ``resolve_display_duplicates`` only built its family index from hot_topic
+    and focus families, so main-lane members of a storyline got no protection.
+    """
+    left = _storyline_summary("US Navy on ROK nuclear submarine", 0.77, "single-e8b64fc9", role="core")
+    right = _storyline_summary("North Korea fires ballistic missiles", 0.60, "single-e8b64fc9")
+    left.cluster.articles[0].embedding = [1.0, 0.0, 0.0]
+    right.cluster.articles[0].embedding = [0.78, 0.6258, 0.0]
+
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
+
+    assert len(regular) == 2
+
+
+def test_display_dedup_still_merges_same_event_across_storylines():
+    """The family guard must not stop legitimate cross-family dedup."""
+    left = _summary("Houthis seize Bab al-Mandeb island", 0.75)
+    right = _summary("Yemen Houthis capture strategic island", 0.70)
+    left.cluster.articles[0].embedding = [1.0, 0.0, 0.0]
+    right.cluster.articles[0].embedding = [0.81, 0.5864, 0.0]
+
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [left, right], [])
+
+    assert len(regular) == 1
+
+
 def test_display_dedup_always_merges_shared_url_inside_storyline():
     shared = "https://wire.example/wildfire"
     left = _storyline_summary("France wildfire evacuation", 0.9, "wildfires", role="core")
