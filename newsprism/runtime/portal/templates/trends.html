@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% block body %}
-<h2>趋势 · {{ date_from }} → {{ date_to }}</h2>
+<h2>趋势 · {{ date_from }} {{ icon('ui-arrow-right') }} {{ date_to }}</h2>
 {% include "_filters.html" %}
 <p>平均综合分走势：{{ spark|safe }}</p>
 <table>

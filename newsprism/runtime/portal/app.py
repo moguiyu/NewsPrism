@@ -18,9 +18,14 @@ from newsprism.repo.db import (
     insert_editorial_feedback, insert_feedback_correction, list_corrections,
     query_evaluations, selected_source_regions,
 )
+from newsprism.runtime import icons
 from newsprism.runtime.portal import analytics as A
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# Registered once as environment globals so every template (and every route) sees
+# the shared vendored Hugeicons sprite instead of OS colour emoji.
+_TEMPLATES.env.globals["icon"] = icons.icon
+_TEMPLATES.env.globals["icon_sprite"] = icons.sprite_markup()
 
 
 class VerdictIn(BaseModel):

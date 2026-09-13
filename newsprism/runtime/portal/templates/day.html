@@ -13,12 +13,12 @@
 {% set gb = gate_badge(r.gate) %}<td class="{{ gb.cls }}" title="{{ gb.title }}">{{ gb.label }}</td>
 {% for d in DIMENSIONS %}<td class="{{ heat_class(r.dims.get(d,0), 10) }}">{{ r.dims.get(d,0) }}</td>{% endfor %}
 <td>{{ '%.2f'|format(r.signal) }}</td><td>{{ '%.3f'|format(r.composite) }}</td>
-<td>{{ '✓' if r.selected else '' }}</td>
+<td>{{ icon('ui-selected') if r.selected else '' }}</td>
 <td>{{ (r.cluster_summary or r.rationale or '')[:80] }}</td>
 <td>
   {% if r.selected %}
-    <button onclick="fb('verdict',{{ r.cluster_id }},1)">👍</button>
-    <button onclick="fb('verdict',{{ r.cluster_id }},-1)">👎</button>
+    <button onclick="fb('verdict',{{ r.cluster_id }},1)">{{ icon('ui-feedback-up') }}</button>
+    <button onclick="fb('verdict',{{ r.cluster_id }},-1)">{{ icon('ui-feedback-down') }}</button>
   {% else %}
     <button onclick="corr('promote',{{ r.id }})">应入选</button>
   {% endif %}

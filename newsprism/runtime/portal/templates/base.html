@@ -20,9 +20,13 @@
   form.filters label{margin-right:12px}
   .muted{color:#888}.pill{padding:1px 6px;border:1px solid #ccc;border-radius:2px;font-size:11px}
   button{cursor:pointer}
+  /* Inline Hugeicons sprite (newsprism/runtime/icons.py): flat, monochrome, colour
+     inherited from the label. Do not strip stroke="currentColor" from the sprite. */
+  svg.icon{display:inline-block;width:1em;height:1em;flex:none;vertical-align:-0.125em;color:inherit;stroke-width:1.5;overflow:visible}
 </style>
 </head>
 <body>
+{{ icon_sprite }}
 <header>
   <a href="/">概览</a><a href="/day">单日审查</a><a href="/matrices">矩阵</a>
   <a href="/trends">趋势</a><a href="/calibration">校准</a><a href="/sources">来源评估</a>

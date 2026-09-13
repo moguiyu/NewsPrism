@@ -1,4 +1,5 @@
 """Smoke tests for the portal app via FastAPI TestClient (no network, temp DB)."""
+import re
 from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
@@ -127,3 +128,23 @@ def test_has_feedback_and_composite_max_filters_in_form(client):
     # both backend-wired filters are now exposed in the shared filter form
     html = client.get("/day?date=2026-06-14").text
     assert 'name="composite_max"' in html and 'name="has_feedback"' in html
+
+
+def test_day_page_uses_hugeicons_sprite_not_emoji(tmp_path):
+    """The portal shares the report's vendored sprite; feedback buttons must not
+    fall back to the OS colour-emoji font."""
+    db = tmp_path / "n.db"
+    init_db(db)
+    cid = insert_cluster(Cluster(topic_category="国际时政", article_ids=[1], summary="s",
+        perspectives={}, report_date="2026-06-14"), db_path=db)
+    insert_cluster_evaluation(report_date="2026-06-14", cluster_key="k1", dims={"scope": 8},
+        rationale="r", signal=0.5, composite=0.7, rank=1, display_category="国际时政",
+        status="publishable", flags=[], evaluated_by_llm=True, model="m",
+        subject_regions=["il"], db_path=db)
+    link_cluster_evaluation("2026-06-14", "k1", cid, selected=True, db_path=db)
+    client = TestClient(create_app(db_path=db))
+    html = client.get("/day?date=2026-06-14").text
+    assert "#hi-ui-feedback-up" in html
+    assert "#hi-ui-feedback-down" in html
+    assert "#hi-ui-selected" in html
+    assert not re.search("[\U0001F000-\U0001FAFF\u2600-\u27BF]", html)
