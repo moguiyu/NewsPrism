@@ -964,8 +964,9 @@ def test_storyline_name_rejects_japanese_kana_headline():
     name = resolver._finalize_storyline_name("美주택대출금리6.8", [cluster])
 
     # No Chinese candidate exists anywhere in this family, so the raw name is
-    # retained rather than replaced by the kana headline.
+    # retained rather than replaced by the kana headline. Note what this does
+    # and does not prove: the retained value is itself a foreign fragment
+    # (주택대출금리 is Hangul), so this pins "a kana headline no longer becomes
+    # the label" -- NOT "the label is Chinese". Reader-facing safety comes from
+    # the renderer gate instead (Hangul rejected -> repair -> _chinese_label_fallback).
     assert name == "美주택대출금리6.8"
-    assert name == "美주택대출금리6.8" or name == "World" or all(
-        ord(ch) < 0x3040 or ord(ch) > 0x30FF for ch in name
-    )

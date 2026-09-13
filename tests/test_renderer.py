@@ -3164,3 +3164,32 @@ def test_render_logs_why_the_english_edition_was_withheld(renderer, caplog):
     ]
     assert len(withheld) == 1
     assert "missing_summary_en=1:" in withheld[0]
+
+
+def test_english_gaps_names_the_non_chinese_source_summary(renderer):
+    """The reason must name the item, not just the condition.
+
+    ``non_chinese_source_summary`` used to answer only "something", so a
+    maintainer reading the log still could not tell which summary to inspect --
+    a diagnosability gap in a task whose entire purpose is diagnosability.
+    """
+    article = Article(
+        url="https://example.com/english-only",
+        title="Anthropic CEO calls for slowdown",
+        source_name="The Verge",
+        published_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+        content="Anthropic CEO calls for slowdown",
+    )
+    summary = ClusterSummary(
+        cluster=ArticleCluster(topic_category="Technology", articles=[article]),
+        summary="**Anthropic CEO calls for slowdown**\n\nBody text in English only.",
+        summary_en="**Anthropic CEO calls for slowdown**\n\nBody text in English only.",
+        quality_status="publishable",
+    )
+
+    gaps = renderer._english_gaps([summary], [], [], [])
+
+    reasons = [gap for gap in gaps if gap.startswith("non_chinese_source_summary=")]
+    assert len(reasons) == 1
+    assert reasons[0].startswith("non_chinese_source_summary=1:")
+    assert "Technology" in reasons[0]

@@ -649,3 +649,25 @@ def test_display_dedup_accounting_counts_suppressions(caplog):
         "(hot_topic_members=0, focus_members=0, main=1, positive=0)"
     )
     assert regular == [kept]
+
+
+def test_display_dedup_still_merges_same_event_across_different_storylines():
+    """Production shape: the 2026-09-13 Bab al-Mandeb pair (0.81) must still merge.
+
+    The storyline guard protects members of ONE family. Two clusters in
+    DIFFERENT families are still ordinary display duplicates, and the unkeyed
+    guard could not see that over-application risk -- this pins it with the real
+    production keys.
+    """
+    left = _storyline_summary(
+        "Houthis seize Bab al-Mandeb island", 0.75, "single-4a6e4f6b", role="none"
+    )
+    right = _storyline_summary(
+        "Yemen Houthis capture strategic island", 0.70, "single-a1009515", role="none"
+    )
+    left.cluster.articles[0].embedding = [1.0, 0.0, 0.0]
+    right.cluster.articles[0].embedding = [0.81, 0.5864, 0.0]
+
+    _hot, _focus, regular, _positive = resolve_display_duplicates([], [], [left, right], [])
+
+    assert len(regular) == 1

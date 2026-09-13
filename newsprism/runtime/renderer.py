@@ -1134,8 +1134,18 @@ class HtmlRenderer:
         ]
         if missing_en:
             gaps.append(f"missing_summary_en={len(missing_en)}:{'|'.join(missing_en[:3])}")
-        if any(not looks_like_chinese_text(summary.summary) for summary in visible_summaries):
-            gaps.append("non_chinese_source_summary")
+        non_chinese = [
+            str(summary.cluster.topic_category)
+            for summary in visible_summaries
+            if not looks_like_chinese_text(summary.summary)
+        ]
+        if non_chinese:
+            # Name the items, like missing_summary_en does: "which summary?" is
+            # the first question a maintainer asks, and this reason previously
+            # answered only "something".
+            gaps.append(
+                f"non_chinese_source_summary={len(non_chinese)}:{'|'.join(non_chinese[:3])}"
+            )
         for family in hot_topics:
             if not family.get("macro_topic_name_en") or not family.get("storyline_name_en"):
                 name = str(family.get("macro_topic_name") or family.get("storyline_name") or "?")
