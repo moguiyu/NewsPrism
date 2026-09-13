@@ -331,7 +331,6 @@ def _normalize_hot_topic_name(name: str | None, summary: ClusterSummary | None =
 _JAPANESE_KANA_RE = re.compile(r"[\u3040-\u30ff]")
 _CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]")
 _HANGUL_RE = re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
-_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _REFINERY_RE = re.compile(r"(製油|炼油|炼厂|油库|refiner|oil depot)", re.IGNORECASE)
 _RUSSIA_RE = re.compile(r"(俄罗斯|俄军|俄方|俄国防部|莫斯科|克里米亚|Russia|Russian|Moscow|Crimea)", re.IGNORECASE)
 _UKRAINE_RE = re.compile(r"(乌克兰|乌军|乌方|泽连斯基|Ukraine|Ukrainian|Zelensky)", re.IGNORECASE)
@@ -356,7 +355,11 @@ def _is_public_chinese_hot_topic_name(name: str) -> bool:
         or _HANGUL_RE.search(compact)
     ):
         return False
-    return looks_like_chinese_text(compact)
+    # The script checks above already reject every foreign-script fragment, so
+    # this only needs to reject Latin-only labels (cjk=0).  Keep min_cjk at 2:
+    # the default of 4 rejected legitimate short labels such as 美联储, 美股 and
+    # 黄金, churning reader-facing tab labels for no editorial reason.
+    return looks_like_chinese_text(compact, min_cjk=2)
 
 
 def _hot_topic_family_text(summaries: list[ClusterSummary]) -> str:
@@ -403,6 +406,21 @@ def _specific_hot_topic_label(
     return _normalize_hot_topic_name(None, summaries[0] if summaries else None, max_chars), None
 
 
+def _chinese_label_fallback(summaries: list[ClusterSummary], max_chars: int) -> str:
+    """Guaranteed-Chinese last resort for a reader-facing tab label.
+
+    Fail closed: when no family member yields a compliant label, returning the
+    rejected label is exactly how a Korean headline fragment reached a reader
+    on 2026-09-13.
+    """
+    for summary in summaries:
+        category = getattr(summary, "display_category", None) or summary.cluster.topic_category
+        label = display_category_label_zh(str(category))
+        if _is_public_chinese_hot_topic_name(label):
+            return label[:max_chars]
+    return "全球焦点"
+
+
 def _disambiguate_hot_topic_label(
     label: str,
     label_en: str | None,
@@ -415,7 +433,10 @@ def _disambiguate_hot_topic_label(
 
     Duplicate labels are a presentation defect: readers cannot tell which tab
     they are opening. Prefer the planner's original storyline label, then an
-    event-specific short label, before falling back to the lead headline.
+    event-specific short label, before falling back to the lead headline. Every
+    candidate passes the Chinese gate: the raw storyline name and the headline
+    fallback are both allowed to be foreign fragments, and returning one of them
+    put a Korean fragment on a reader-facing tab on 2026-09-13.
     """
     candidates = [
         (
@@ -425,12 +446,18 @@ def _disambiguate_hot_topic_label(
         _specific_hot_topic_label(summaries, max_chars),
     ]
     for candidate, candidate_en in candidates:
-        if candidate and candidate.casefold() not in used_labels:
+        if (
+            candidate
+            and _is_public_chinese_hot_topic_name(candidate)
+            and candidate.casefold() not in used_labels
+        ):
             return candidate, candidate_en
 
     lead = _fallback_short_topic_name(summaries[0], max_chars) if summaries else label
     expanded = f"{label}：{lead}".strip("：")
-    return expanded, label_en
+    if _is_public_chinese_hot_topic_name(expanded):
+        return expanded, label_en
+    return _chinese_label_fallback(summaries, max_chars), label_en
 
 
 def _repair_hot_topic_label(
@@ -452,7 +479,10 @@ def _repair_hot_topic_label(
     if is_ru_ua_escalation and (
         is_stale_refinery_label or _NON_RU_UA_CONFLICT_RE.search(topic_name)
     ):
-        return _specific_hot_topic_label(summaries, max_chars)
+        candidate, candidate_en = _specific_hot_topic_label(summaries, max_chars)
+        if _is_public_chinese_hot_topic_name(candidate):
+            return candidate, candidate_en
+        return _chinese_label_fallback(summaries, max_chars), candidate_en
 
     if _is_public_chinese_hot_topic_name(topic_name):
         return topic_name, topic_name_en
@@ -461,7 +491,7 @@ def _repair_hot_topic_label(
     if _is_public_chinese_hot_topic_name(candidate):
         return candidate, candidate_en or topic_name_en
 
-    return topic_name, topic_name_en
+    return _chinese_label_fallback(summaries, max_chars), topic_name_en
 
 
 def _normalize_text_whitespace(text: str) -> str:

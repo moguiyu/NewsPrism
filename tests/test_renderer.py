@@ -12,7 +12,9 @@ from newsprism.runtime.renderer import (
     HtmlRenderer,
     _REGION_FLAG,
     _broad_category,
+    _disambiguate_hot_topic_label,
     _is_public_chinese_hot_topic_name,
+    _repair_hot_topic_label,
 )
 from newsprism.types import Article, ArticleCluster, ClusterSummary, PerspectiveGroup
 
@@ -2996,3 +2998,74 @@ def test_public_hot_topic_label_accepts_real_chinese_labels():
     assert _is_public_chinese_hot_topic_name("AI开发放缓呼吁") is True
     assert _is_public_chinese_hot_topic_name("俄袭乌设施") is True
     assert _is_public_chinese_hot_topic_name("iPhone折叠屏发") is True
+
+
+@pytest.mark.parametrize("label", ["美联储", "特斯拉", "特朗普", "美股", "黄金", "AI芯片"])
+def test_public_hot_topic_label_keeps_short_chinese_labels(label):
+    """min_cjk=2 boundary: 2-3 character labels are legitimate Chinese labels.
+
+    Under the default min_cjk=4 these all flip accepted -> rejected, which
+    churns reader-facing tab labels for no editorial reason. The kana/Cyrillic/
+    Hangul checks above already reject every foreign-script fragment.
+    """
+    assert _is_public_chinese_hot_topic_name(label) is True
+
+
+@pytest.mark.parametrize("label", ["AnthropicC", "NowaTeslas"])
+def test_public_hot_topic_label_rejects_latin_only_fragments(label):
+    assert _is_public_chinese_hot_topic_name(label) is False
+
+
+def _english_only_summary(topic_category: str = "Technology") -> ClusterSummary:
+    """A family member whose only label source is a non-Chinese headline."""
+    article = Article(
+        url="https://example.com/anthropic-slowdown",
+        title="Anthropic CEO calls for slowdown",
+        source_name="The Verge",
+        published_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+        content="Body text here.",
+    )
+    return ClusterSummary(
+        cluster=ArticleCluster(topic_category=topic_category, articles=[article]),
+        summary="**Anthropic CEO calls for slowdown**\n\nBody text here.",
+        perspectives={},
+    )
+
+
+def test_repair_hot_topic_label_fails_closed_when_no_compliant_candidate():
+    """F1 was incomplete: the repair path returned the rejected label.
+
+    ``_specific_hot_topic_label`` falls back to the lead headline, which
+    truncates to the Latin fragment ``AnthropicC`` and is therefore rejected, so
+    the repair must fall back to a guaranteed-Chinese category label instead of
+    handing the Korean fragment back to the caller.
+    """
+    summary = _english_only_summary("Technology")
+
+    label, _label_en = _repair_hot_topic_label('"美CIA국장,우크', None, [summary], 10)
+
+    assert _is_public_chinese_hot_topic_name(label) is True
+    assert label == "科技"
+
+
+def test_disambiguate_hot_topic_label_fails_closed_for_fragment_storyline():
+    """The disambiguation path was the second escape route for a rejected label.
+
+    Both candidates are non-compliant here (the storyline name is the Korean
+    fragment, the event label is the Latin headline fragment), and the built
+    ``expanded`` label inherits the fragment.
+    """
+    summary = _english_only_summary("Technology")
+    fragment = '"美CIA국장,우크'
+
+    label, _label_en = _disambiguate_hot_topic_label(
+        fragment,
+        None,
+        fragment,
+        [summary],
+        {fragment.casefold()},
+        max_chars=10,
+    )
+
+    assert _is_public_chinese_hot_topic_name(label) is True
+    assert label == "科技"
