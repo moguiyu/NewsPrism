@@ -568,7 +568,9 @@ class StorylineResolver:
             sum(1 for members in components.values() if len(members) > 1),
         )
         self._assign_storylines(clusters, profiles, components, accepted_edges, history_matches, current_date)
-        self._split_incoherent_families(clusters, profiles, history_matches, accepted_edges)
+        self._split_incoherent_families(
+            clusters, profiles, history_matches, accepted_edges, components
+        )
         return clusters
 
     # ── profile / history ────────────────────────────────────────────────────
@@ -912,6 +914,7 @@ class StorylineResolver:
         profiles: list[dict[str, object]],
         history_matches: dict[int, dict[str, object]],
         accepted_edges: list[dict[str, object]],
+        components: dict[int, list[int]] | None = None,
     ) -> None:
         """Final authority on family coherence, over the *assigned* storyline keys.
 
@@ -921,6 +924,17 @@ class StorylineResolver:
         coherent sub-family that genuinely continues the story (strongest history
         match to this key, else the largest coherent sub) keeps the storyline;
         every other member detaches to a standalone story.
+
+        A ``single-*`` key is a per-cluster identity, so it may only span members
+        the resolver actually put in ONE component. Two independent components
+        can reach the same key — on 2026-10-12 the two-member component
+        8140/8142 reused ``single-67f6d8c1`` at the ``reuse_key`` path while the
+        detached singleton 8144 re-adopted the same key in ``_apply_singleton``.
+        Their intra-pair similarity (0.897/0.815/0.799) sits above the coherence
+        bar, so the similarity split below cannot catch it; the trailing
+        component is re-keyed on component membership instead. Without this the
+        unrelated singleton rides the real family's dedup exemption and ships as
+        an extra near-duplicate card.
 
         Components glued by ``same_conflict_different_event`` edges are exempt
         (Issue #2 rec #3): different daily incidents of an ongoing conflict
@@ -953,6 +967,10 @@ class StorylineResolver:
                 continue
             if _is_conflict_group(members):
                 continue  # conflict-glued family — keep as-is
+            if components is not None and self._rekey_foreign_single_members(
+                key, members, clusters, profiles, history_matches, components
+            ):
+                continue
             subs = self._coherent_split(members, centroids)
             if len(subs) == 1:
                 continue
@@ -969,6 +987,55 @@ class StorylineResolver:
             for idx in members:
                 if idx not in keep:
                     self._apply_singleton(clusters[idx], profiles[idx], None)
+
+    def _rekey_foreign_single_members(
+        self,
+        key: str,
+        members: list[int],
+        clusters: list[ArticleCluster],
+        profiles: list[dict[str, object]],
+        history_matches: dict[int, dict[str, object]],
+        components: dict[int, list[int]],
+    ) -> bool:
+        """Re-key members that share a ``single-*`` key but sit in another component.
+
+        Returns True when a genuine same-component sub-family was found and the
+        outsiders were detached, i.e. the caller must not run the (coherence-only)
+        split on this group.
+
+        ``single-*`` keys are per-cluster identities, so two clusters may only
+        share one when the resolver placed them in the same component. When an
+        unrelated component re-adopted the same historical key, its members are
+        not part of this family even if their embeddings are close: the group is
+        split by component membership, the component holding the strongest
+        history match to ``key`` keeps it, and the rest mint their own keys.
+        """
+        if not key.startswith("single-"):
+            return False
+        component_of: dict[int, int] = {}
+        for root, nodes in components.items():
+            for idx in nodes:
+                component_of[idx] = root
+        by_component: dict[int, list[int]] = defaultdict(list)
+        for idx in members:
+            by_component[component_of.get(idx, -1)].append(idx)
+        if len(by_component) < 2:
+            return False
+
+        def _history_score(idx: int) -> float:
+            match = history_matches.get(idx)
+            return float(match["score"]) if match and match.get("storyline_key") == key else -1.0
+
+        primary_root = max(
+            by_component,
+            key=lambda root: (len(by_component[root]), max(_history_score(i) for i in by_component[root])),
+        )
+        for root, nodes in by_component.items():
+            if root == primary_root:
+                continue
+            for idx in nodes:
+                self._apply_singleton(clusters[idx], profiles[idx], None)
+        return True
 
     @staticmethod
     def _mean_pairwise(nodes: list[int], centroids: dict[int, np.ndarray | None]) -> float:

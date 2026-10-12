@@ -1,4 +1,5 @@
 """Tests for the merged history module: freshness, validation, storyline grouping."""
+from collections import Counter
 from datetime import datetime, timezone
 
 from newsprism.config import Config, load_config
@@ -970,3 +971,61 @@ def test_storyline_name_rejects_japanese_kana_headline():
     # the label" -- NOT "the label is Chinese". Reader-facing safety comes from
     # the renderer gate instead (Hangul rejected -> repair -> _chinese_label_fallback).
     assert name == "美주택대출금리6.8"
+
+
+def test_resolver_detached_singleton_does_not_reuse_claimed_component_key():
+    """2026-10-12: singleton 8144 re-adopted ``single-67f6d8c1``, the key already
+    owned by the unrelated two-member component 8140/8142.
+
+    Two independent assignment paths reached the same historical key: the
+    two-member component reused it at ``history.py:1034`` (its LLM edge gave
+    confidence 0.925), and the detached singleton re-adopted it in
+    ``_apply_singleton`` at ``history.py:1205``. Both then carried one
+    ``storyline_key`` for two different stories.
+
+    The singleton's own embedding is far from the pair (cos 0.80 vs the pair's
+    internal 0.897), so it is not a third incident of that family. A
+    ``single-*`` key is a per-cluster identity, not a shareable family warrant:
+    the singleton must mint its own content-derived key.
+    """
+    resolver = StorylineResolver(
+        _config(),
+        summarizer=_StubSummarizer(
+            [
+                {"left_index": 0, "right_index": 1, "relation": "same_core_storyline", "confidence": 0.925},
+                # The LLM judged the singleton a different story (matches its
+                # role=none / confidence 0.828 in production), so it stays its
+                # own component even though its embedding is numerically close.
+                {"left_index": 0, "right_index": 2, "relation": "not_related", "confidence": 0.30},
+                {"left_index": 1, "right_index": 2, "relation": "not_related", "confidence": 0.30},
+            ]
+        ),
+        similarity_fn=lambda _text, _hist: 0.9,
+    )
+    historical = [
+        Cluster(
+            id=1,
+            topic_category="World",
+            article_ids=[99],
+            summary="",
+            perspectives={},
+            report_date="2026-10-11",
+            storyline_key="single-67f6d8c1",
+            storyline_name="胡塞袭击利雅得机场",
+            storyline_role="core",
+        )
+    ]
+    clusters = [
+        ArticleCluster(topic_category="World", articles=[_article("Houthi airport attack A", [1.0, 0.0, 0.0])]),
+        ArticleCluster(topic_category="World", articles=[_article("Houthi airport attack B", [0.897, 0.442, 0.0])]),
+        ArticleCluster(topic_category="World", articles=[_article("Houthi attack on Aramco", [0.815, 0.154, 0.559])]),
+    ]
+
+    resolved = resolver.resolve(clusters, historical, datetime(2026, 10, 12, tzinfo=timezone.utc).date())
+    keys = [c.storyline_key for c in resolved]
+
+    # The coherent pair keeps the historical key; the detached singleton must
+    # mint its own, so the key never spans two different stories.
+    assert keys[0] == keys[1] == "single-67f6d8c1"
+    assert keys[2] != "single-67f6d8c1"
+    assert max(Counter(keys).values()) == 2

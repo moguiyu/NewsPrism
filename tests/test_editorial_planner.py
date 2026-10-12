@@ -319,6 +319,66 @@ def test_display_dedup_preserves_same_storyline_members_in_main_lane():
     assert len(regular) == 2
 
 
+def test_display_dedup_merges_reused_key_singleton_into_family():
+    """2026-10-12: a standalone cluster that merely *reused* a same-run family
+    key hid behind the same-family exemption and shipped as a third
+    near-duplicate mainline card for one Houthi airport attack.
+
+    Clusters 8140/8142 formed the genuine two-member family ``single-67f6d8c1``
+    (role=core, component confidence 0.925). Cluster 8144 (role=none, confidence
+    0.828) was a *detached singleton* that re-adopted the same historical key.
+    At cosines 0.897/0.815/0.799 — all above the 0.73 display-dedup bar — the
+    family exemption kept all three.
+
+    Only genuine storyline members (core/spillover) are protected; a role=none
+    cluster that reused the key must still be deduped.
+    """
+    family_core = _storyline_summary("Houthi attack on Riyadh airport", 0.80, "single-67f6d8c1", role="core")
+    family_mate = _storyline_summary("Houthi attacks on Saudi Arabia", 0.77, "single-67f6d8c1", role="core")
+    reused_key = _storyline_summary("Houthi attack on Riyadh airport", 0.76, "single-67f6d8c1", role="none")
+    # Distinct article URLs: the production trio shares no article URL, so the
+    # merge must come from embedding similarity, not the shared_article_url arm.
+    for summary, url in (
+        (family_core, "https://wire.example/houthi-riyadh-a"),
+        (family_mate, "https://wire.example/houthi-saudi-b"),
+        (reused_key, "https://wire.example/houthi-riyadh-c"),
+    ):
+        summary.cluster.articles[0].url = url
+    # Unit vectors whose pairwise cosines reproduce production exactly:
+    # core~mate 0.897, core~singleton 0.815, mate~singleton 0.799.
+    family_core.cluster.articles[0].embedding = [1.0, 0.0, 0.0]
+    family_mate.cluster.articles[0].embedding = [0.897, 0.44203, 0.0]
+    reused_key.cluster.articles[0].embedding = [0.815, 0.15371, 0.55870]
+
+    _h, _f, regular, _p = resolve_display_duplicates([], [], [family_core, family_mate, reused_key], [])
+
+    # The two real family members survive; the reused-key singleton is folded in.
+    assert len(regular) == 2
+    assert {s.cluster.storyline_role for s in regular} == {"core"}
+
+
+def test_short_main_lane_after_display_dedup_is_reported(caplog):
+    """2026-10-12 shipped a 7-story main lane with no warning: the soft-floor
+    check ran on the pre-dedup candidate count (15), saw 12, and stayed silent
+    while display dedup collapsed the lane to 8 (7 after the publication gate).
+    """
+    summaries = [
+        _summary(
+            f"Houthi airport attack {index}",
+            0.90 - index * 0.01,
+            url=f"https://wire{index}.example/story",
+            embedding=[1.0, 0.0, 0.0],
+        )
+        for index in range(12)
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        plan = EditorialPlanner(_config()).plan(summaries)
+
+    assert len(plan.regular_summaries) == 1
+    assert any("soft floor" in record.message.lower() for record in caplog.records)
+
+
 def test_display_dedup_still_merges_same_event_across_storylines():
     """The family guard must not stop legitimate cross-family dedup."""
     left = _summary("Houthis seize Bab al-Mandeb island", 0.75)

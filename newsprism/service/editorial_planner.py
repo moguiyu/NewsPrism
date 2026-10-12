@@ -31,6 +31,11 @@ _DEFAULT_HOT_TOPIC_ICON_KEY = "globe"
 # it while staying well above the 0.62–0.64 related-but-distinct storyline
 # range, so genuinely different stories are not merged.
 _DISPLAY_DEDUP_SIMILARITY = 0.73
+# Soft floor for a healthy main lane. Checked twice: once on the pre-dedup
+# candidate pool (cheap warning while selection is still adjustable) and again
+# on the post-dedup lane, because display dedup can collapse the lane below the
+# floor after the first check has already passed.
+_MAIN_LANE_SOFT_FLOOR = 10
 
 
 def _extract_markdown_headline(summary_text: str) -> str:
@@ -88,6 +93,32 @@ def _storyline_key(summary: ClusterSummary) -> str | None:
     """Storyline family key carried by the cluster, if the resolver set one."""
     key = getattr(summary.cluster, "storyline_key", None)
     return str(key) if key else None
+
+
+def _family_key(summary: ClusterSummary) -> str | None:
+    """Family key for dedup protection, or None for a non-member.
+
+    A cluster only joins a family when the resolver actually placed it in one
+    (``core``/``spillover``). Merely sharing a ``storyline_key`` with a
+    same-run family is not membership: ``_apply_singleton`` re-adopts a
+    historical key for a cluster the resolver deliberately kept standalone, and
+    treating that as family membership hid near-duplicates from display dedup.
+
+    ``summary.storyline_role`` defaults to the literal string ``"none"`` (not
+    ``None``), so it must be treated as absent — otherwise it masks the
+    authoritative value copied onto the cluster and every summary looks like a
+    non-member. Callers that bypass ``select_hot_topic_families`` (notably
+    direct ``resolve_display_duplicates`` tests) rely on the cluster fallback.
+    """
+    role = summary.storyline_role
+    if role in (None, "", "none"):
+        role = getattr(summary.cluster, "storyline_role", None)
+    status = summary.storyline_membership_status
+    if status in (None, "", "none"):
+        status = getattr(summary.cluster, "storyline_membership_status", None)
+    if not _is_hot_member(role, status):
+        return None
+    return _storyline_key(summary)
 
 
 def _source_overlap(left: ClusterSummary, right: ClusterSummary) -> int:
@@ -680,8 +711,16 @@ def resolve_display_duplicates(
             # cluster: without it, two members of one family were merged at
             # 0.78 embedding similarity (2026-09-13 DPRK missile cluster was
             # absorbed into the ROK submarine card).
-            left_fam = family_id_by_summary.get(id(left)) or _storyline_key(left)
-            right_fam = family_id_by_summary.get(id(right)) or _storyline_key(right)
+            #
+            # Only genuine family members are protected. A ``role=none`` cluster
+            # re-adopted a *historical* key that a same-run component had already
+            # claimed (2026-10-12: clusters 8140/8142 formed the real two-member
+            # family ``single-67f6d8c1`` while detached singleton 8144 reused the
+            # same key), and the shared-key exemption then let a third
+            # near-duplicate card for one Houthi airport attack reach the main
+            # lane. Membership, not key equality, is the family contract.
+            left_fam = family_id_by_summary.get(id(left)) or _family_key(left)
+            right_fam = family_id_by_summary.get(id(right)) or _family_key(right)
             duplicate, reason, confidence = _display_duplicate(left, right, centroids)
             if left_fam and right_fam and left_fam == right_fam:
                 # Within one storyline, preserve distinct daily incidents. But
@@ -747,4 +786,15 @@ def resolve_display_duplicates(
         len(kept_regular),
         len(kept_positive),
     )
+    # The pre-dedup soft-floor warning inside select_hot_topic_families cannot
+    # see losses caused by dedup (or by the later publication gate), so a
+    # collapsed main lane shipped silently: on 2026-10-12 the candidate pool
+    # passed the first check, dedup plus the gate left 7 stories, and no warning
+    # was ever emitted. Re-check the lane that actually survives.
+    if len(kept_regular) < _MAIN_LANE_SOFT_FLOOR:
+        logger.warning(
+            "Main-lane soft floor not reached after display dedup: %d stories (< %d)",
+            len(kept_regular),
+            _MAIN_LANE_SOFT_FLOOR,
+        )
     return kept_hot, kept_focus, kept_regular, kept_positive
