@@ -204,6 +204,20 @@ def _rendered_cluster_ids(payload: dict) -> list[int]:
     return sorted(ids)
 
 
+def _telegram_cluster_ids(payload: dict) -> list[int]:
+    """Cluster ids the Telegram digest actually sends.
+
+    ``publish_rendered`` builds its digest from top-level main-lane clusters and
+    positive stories only; hot-topic members are HTML-only. Marking those as
+    Telegram-published would overstate the push lane.
+    """
+    ids: set[int] = set()
+    for card in (payload.get("clusters", []) or []) + (payload.get("positive_stories", []) or []):
+        if isinstance(card, dict) and isinstance(card.get("cluster_id"), int):
+            ids.add(card["cluster_id"])
+    return sorted(ids)
+
+
 def _drop_blocked_summaries(
     regular_summaries: list[ClusterSummary],
     positive_summaries: list[ClusterSummary],
@@ -1077,7 +1091,7 @@ class Scheduler:
             self._promote_staged_report(today, Path("cn"))
             self._promote_latest_symlink(today, total_story_count)
             await self.publisher.publish_rendered(final_dir / "data.json", today)
-            mark_clusters_published(rendered_ids, telegram=True)
+            mark_clusters_published(_telegram_cluster_ids(payload), telegram=True)
             self._clear_publish_complete()
             logger.info(
                 "=== PUSH done: report=%s source=%s total_story_count=%d duration_s=%.2f ===",

@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from newsprism.config import load_config
 from newsprism.runtime.publisher import TelegramPublisher
-from newsprism.runtime.scheduler import Scheduler, _rendered_cluster_ids
+from newsprism.runtime.scheduler import Scheduler, _rendered_cluster_ids, _telegram_cluster_ids
 
 
 def _make_scheduler(tmp_path: Path) -> Scheduler:
@@ -33,6 +33,15 @@ def test_rendered_cluster_ids_collects_every_reader_visible_lane():
         "hot_topics": [{"clusters": [{"cluster_id": 3}, {"cluster_id": 4}]}],
     }
     assert _rendered_cluster_ids(payload) == [1, 2, 3, 4]
+
+
+def test_telegram_cluster_ids_exclude_html_only_hot_topic_members():
+    payload = {
+        "clusters": [{"cluster_id": 1}],
+        "positive_stories": [{"cluster_id": 2}],
+        "hot_topics": [{"clusters": [{"cluster_id": 3}]}],
+    }
+    assert _telegram_cluster_ids(payload) == [1, 2]
 
 
 def test_push_promotes_staged_report_and_updates_latest(tmp_path):
