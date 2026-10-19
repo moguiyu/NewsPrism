@@ -1228,6 +1228,9 @@ class TestPerspectivesContext:
         assert "与反倾销议题无关" not in html
         assert "查看 1 个视角" not in html
         assert "朝日新聞" not in html
+        # A panel without a toggle can never be opened; when the card has fewer
+        # than 2 distinct angles, the panel must not be emitted at all.
+        assert 'class="persp-panel"' not in html
         assert payload["clusters"][0]["distinct_perspective_count"] == 1
         assert payload["clusters"][0]["suppressed_group_count"] == 1
         assert payload["clusters"][0]["has_expandable_perspectives"] is False

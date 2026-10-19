@@ -781,8 +781,9 @@ class Summarizer:
             }
         except Exception as e:
             logger.error("Failed to parse structured output for '%s': %s", cluster.topic_category, e)
-            # Fallback for unexpected failures:
-            summary_text = response.choices[0].message.content or ""
+            # Fallback for unexpected failures: keep the raw model output so the
+            # cluster still gets a stored summary instead of being dropped.
+            summary_text = tracked.choices[0].message.content or ""
             perspectives = {}
             grouped_perspectives = []
             parsed = StructuredSummary(headline="", body="")

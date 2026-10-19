@@ -2861,7 +2861,7 @@
             </div>
           </div>
 
-          {% if c.grouped_perspectives %}
+          {% if c.has_expandable_perspectives %}
           <div class="persp-panel" id="panel-container-{{ c.index }}">
             {% for group in c.grouped_perspectives %}
             <div class="persp-item">
@@ -2979,7 +2979,7 @@
               </div>
             </div>
 
-            {% if c.grouped_perspectives %}
+            {% if c.has_expandable_perspectives %}
             <div class="persp-panel" id="panel-container-hot-{{ hot.dom_id }}-{{ c.hot_seq_index }}">
               {% for group in c.grouped_perspectives %}
               <div class="persp-item">

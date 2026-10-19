@@ -867,3 +867,21 @@ def test_comma_decimal_evidence_rejects_a_tenfold_overstatement(monkeypatch):
     overstated = build("The restructuring will cost $28 billion.")
     summarizer._enforce_translated_numeric_grounding(overstated)
     assert "unsupported_numeric_claim" in overstated.quality_flags
+
+
+def test_summarize_cluster_keeps_raw_output_when_structured_parse_fails(monkeypatch):
+    """A malformed structured response must not drop the whole cluster.
+
+    2026-10-18/19: the fallback branch referenced an undefined ``response``
+    (should be ``tracked``), so five clusters raised NameError and never got a
+    stored summary. Keep the raw model output as the fallback summary instead.
+    """
+    summarizer = Summarizer(_config())
+    raw = "**Fallback headline**\n\nFallback body from the model."
+    monkeypatch.setattr(litellm, "completion", lambda **_kwargs: _response(raw))
+
+    summary = summarizer._summarize_cluster(_cluster("Malformed structured output"))
+
+    assert "Fallback body from the model." in summary.summary
+    assert summary.perspectives == {}
+    assert summary.grouped_perspectives == []
