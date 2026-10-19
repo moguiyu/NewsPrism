@@ -35,6 +35,7 @@ from newsprism.repo.db import (
     list_editorial_feedback,
     list_pending_search_candidate_reviews,
     mark_articles_clustered,
+    mark_clusters_published,
     query_evaluations,
     reset_articles_clustered,
     reset_calibration_weights,

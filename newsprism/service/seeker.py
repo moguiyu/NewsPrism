@@ -653,12 +653,16 @@ class ActiveSeeker:
     ) -> bool:
         centroid = self._cluster_centroid(cluster)
         added = False
-        for target in targets:
+        for index, target in enumerate(targets):
             if not keyword:
                 cluster.articles.append(self._placeholder_article(cluster, target, "query_generation_failed"))
                 continue
             article, fail_reason, stage_trace = self._search_target(
-                cluster, target, keyword, centroid
+                cluster,
+                target,
+                keyword,
+                centroid,
+                country_voice_first=(index == 0),
             )
             if article is not None:
                 cluster.articles.append(article)
@@ -705,6 +709,8 @@ class ActiveSeeker:
         target: VoiceTarget,
         keyword: str,
         centroid: np.ndarray | None,
+        *,
+        country_voice_first: bool = False,
     ) -> tuple[Article | None, str | None, list[dict[str, str]]]:
         """Return (accepted_article, failure_reason).
 
@@ -753,6 +759,26 @@ class ActiveSeeker:
                 include_domains = self._reviewed_country_domains(target.region)
 
             searches: list[tuple[str, list[str], str]] = []
+            country_voice_query: str | None = None
+            if (
+                stage == "country"
+                and country_voice_first
+                and target.role != "country"
+                and include_domains
+            ):
+                # Country voice first: ask for an outlet from the event's
+                # country without constraining the query to the entity, then
+                # fall back to the entity-scoped queries. This is additive:
+                # the previous entity-scoped pass still runs when the country
+                # voice is not found, so acceptance does not regress.
+                entity_free = self._build_search_queries(
+                    cluster, target, keyword, stage, entity_scoped=False
+                )[:1]
+                if entity_free:
+                    country_voice_query = entity_free[0]
+                    searches.append(
+                        (country_voice_query, include_domains, "search_country_voice")
+                    )
             if stage != "official" or include_domains:
                 searches.extend(
                     (query, include_domains, f"search_{stage}")
@@ -768,13 +794,12 @@ class ActiveSeeker:
                 # pending; only reviewed country bindings can be published.
                 discovery_query = stage_queries[0] if stage_queries else keyword
                 if include_domains:
-                    # The discovery query duplicates stage_queries[0] verbatim
-                    # (same text, empty domains → second Tavily call). Skip it
-                    # when budget is low; the scoped query already fetched the
-                    # same text so this only re-spends for new-publisher
-                    # discovery that stays pending-review anyway.
+                    # The country-voice pass already fetched an entity-free
+                    # query (same text, reviewed domains), so the domain-less
+                    # discovery call would be a duplicate.
                     if (
-                        self._request_count + self.budget_country_reserve
+                        country_voice_query is None
+                        and self._request_count + self.budget_country_reserve
                         < self.max_requests_per_run
                     ):
                         searches.append((discovery_query, [], "search_country"))
@@ -1706,8 +1731,12 @@ class ActiveSeeker:
             # result talks about the same actor; drop it for the entity-free
             # fallback so the country's editorial voice can cover the event
             # even when the entity itself has no fresh coverage.
+            label_text = str(target.label or "").strip()
+            already_named = bool(label_text) and label_text.casefold() in keyword.casefold()
             target_prefix = (
-                f"{target.label} " if (target.role != "country" and entity_scoped) else ""
+                f"{label_text} "
+                if (target.role != "country" and entity_scoped and not already_named)
+                else ""
             )
             english_query = f"{target_prefix}{keyword} {country_name(target.region)} local news"
         languages = query_languages(target.region, config.language if config else None)

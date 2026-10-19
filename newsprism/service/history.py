@@ -238,6 +238,7 @@ class FreshnessEvaluator:
         cluster: ArticleCluster,
         summary: str,
         historical_clusters: list[Cluster],
+        report_date: date | None = None,
     ) -> FreshnessResult:
         if not historical_clusters or self.window_days <= 0:
             return FreshnessResult(state="new")
@@ -257,7 +258,22 @@ class FreshnessEvaluator:
             return FreshnessResult(state="new", similarity_score=best_similarity)
 
         new_sources = list(set(cluster.sources) - set(best_match.perspectives.keys()))
-        if new_sources:
+        # A new outlet name is not evidence of a new development: re-collected
+        # articles from previous days used to earn a 「续报」 badge even when the
+        # card contained no news published on/after the report date. Require at
+        # least one article that is both unseen in the matched historical
+        # cluster and published on the report date (or later).
+        report_day = report_date or date.today()
+        historical_article_ids = set(best_match.article_ids or [])
+        fresh_new_articles = [
+            article
+            for article in cluster.articles
+            if article.id is not None
+            and article.id not in historical_article_ids
+            and article.published_at is not None
+            and article.published_at.date() >= report_day
+        ]
+        if fresh_new_articles:
             return FreshnessResult(
                 state="developing",
                 continues_cluster_id=best_match.id,
@@ -274,9 +290,10 @@ class FreshnessEvaluator:
         self,
         cluster_summaries: list[tuple[ArticleCluster, str]],
         historical_clusters: list[Cluster],
+        report_date: date | None = None,
     ) -> list[tuple[ArticleCluster, str, FreshnessResult]]:
         return [
-            (cluster, summary, self.evaluate(cluster, summary, historical_clusters))
+            (cluster, summary, self.evaluate(cluster, summary, historical_clusters, report_date))
             for cluster, summary in cluster_summaries
         ]
 

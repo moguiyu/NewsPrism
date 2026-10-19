@@ -789,6 +789,36 @@ def insert_cluster(cluster: Cluster, db_path: Path = DB_PATH) -> int:
         return cur.lastrowid
 
 
+def mark_clusters_published(
+    cluster_ids: list[int],
+    *,
+    html: bool = False,
+    telegram: bool = False,
+    db_path: Path = DB_PATH,
+) -> int:
+    """Mark rendered clusters as published to the public HTML/Telegram lanes.
+
+    The columns existed but were never written, so the DB could not answer
+    whether a stored cluster reached a reader. Record both lanes separately so
+    a Telegram-only failure does not hide successful HTML publication.
+    """
+    ids = sorted({int(cluster_id) for cluster_id in cluster_ids if cluster_id is not None})
+    if not ids or not (html or telegram):
+        return 0
+    assignments: list[str] = []
+    if html:
+        assignments.append("published_html = 1")
+    if telegram:
+        assignments.append("published_telegram = 1")
+    placeholders = ",".join("?" for _ in ids)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            f"UPDATE clusters SET {', '.join(assignments)} WHERE id IN ({placeholders})",
+            ids,
+        )
+        return cur.rowcount
+
+
 def insert_cluster_quality_report(
     cluster_id: int,
     report: ClusterQualityReport,

@@ -62,6 +62,7 @@ from newsprism.repo import (
     insert_cluster_evaluation,
     link_cluster_evaluation,
     mark_articles_clustered,
+    mark_clusters_published,
     reset_articles_clustered,
     seed_calibration_weights,
     update_article_embedding,
@@ -175,6 +176,32 @@ def _cluster_storyline_headline(cluster: ArticleCluster) -> str:
     if cluster.articles:
         return cluster.articles[0].title
     return cluster.topic_category
+
+
+def _rendered_cluster_ids(payload: dict) -> list[int]:
+    """Cluster ids that actually made it into the rendered payload.
+
+    Hot-topic members, positive stories, and regular main-lane stories are the
+    only cards a reader can see; stored-but-unrendered clusters must not be
+    marked published.
+    """
+    ids: set[int] = set()
+
+    def add(card: object) -> None:
+        if isinstance(card, dict):
+            cluster_id = card.get("cluster_id")
+            if isinstance(cluster_id, int):
+                ids.add(cluster_id)
+
+    for card in payload.get("clusters", []) or []:
+        add(card)
+    for card in payload.get("positive_stories", []) or []:
+        add(card)
+    for family in payload.get("hot_topics", []) or []:
+        if isinstance(family, dict):
+            for member in family.get("clusters", []) or []:
+                add(member)
+    return sorted(ids)
 
 
 def _drop_blocked_summaries(
@@ -793,6 +820,7 @@ class Scheduler:
             freshness_results = self.freshness_evaluator.classify_all(
                 [(cs.cluster, cs.summary) for cs in summaries],
                 historical,
+                today,
             )
 
             # Filter out stale clusters and store freshness metadata
@@ -904,6 +932,33 @@ class Scheduler:
                 len(regular_summaries)
                 + len(positive_summaries)
                 + hot_topic_story_count
+            )
+            kept_ids = {
+                summary.cluster_db_id
+                for summary in kept_summaries
+                if summary.cluster_db_id is not None
+            }
+            rendered_ids = {
+                summary.cluster_db_id
+                for summary in regular_summaries
+                if summary.cluster_db_id is not None
+            }
+            rendered_ids.update(
+                summary.cluster_db_id
+                for summary in positive_summaries
+                if summary.cluster_db_id is not None
+            )
+            for family in hot_topics:
+                for summary in family.get("summaries", []):
+                    if isinstance(summary, ClusterSummary) and summary.cluster_db_id is not None:
+                        rendered_ids.add(summary.cluster_db_id)
+            dropped_ids = sorted(kept_ids - rendered_ids)
+            logger.info(
+                "Render funnel: kept=%d rendered=%d dropped=%d dropped_ids=%s",
+                len(kept_ids),
+                len(rendered_ids),
+                len(dropped_ids),
+                dropped_ids,
             )
             hot_storyline_keys = {
                 str(family.get("macro_topic_key", ""))
@@ -1017,9 +1072,12 @@ class Scheduler:
             if not (staged_cn_dir / "index.html").exists():
                 raise FileNotFoundError(f"staged Chinese report missing: {staged_cn_dir / 'index.html'}")
             final_dir = self._promote_staged_report(today)
+            rendered_ids = _rendered_cluster_ids(payload)
+            mark_clusters_published(rendered_ids, html=True)
             self._promote_staged_report(today, Path("cn"))
             self._promote_latest_symlink(today, total_story_count)
             await self.publisher.publish_rendered(final_dir / "data.json", today)
+            mark_clusters_published(rendered_ids, telegram=True)
             self._clear_publish_complete()
             logger.info(
                 "=== PUSH done: report=%s source=%s total_story_count=%d duration_s=%.2f ===",

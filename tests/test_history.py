@@ -1,6 +1,6 @@
 """Tests for the merged history module: freshness, validation, storyline grouping."""
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from newsprism.config import Config, load_config
 from newsprism.service.history import (
@@ -777,15 +777,22 @@ def test_resolver_uses_llm_name_for_new_family():
 
 # ─── FreshnessEvaluator ───────────────────────────────────────────────────────
 
-def _historical_cluster(summary: str, sources: list[str]) -> Cluster:
+def _historical_cluster(summary: str, sources: list[str], article_ids: list[int] | None = None) -> Cluster:
     return Cluster(
         id=1,
         topic_category="World News",
-        article_ids=[1],
+        article_ids=article_ids or [1],
         summary=summary,
         perspectives={source: "" for source in sources},
         report_date="2026-03-14",
     )
+
+
+def _freshness_cluster(article_id: int, published_at: datetime, title: str = "t") -> ArticleCluster:
+    cluster = ArticleCluster(topic_category="x", articles=[_article(title, [1.0, 0.0])])
+    cluster.articles[0].id = article_id
+    cluster.articles[0].published_at = published_at
+    return cluster
 
 
 def test_freshness_new_when_no_history():
@@ -795,24 +802,44 @@ def test_freshness_new_when_no_history():
     assert result.state == "new"
 
 
-def test_freshness_developing_when_new_sources(monkeypatch):
+def test_freshness_developing_when_new_article_and_new_source(monkeypatch):
     evaluator = FreshnessEvaluator(_config())
     monkeypatch.setattr(evaluator, "_compute_embedding", lambda text: __import__("numpy").array([1.0, 0.0]))
-    cluster = ArticleCluster(topic_category="x", articles=[_article("t", [1.0, 0.0])])
+    cluster = _freshness_cluster(2, datetime(2026, 3, 15, 9, tzinfo=timezone.utc))
     cluster.sources = ["Reuters", "BBC News"]
-    historical = [_historical_cluster("same story", ["Reuters"])]
-    result = evaluator.evaluate(cluster, "same story", historical)
+    historical = [_historical_cluster("same story", ["Reuters"], article_ids=[1])]
+    result = evaluator.evaluate(cluster, "same story", historical, date(2026, 3, 15))
     assert result.state == "developing"
     assert "BBC News" in (result.new_sources or [])
 
 
-def test_freshness_stale_when_no_new_sources(monkeypatch):
+def test_freshness_developing_when_same_source_has_new_article(monkeypatch):
     evaluator = FreshnessEvaluator(_config())
     monkeypatch.setattr(evaluator, "_compute_embedding", lambda text: __import__("numpy").array([1.0, 0.0]))
-    cluster = ArticleCluster(topic_category="x", articles=[_article("t", [1.0, 0.0])])
+    cluster = _freshness_cluster(2, datetime(2026, 3, 15, 9, tzinfo=timezone.utc))
     cluster.sources = ["Reuters"]
-    historical = [_historical_cluster("same story", ["Reuters"])]
-    result = evaluator.evaluate(cluster, "same story", historical)
+    historical = [_historical_cluster("same story", ["Reuters"], article_ids=[1])]
+    result = evaluator.evaluate(cluster, "same story", historical, date(2026, 3, 15))
+    assert result.state == "developing"
+
+
+def test_freshness_stale_when_new_source_only_recycles_old_article(monkeypatch):
+    evaluator = FreshnessEvaluator(_config())
+    monkeypatch.setattr(evaluator, "_compute_embedding", lambda text: __import__("numpy").array([1.0, 0.0]))
+    cluster = _freshness_cluster(3, datetime(2026, 3, 13, 9, tzinfo=timezone.utc))
+    cluster.sources = ["Reuters", "BBC News"]
+    historical = [_historical_cluster("same story", ["Reuters"], article_ids=[1])]
+    result = evaluator.evaluate(cluster, "same story", historical, date(2026, 3, 15))
+    assert result.state == "stale"
+
+
+def test_freshness_stale_when_reusing_predecessor_article(monkeypatch):
+    evaluator = FreshnessEvaluator(_config())
+    monkeypatch.setattr(evaluator, "_compute_embedding", lambda text: __import__("numpy").array([1.0, 0.0]))
+    cluster = _freshness_cluster(1, datetime(2026, 3, 15, 9, tzinfo=timezone.utc))
+    cluster.sources = ["Reuters", "BBC News"]
+    historical = [_historical_cluster("same story", ["Reuters"], article_ids=[1])]
+    result = evaluator.evaluate(cluster, "same story", historical, date(2026, 3, 15))
     assert result.state == "stale"
 
 

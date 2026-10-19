@@ -711,6 +711,23 @@ def test_display_dedup_accounting_counts_suppressions(caplog):
     assert regular == [kept]
 
 
+def test_merge_refreshes_stale_evidence_summary_counts():
+    shared = "https://wire.example/same-event"
+    kept = _summary("event one", 0.9, url=shared)
+    kept.cluster.sources = ["Reuters"]
+    kept.evidence_summary = "2 个来源、1 个地区"
+    dropped = _summary("event one update", 0.8, url=shared)
+    dropped.cluster.articles.append(
+        _article("event update detail", url="https://wire.example/update", region="gb")
+    )
+    dropped.cluster.articles[1].source_name = "BBC News"
+
+    _hot, _focus, regular, _positive = resolve_display_duplicates([], [], [kept, dropped], [])
+
+    assert regular == [kept]
+    assert kept.evidence_summary == "2 个来源、2 个地区"
+
+
 def test_display_dedup_still_merges_same_event_across_different_storylines():
     """Production shape: the 2026-09-13 Bab al-Mandeb pair (0.81) must still merge.
 

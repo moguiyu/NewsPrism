@@ -19,7 +19,7 @@ import numpy as np
 from newsprism.config import Config
 from newsprism.service.categories import normalize_display_category
 from newsprism.service.perspectives import canonicalize_perspective_groups
-from newsprism.types import ArticleCluster, ClusterSummary, EditorialReportPlan
+from newsprism.types import ArticleCluster, ClusterSummary, EditorialReportPlan, is_real_article
 
 logger = logging.getLogger(__name__)
 
@@ -609,6 +609,22 @@ def _merge_duplicate_summary(target: ClusterSummary, duplicate: ClusterSummary, 
         for group in target.grouped_perspectives
         for source in group.sources
     }
+
+    if target.evidence_summary:
+        regions = {
+            article.origin_region
+            for article in target.cluster.articles
+            if is_real_article(article) and article.origin_region
+        }
+        # The merged card gained articles/sources after the impact assessment
+        # produced its evidence line; leaving the original counts in place made
+        # the reader-facing "N 个来源、M 个地区" contradict the source list.
+        target.evidence_summary = re.sub(
+            r"^\s*\d+\s*个来源、\d+\s*个地区",
+            f"{len(target.cluster.sources)} 个来源、{len(regions)} 个地区",
+            target.evidence_summary,
+            count=1,
+        )
 
     target.duplicate_action = "merged"  # type: ignore[attr-defined]
     target.duplicate_reason = reason  # type: ignore[attr-defined]

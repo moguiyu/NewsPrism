@@ -1286,6 +1286,54 @@ def test_entity_free_country_fallback_runs_after_entity_scoped_failure():
     assert "Acme" not in fallback_queries[0]
 
 
+def test_country_voice_query_runs_before_entity_scoped_query():
+    cfg = _config()
+    cfg.active_search["source_verdicts"] = {
+        "local-paper.example": {"verdict": "country_editorial", "region": "us"},
+    }
+    seeker = ActiveSeeker(cfg)
+    cluster = _cluster()
+    cluster.articles[0].origin_region = "gb"
+    cluster.articles[0].content = "Acme Labs announced a security incident. " * 10
+    target = VoiceTarget("us", "Acme Labs", "company")
+    good = _fresh_result({
+        "url": "https://local-paper.example/incident",
+        "title": "US local coverage of the Acme Labs security incident",
+        "content": "Current reporting about the Acme Labs security incident in the US. " * 10,
+    })
+    calls: list[tuple[str, str]] = []
+
+    def search(_target, query, include_domains=None, request_type="search"):
+        calls.append((query, request_type))
+        if request_type == "search_country_voice":
+            return ([good], None)
+        return ([], None)
+
+    with patch.object(ActiveSeeker, "_search_tavily", side_effect=search), \
+         patch.object(ActiveSeeker, "_verify_candidate", return_value="reject"):
+        article, reason, trace = seeker._search_target(
+            cluster, target, "security incident", None, country_voice_first=True
+        )
+
+    assert reason is None
+    assert article is not None and article.origin_region == "us"
+    assert trace[-1] == {"stage": "country", "reason": "accepted"}
+    assert calls[0][1] == "search_country_voice"
+    assert "Acme" not in calls[0][0]
+    assert "United States" in calls[0][0]
+
+
+def test_search_queries_do_not_duplicate_entity_already_in_keyword():
+    seeker = ActiveSeeker(_config())
+    target = VoiceTarget("us", "Acme Labs", "company")
+    cluster = _cluster()
+    queries = seeker._build_search_queries(
+        cluster, target, "Acme Labs security incident", "country"
+    )
+    assert queries
+    assert all(not query.startswith("Acme Labs Acme Labs") for query in queries)
+
+
 def test_entity_free_country_fallback_can_be_disabled():
     cfg = _config()
     cfg.active_search["source_verdicts"] = {

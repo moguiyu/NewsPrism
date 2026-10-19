@@ -276,7 +276,7 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
     scheduler.storyline_resolver = SimpleNamespace(resolve=lambda *args, **kwargs: None)
     scheduler.storyline_state_machine = SimpleNamespace(apply=lambda *args, **kwargs: None)
     scheduler.freshness_evaluator = SimpleNamespace(
-        classify_all=lambda items, historical: [
+        classify_all=lambda items, historical, report_date=None: [
             (summary.cluster, summary.summary, SimpleNamespace(state="new", continues_cluster_id=None))
             for summary in summaries
         ]
