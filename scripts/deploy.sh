@@ -135,7 +135,7 @@ else
 fi
 
 # ── 4. Rebuild & restart ──────────────────────────────────────────────────────
-COMPOSE_UP="cd $REMOTE_PATH && mkdir -p data-beta output-beta && docker compose -f docker-compose.dev.yml up -d --build newsprism newsprism-portal newsprism-beta web"
+COMPOSE_UP="cd $REMOTE_PATH && mkdir -p data-beta output/beta && docker compose -f docker-compose.dev.yml up -d --build newsprism newsprism-portal newsprism-beta web"
 OLD_IMAGE=""
 if [[ "$DRY_RUN" -eq 0 ]]; then
   OLD_IMAGE="$(run_remote "docker images -q $IMAGE_NAME | head -1" || true)"
@@ -157,6 +157,10 @@ else
 fi
 
 # ── 6. Verify ─────────────────────────────────────────────────────────────────
+echo "→ Reloading nginx config (bind-mounted)"
+run_remote "docker exec newsprism-web nginx -t" || true
+run_remote "docker exec newsprism-web nginx -s reload" || true
+
 echo "→ Verifying"
 run_remote "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml ps"
 run_remote "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml logs --tail=30 newsprism"
