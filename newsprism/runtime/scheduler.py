@@ -1064,11 +1064,22 @@ class Scheduler:
                 publish_summaries.extend(positive_summaries)
                 publish_summaries.extend(regular_summaries)
                 if getattr(self, "beta_mode", False):
-                    rendered_ids = sorted({
+                    rendered_ids = {
                         summary.cluster.id
                         for summary in publish_summaries
                         if getattr(summary.cluster, "id", None) is not None
-                    })
+                    }
+                    # Replay/test overrides can build summaries without DB ids;
+                    # the rendered payload is the source of truth for what the
+                    # reader actually received.
+                    try:
+                        payload = json.loads(
+                            (Path(html_path).parent / "data.json").read_text(encoding="utf-8")
+                        )
+                        rendered_ids.update(_rendered_cluster_ids(payload))
+                    except (OSError, ValueError, TypeError):
+                        pass
+                    rendered_ids = sorted(rendered_ids)
                     if rendered_ids:
                         mark_clusters_published(rendered_ids, html=True)
                     logger.info(
