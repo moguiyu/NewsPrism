@@ -13,7 +13,7 @@
   {% for alt in hreflang_alternates %}<link rel="alternate" hreflang="{{ alt.lang }}" href="{{ alt.url }}" />
   {% endfor %}
   <link rel="icon" href="/favicon.ico" sizes="16x16" />
-  <link rel="alternate" type="application/rss+xml" title="NewsPrism" href="/feed.xml" />
+  {% if not beta_mode %}<link rel="alternate" type="application/rss+xml" title="NewsPrism" href="/feed.xml" />{% endif %}
 
   {% if canonical_url %}
   <!-- Open Graph / Twitter Card — social share previews -->
@@ -31,7 +31,7 @@
   {% endif %}
 
   <!-- PWA -->
-  <link rel="manifest" href="/manifest.json" />
+  {% if not beta_mode %}<link rel="manifest" href="/manifest.json" />{% endif %}
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

@@ -3303,5 +3303,8 @@ class TestBetaEdition:
         assert 'href="/beta/' in html
         assert '<meta name="robots" content="noindex,nofollow" />' in html
         assert 'data-lang="en">' not in html
+        assert 'rel="canonical"' not in html
+        assert "application/ld+json" not in html
+        assert "/feed.xml" not in html
         assert not (tmp_path / "cn" / "2026-10-21").exists()
         assert (tmp_path / "latest").is_symlink()

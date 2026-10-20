@@ -1985,8 +1985,11 @@ class HtmlRenderer:
         seo_title = title_zh[:70] + ("…" if len(title_zh) > 70 else "")
         og_locale = "zh_CN"
         in_language = "zh-CN"
+        # Beta pages are intentionally unindexed and live under /beta/; never
+        # advertise the production canonical/OG/JSON-LD URLs from a beta page.
+        seo_base = "" if self.beta_mode else self.report_base_url
         zh_path = f"/cn/{date_str}/" if zh_under_cn else f"/{date_str}/"
-        canonical_url = f"{self.report_base_url}{zh_path}" if self.report_base_url else ""
+        canonical_url = f"{seo_base}{zh_path}" if seo_base else ""
 
         if edition == "en":
             headlines_en = [
@@ -2012,15 +2015,15 @@ class HtmlRenderer:
             seo_title = title_en[:70] + ("…" if len(title_en) > 70 else "")
             og_locale = "en_US"
             in_language = "en-US"
-            canonical_url = f"{self.report_base_url}/{date_str}/" if self.report_base_url else ""
+            canonical_url = f"{seo_base}/{date_str}/" if seo_base else ""
 
-        og_image = f"{self.report_base_url}/og-image.png" if self.report_base_url else ""
+        og_image = f"{seo_base}/og-image.png" if seo_base else ""
 
         # hreflang pair — only meaningful when both editions have absolute URLs.
         hreflang_alternates: list[dict[str, str]] = []
-        if self.report_base_url:
-            zh_url = f"{self.report_base_url}{zh_path}"
-            en_url = f"{self.report_base_url}/{date_str}/"
+        if seo_base:
+            zh_url = f"{seo_base}{zh_path}"
+            en_url = f"{seo_base}/{date_str}/"
             if english_available:
                 hreflang_alternates = [
                     {"lang": "zh", "url": zh_url},
@@ -2047,7 +2050,7 @@ class HtmlRenderer:
             ld["image"] = [og_image]
         # Escape chars that would break out of a <script> JSON-LD block; expose as
         # a pre-escaped string so Jinja's autoescape does not double-encode it.
-        json_ld = (
+        json_ld = "" if self.beta_mode else (
             json.dumps(ld, ensure_ascii=False)
             .replace("<", "\\u003c")
             .replace(">", "\\u003e")
@@ -2062,6 +2065,7 @@ class HtmlRenderer:
             "og_locale": og_locale,
             "hreflang_alternates": hreflang_alternates,
             "json_ld": json_ld,
+            "beta_mode": self.beta_mode,
         }
 
     def _discover_report_dates(self) -> list[str]:
