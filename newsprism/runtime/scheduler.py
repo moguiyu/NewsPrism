@@ -1064,7 +1064,18 @@ class Scheduler:
                 publish_summaries.extend(positive_summaries)
                 publish_summaries.extend(regular_summaries)
                 if getattr(self, "beta_mode", False):
-                    logger.info("Beta mode: skipping Telegram publish for %s", today.isoformat())
+                    rendered_ids = sorted({
+                        summary.cluster.id
+                        for summary in publish_summaries
+                        if getattr(summary.cluster, "id", None) is not None
+                    })
+                    if rendered_ids:
+                        mark_clusters_published(rendered_ids, html=True)
+                    logger.info(
+                        "Beta mode: marked %d rendered clusters HTML-only; skipping Telegram for %s",
+                        len(rendered_ids),
+                        today.isoformat(),
+                    )
                 else:
                     await self.publisher.publish(
                         publish_summaries,
