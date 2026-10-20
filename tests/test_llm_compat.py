@@ -80,3 +80,18 @@ def test_rejects_openrouter_host_substring_outside_hostname() -> None:
             completion_compat_kwargs("openai/deepseek/deepseek-v4-flash", base_url)
             == {}
         )
+
+
+def test_deepseek_v41_flash_1017_disables_reasoning_on_openrouter():
+    from newsprism.service.llm_compat import completion_compat_kwargs
+
+    kwargs = completion_compat_kwargs(
+        "openai/deepseek/deepseek-v4.1-flash-1017",
+        "https://openrouter.ai/api/v1",
+    )
+    assert kwargs == {
+        "extra_body": {
+            "usage": {"include": True},
+            "reasoning": {"enabled": False},
+        }
+    }

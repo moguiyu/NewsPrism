@@ -46,6 +46,23 @@ def _extract_markdown_headline(summary_text: str) -> str:
     return ""
 
 
+def _jev_adjusted_composite(item: ArticleCluster | ClusterSummary) -> float:
+    """Composite with the beta Jev importance audit blended in.
+
+    Production leaves ``jev_importance`` unset, so this is exactly the existing
+    composite there. In the beta stack the audit nudges the ranking toward
+    stories the decision model considers consequential.
+    """
+    base = _composite(item)
+    impact = getattr(item, "impact", None)
+    if impact is None and isinstance(item, ClusterSummary):
+        impact = getattr(item.cluster, "impact", None)
+    jev = getattr(impact, "jev_importance", None) if impact is not None else None
+    if jev is None:
+        return base
+    return 0.78 * base + 0.22 * float(jev)
+
+
 def _composite(item: ArticleCluster | ClusterSummary) -> float:
     impact = getattr(item, "impact", None)
     if impact is None and isinstance(item, ClusterSummary):
@@ -165,11 +182,21 @@ def _normalize_storyline_name(name: str | None, summary: ClusterSummary | None, 
 
 
 class EditorialPlanner:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, jev_client=None) -> None:
         self.cfg = cfg
+        self.jev_client = jev_client
 
-    def base_plan(self, kept_summaries: list[ClusterSummary]) -> EditorialReportPlan:
-        hot_topics, _unused_focus_families, regular_summaries = select_hot_topic_families(kept_summaries, self.cfg)
+    def base_plan(
+        self,
+        kept_summaries: list[ClusterSummary],
+        report_date=None,
+    ) -> EditorialReportPlan:
+        hot_topics, _unused_focus_families, regular_summaries = select_hot_topic_families(
+            kept_summaries,
+            self.cfg,
+            jev_client=getattr(self, "jev_client", None),
+            report_date=report_date,
+        )
         return EditorialReportPlan(
             hot_topics=hot_topics,
             focus_storylines=[],
@@ -181,6 +208,7 @@ class EditorialPlanner:
         self,
         base_plan: EditorialReportPlan,
         positive_summaries: list[ClusterSummary] | None = None,
+        report_date=None,
     ) -> EditorialReportPlan:
         positive = positive_summaries or []
         # The 正能量 lane is exclusive: a cluster claimed for it is removed from
@@ -196,6 +224,8 @@ class EditorialPlanner:
             focus_storylines,
             regular_summaries,
             positive,
+            jev_client=getattr(self, "jev_client", None),
+            report_date=report_date,
         )
         return EditorialReportPlan(
             hot_topics=hot_topics,
@@ -208,8 +238,13 @@ class EditorialPlanner:
         self,
         kept_summaries: list[ClusterSummary],
         positive_summaries: list[ClusterSummary] | None = None,
+        report_date=None,
     ) -> EditorialReportPlan:
-        return self.finalize(self.base_plan(kept_summaries), positive_summaries)
+        return self.finalize(
+            self.base_plan(kept_summaries, report_date=report_date),
+            positive_summaries,
+            report_date=report_date,
+        )
 
 
 # ─── CLUSTER-LEVEL SELECTION (pre-summary) ────────────────────────────────────
@@ -325,7 +360,7 @@ def _rank_main_summaries(summaries: list[ClusterSummary], cfg: Config, limit: in
     impact_cfg = (cfg.editorial_values or {}).get("impact", {})
     diversity_cfg = impact_cfg.get("diversity", {}) if isinstance(impact_cfg, dict) else {}
     max_per_category = max(1, int(diversity_cfg.get("max_per_category", 8)))
-    ranked = sorted(summaries, key=_composite, reverse=True)
+    ranked = sorted(summaries, key=_jev_adjusted_composite, reverse=True)
     if limit <= 0:
         return []
     return _diverse_by_category(ranked, limit, max_per_category)
@@ -334,6 +369,8 @@ def _rank_main_summaries(summaries: list[ClusterSummary], cfg: Config, limit: in
 def select_hot_topic_families(
     summaries: list[ClusterSummary],
     cfg: Config,
+    jev_client=None,
+    report_date=None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary]]:
     hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
     max_name_chars = hot_cfg.get("tab_name_max_chars", 10)
@@ -388,18 +425,67 @@ def select_hot_topic_families(
         for key, members in grouped.items()
         if len(members) >= 2
     ]
-    hot_keys.sort(
-        key=lambda key: (
-            -min(len(grouped[key]), max_items_per_topic),
-            group_order.get(key, 0),
+    family_scores: dict[str, tuple[float, float, float]] = {}
+    if jev_client is not None and jev_client.stage_enabled("hot_topics"):
+        jev_cfg = jev_client.stage_options("hot_topics")
+        max_families = max(1, int(jev_cfg.get("max_families", 8)))
+        for key in hot_keys[:max_families]:
+            members = grouped[key]
+            name = str(
+                members[0].storyline_name
+                or members[0].macro_topic_name
+                or getattr(members[0].cluster, "topic_category", "")
+            )
+            scored = jev_client.score_hot_family(
+                name=name,
+                members=[
+                    {
+                        "headline": _extract_markdown_headline(m.summary) or m.cluster.topic_category,
+                        "summary": m.summary,
+                        "sources": [str(s) for s in m.cluster.sources],
+                        "published": str(m.cluster.articles[0].published_at) if m.cluster.articles else "",
+                    }
+                    for m in members
+                ],
+                report_date=report_date,
+                cluster_key=key,
+            )
+            if scored:
+                family_scores[key] = scored
+                logger.info(
+                    "Jev hot-family score: key=%s name=%s importance=%.2f coherence=%.2f label_support=%.2f shadow=%s",
+                    key,
+                    name,
+                    scored[0],
+                    scored[1],
+                    scored[2],
+                    bool(getattr(jev_client, "shadow", True)),
+                )
+    if family_scores and not bool(getattr(jev_client, "shadow", True)):
+        hot_keys.sort(
+            key=lambda key: (
+                -(
+                    0.55 * family_scores.get(key, (0.0, 0.0, 0.0))[0]
+                    + 0.30 * family_scores.get(key, (0.0, 0.0, 0.0))[1]
+                    + 0.15 * family_scores.get(key, (0.0, 0.0, 0.0))[2]
+                ),
+                -min(len(grouped[key]), max_items_per_topic),
+                group_order.get(key, 0),
+            )
         )
-    )
+    else:
+        hot_keys.sort(
+            key=lambda key: (
+                -min(len(grouped[key]), max_items_per_topic),
+                group_order.get(key, 0),
+            )
+        )
     hot_keys = hot_keys[:max_topic_tabs]
 
     hot_topics: list[dict[str, object]] = []
     for position, key in enumerate(hot_keys, 1):
         # D3/D4: cap each family at max_items_per_topic; overflow is dropped.
-        members = sorted(grouped[key], key=_composite, reverse=True)[:max_items_per_topic]
+        members = sorted(grouped[key], key=_jev_adjusted_composite, reverse=True)[:max_items_per_topic]
         family_name = _normalize_storyline_name(
             members[0].storyline_name or members[0].macro_topic_name,
             members[0],
@@ -431,7 +517,7 @@ def select_hot_topic_families(
     for key, members in grouped.items():
         if key in assigned_keys:
             continue
-        members = sorted(members, key=_composite, reverse=True)
+        members = sorted(members, key=_jev_adjusted_composite, reverse=True)
         for summary in members:
             summary.is_hot_topic = False
             summary.cluster.is_hot_topic = False
@@ -691,6 +777,8 @@ def resolve_display_duplicates(
     focus_storylines: list[dict[str, object]],
     regular_summaries: list[ClusterSummary],
     positive_summaries: list[ClusterSummary],
+    jev_client=None,
+    report_date=None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary], list[ClusterSummary]]:
     displayed = _flatten_display_summaries(hot_topics, focus_storylines, regular_summaries, positive_summaries)
     positive_ids = {id(summary) for summary in positive_summaries}
@@ -715,6 +803,13 @@ def resolve_display_duplicates(
         summary.duplicate_confidence = 0.0  # type: ignore[attr-defined]
 
     suppressed_ids: set[int] = set()
+    jev_pairs = 0
+    jev_cfg = jev_client.stage_options("display_dedup") if jev_client is not None else {}
+    jev_max_pairs = max(0, int(jev_cfg.get("max_pairs", 0))) if jev_cfg else 0
+    jev_sim_min = float(jev_cfg.get("similarity_min", 0.62)) if jev_cfg else 0.62
+    jev_rule_max = float(jev_cfg.get("rule_confidence_max", 0.88)) if jev_cfg else 0.88
+    jev_merge = float(jev_cfg.get("merge_threshold", 0.76)) if jev_cfg else 0.76
+    jev_veto = float(jev_cfg.get("veto_threshold", 0.34)) if jev_cfg else 0.34
     for left_index, left in enumerate(displayed):
         if id(left) in suppressed_ids:
             continue
@@ -738,6 +833,7 @@ def resolve_display_duplicates(
             left_fam = family_id_by_summary.get(id(left)) or _family_key(left)
             right_fam = family_id_by_summary.get(id(right)) or _family_key(right)
             duplicate, reason, confidence = _display_duplicate(left, right, centroids)
+            is_family_pair = bool(left_fam and right_fam and left_fam == right_fam)
             if left_fam and right_fam and left_fam == right_fam:
                 # Within one storyline, preserve distinct daily incidents. But
                 # shared URLs are always duplicates, and multi-source cards
@@ -752,6 +848,50 @@ def resolve_display_duplicates(
                 )
                 if not same_event_inside_family:
                     continue
+            # Jev adjudicates only the uncertain band: rule-duplicates below the
+            # high-confidence bar can be vetoed, and near-threshold pairs the
+            # embedding missed can be merged. High-confidence rules and family
+            # members stay deterministic.
+            if (
+                jev_client is not None
+                and not is_family_pair
+                and jev_pairs < jev_max_pairs
+                and (duplicate and confidence <= jev_rule_max or (not duplicate and confidence >= jev_sim_min))
+            ):
+                jev_pairs += 1
+                probability = jev_client.adjudicate_duplicate(
+                    left={
+                        "headline": _extract_markdown_headline(left.summary) or left.cluster.topic_category,
+                        "summary": left.summary,
+                        "sources": [str(source) for source in left.cluster.sources],
+                        "published": str(left.cluster.articles[0].published_at) if left.cluster.articles else "",
+                    },
+                    right={
+                        "headline": _extract_markdown_headline(right.summary) or right.cluster.topic_category,
+                        "summary": right.summary,
+                        "sources": [str(source) for source in right.cluster.sources],
+                        "published": str(right.cluster.articles[0].published_at) if right.cluster.articles else "",
+                    },
+                    similarity=confidence,
+                    report_date=report_date,
+                    cluster_key=getattr(left.cluster, "storyline_key", None),
+                )
+                if probability is not None:
+                    logger.info(
+                        "Jev duplicate adjudication: p=%.2f rule=%s rule_confidence=%.2f shadow=%s",
+                        probability,
+                        "duplicate" if duplicate else "distinct",
+                        confidence,
+                        bool(getattr(jev_client, "shadow", True)),
+                    )
+                    if not bool(getattr(jev_client, "shadow", True)):
+                        if duplicate and probability < jev_veto:
+                            duplicate = False
+                            reason = "jev_not_same_event"
+                        elif not duplicate and probability >= jev_merge:
+                            duplicate = True
+                            reason = "jev_same_event"
+                            confidence = max(confidence, probability)
             if not duplicate:
                 continue
             # A cluster already claimed for the 正能量 lane keeps its slot; its

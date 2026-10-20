@@ -166,8 +166,10 @@ class ImpactAssessor:
         cfg: Config,
         weights_loader=None,
         policy_loader=None,
+        jev_client=None,
     ) -> None:
         self.cfg = cfg
+        self.jev_client = jev_client
         self.model = cfg.litellm_model
         self.api_key = cfg.litellm_api_key
         self.base_url = cfg.litellm_base_url
@@ -273,6 +275,61 @@ class ImpactAssessor:
             max((a.composite for a in assessments), default=0.0),
         )
         return assessments
+
+    def audit_importance(self, clusters: list[ArticleCluster], report_date=None) -> int:
+        """Attach a beta-only Jev importance score to the strongest candidates.
+
+        The LLM assessment stays authoritative for dimensions and status; this
+        audit is blended into display ranking only when the beta stack enables
+        it. Best-effort: failures simply leave ``jev_importance`` unset.
+        """
+        client = getattr(self, "jev_client", None)
+        if client is None or not client.stage_enabled("importance") or not clusters:
+            return 0
+        options = client.stage_options("importance")
+        limit = max(1, int(options.get("max_clusters", 70)))
+        ranked = sorted(
+            clusters,
+            key=lambda cluster: float(getattr(getattr(cluster, "impact", None), "composite", 0.0) or 0.0),
+            reverse=True,
+        )[:limit]
+        scored = 0
+        for cluster in ranked:
+            impact = getattr(cluster, "impact", None)
+            if impact is None:
+                continue
+            articles = _real_articles(cluster)
+            lead = articles[0] if articles else None
+            regions = sorted(
+                {
+                    article.origin_region or self.source_regions.get(article.source_name)
+                    for article in articles
+                }
+                - {None, ""}
+            )
+            result = client.score_importance(
+                title=lead.title if lead else cluster.topic_category,
+                summary=(lead.content[:700] if lead else ""),
+                sources=[article.source_name for article in articles[:8]],
+                regions=[str(region) for region in regions[:5]],
+                report_date=report_date,
+                cluster_key=getattr(cluster, "storyline_key", None),
+            )
+            if result is None:
+                continue
+            score, confidence = result
+            if not bool(getattr(client, "shadow", True)):
+                impact.jev_importance = score
+                impact.jev_importance_confidence = confidence
+            scored += 1
+        if scored:
+            logger.info(
+                "Jev importance audit: scored=%d/%d shadow=%s",
+                scored,
+                len(ranked),
+                bool(getattr(client, "shadow", True)),
+            )
+        return scored
 
     def weights(self) -> dict[str, float]:
         """Calibrated weights (table) over seeds (yaml), normalized to sum 1."""

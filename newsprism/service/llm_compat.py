@@ -10,7 +10,7 @@ OPENROUTER_API_HOST = "openrouter.ai"
 
 # DeepSeek V4 Flash/Pro in plain or dated-snapshot form (e.g. -0731); the
 # reasoning/thinking quirks below are only verified for these models.
-_DEEPSEEK_V4_RE = re.compile(r"deepseek-v4-(?:flash|pro)(?:-\d{4})?")
+_DEEPSEEK_V4_RE = re.compile(r"deepseek-v4(?:\.\d+)?-(?:flash|pro)(?:-\d{4})?")
 
 
 def _base_url_host(base_url: str) -> str:

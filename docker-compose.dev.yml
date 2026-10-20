@@ -56,6 +56,43 @@ services:
         max-file: "5"
     command: sh -c "umask 022 && python -m newsprism run"
 
+  # ── NewsPrism beta — independent one-week A/B (Jev + DeepSeek 1017) ────────
+  # Own SQLite DB, collection loop and output tree. Served at /beta/ by the
+  # web container; Chinese-only, noindex, never sends Telegram.
+  newsprism-beta:
+    build: .
+    image: newsprism-newsprism
+    container_name: newsprism-beta
+    restart: unless-stopped
+    env_file: .env
+    dns: [1.1.1.1, 8.8.8.8]
+    environment:
+      - NEWSNOW_BASE_URL=http://newsnow:4444
+      - SCHEDULE_TIMEZONE=Europe/Warsaw
+      - NEWSPRISM_DB_PATH=/app/data/newsprism.db
+      - NEWSPRISM_OUTPUT_DIR=/app/output
+      - NEWSPRISM_STAGING_DIR=/app/output/staging
+      - NEWSPRISM_URL_PREFIX=/beta
+      - NEWSPRISM_BETA_MODE=1
+      - NEWSPRISM_JEV_ENABLED=1
+      - NEWSPRISM_JEV_SHADOW=0
+      - LITELLM_MODEL=openai/deepseek/deepseek-v4.1-flash-1017
+    volumes:
+      - ./data-beta:/app/data
+      - ./output-beta:/app/output
+      - ./config:/app/config
+      - ./templates:/app/templates
+      - hf_cache:/app/.cache/huggingface
+    depends_on:
+      newsnow:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    command: sh -c "umask 022 && python -m newsprism run"
+
   # ── admin quality portal — long-running management backend ─────────────────
   # Lets administrators inspect every article, the source pipeline, and cluster
   # selection from behind the stack, to judge news quality. Publicly reachable
@@ -169,6 +206,7 @@ services:
       - "8080:80"
     volumes:
       - ./output:/usr/share/nginx/html:ro
+      - ./output-beta:/usr/share/nginx/html-beta:ro
       - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     logging:
       driver: "json-file"

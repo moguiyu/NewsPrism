@@ -55,6 +55,7 @@ class Config:
     summarizer: dict[str, Any]
     output: dict[str, Any]
     active_search: dict[str, Any]
+    jev: dict[str, Any] = field(default_factory=dict)
     editorial_values: dict[str, Any] = field(default_factory=dict)
     feelgood_keywords: dict[str, Any] = field(default_factory=dict)
     evolution: dict[str, Any] = field(default_factory=dict)
@@ -249,6 +250,39 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         merged.update(dict(reviewed_bindings.get(key, {}) or {}))
         active_search[key] = merged
 
+    output = dict(raw.get("output", {}) or {})
+    if os.environ.get("NEWSPRISM_OUTPUT_DIR"):
+        output["html_dir"] = os.environ["NEWSPRISM_OUTPUT_DIR"]
+    if os.environ.get("NEWSPRISM_STAGING_DIR"):
+        output["staging_dir"] = os.environ["NEWSPRISM_STAGING_DIR"]
+    if os.environ.get("NEWSPRISM_URL_PREFIX"):
+        output["url_prefix"] = os.environ["NEWSPRISM_URL_PREFIX"]
+    if os.environ.get("NEWSPRISM_BETA_MODE"):
+        output["beta_mode"] = True
+        # The beta edition is Chinese-only by decision; skip the English
+        # translation stage entirely rather than paying for content it hides.
+        english = dict(output.get("english", {}) or {})
+        english["enabled"] = False
+        output["english"] = english
+        # Independent beta process: publish after production so both editions
+        # cover the same overnight window, and shift collection away from the
+        # production cron to avoid hitting every upstream at the same second.
+        schedule["publish_cron"] = os.environ.get(
+            "NEWSPRISM_BETA_PUBLISH_CRON", "40 5 * * *"
+        )
+        schedule["prepublish_collect_cron"] = os.environ.get(
+            "NEWSPRISM_BETA_DELTA_CRON", "25 5 * * *"
+        )
+        schedule["full_collect_cron"] = os.environ.get(
+            "NEWSPRISM_BETA_COLLECT_CRON", "30 0,4,16,20 * * *"
+        )
+
+    jev = dict(raw.get("jev", {}) or {})
+    if os.environ.get("NEWSPRISM_JEV_ENABLED"):
+        jev["enabled"] = os.environ["NEWSPRISM_JEV_ENABLED"].lower() in {"1", "true", "yes", "on"}
+    if os.environ.get("NEWSPRISM_JEV_SHADOW"):
+        jev["shadow"] = os.environ["NEWSPRISM_JEV_SHADOW"].lower() in {"1", "true", "yes", "on"}
+
     return Config(
         raw=raw,
         sources=sources,
@@ -259,7 +293,8 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         clustering=raw.get("clustering", {}),
         dedup=raw.get("dedup", {}),
         summarizer=raw.get("summarizer", {}),
-        output=raw.get("output", {}),
+        output=output,
+        jev=jev,
         active_search=active_search,
         editorial_values=editorial_values,
         feelgood_keywords=feelgood_keywords,

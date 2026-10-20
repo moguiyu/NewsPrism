@@ -299,8 +299,8 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
         positive_summaries=[positive_summary],
     )
     scheduler.editorial_planner = SimpleNamespace(
-        base_plan=lambda kept: plan,
-        finalize=lambda base, positive_summaries: plan,
+        base_plan=lambda kept, **kwargs: plan,
+        finalize=lambda base, positive_summaries, **kwargs: plan,
     )
 
     render_calls = []

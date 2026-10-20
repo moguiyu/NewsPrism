@@ -135,7 +135,7 @@ else
 fi
 
 # ── 4. Rebuild & restart ──────────────────────────────────────────────────────
-COMPOSE_UP="cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml up -d --build newsprism newsprism-portal"
+COMPOSE_UP="cd $REMOTE_PATH && mkdir -p data-beta output-beta && docker compose -f docker-compose.dev.yml up -d --build newsprism newsprism-portal newsprism-beta web"
 OLD_IMAGE=""
 if [[ "$DRY_RUN" -eq 0 ]]; then
   OLD_IMAGE="$(run_remote "docker images -q $IMAGE_NAME | head -1" || true)"
@@ -160,3 +160,4 @@ fi
 echo "→ Verifying"
 run_remote "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml ps"
 run_remote "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml logs --tail=30 newsprism"
+run_remote "cd $REMOTE_PATH && docker compose -f docker-compose.dev.yml logs --tail=20 newsprism-beta"

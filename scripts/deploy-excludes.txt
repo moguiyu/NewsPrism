@@ -31,6 +31,8 @@ docs/
 # Runtime state: bind-mounted on the host, never overwritten by a sync
 data/
 output/
+data-beta/
+output-beta/
 #
 # Build artefacts, caches and virtualenvs
 .git/

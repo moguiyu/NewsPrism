@@ -291,8 +291,8 @@ def _runtime_scheduler(monkeypatch, tmp_path: Path):
         translate_report_content=lambda *args, **kwargs: True,
     )
     scheduler.editorial_planner = SimpleNamespace(
-        base_plan=lambda kept: plan,
-        finalize=lambda base, positive_summaries: plan,
+        base_plan=lambda kept, **kwargs: plan,
+        finalize=lambda base, positive_summaries, **kwargs: plan,
     )
     scheduler.renderer = SimpleNamespace(render=lambda *args, **kwargs: tmp_path / "index.html")
 
@@ -359,3 +359,31 @@ def test_publish_invokes_the_post_translation_gate(monkeypatch, tmp_path: Path):
     assert called_regular == plan.regular_summaries
     assert called_positive == plan.positive_summaries
     assert called_hot == plan.hot_topics
+
+
+def test_publish_consumes_every_validated_cluster_before_editorial_selection(monkeypatch, tmp_path: Path):
+    """Phase 0: unselected clusters must not return as unclustered articles.
+
+    The candidate window and editorial lanes intentionally drop most clusters,
+    but clustering already consumed their articles. Marking only stored clusters
+    fed the rest back into the next publish, inflating the 48h input and LLM
+    clustering cost. The scheduler must mark the full validated set.
+    """
+    scheduler, plan, input_cluster = _runtime_scheduler(monkeypatch, tmp_path)
+    input_cluster.articles[0].id = 4242
+    marked: list[list[int]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered",
+        lambda ids: marked.append(list(ids)),
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles),
+            push_after_render=True,
+        )
+    )
+
+    assert marked, "publish did not mark any articles"
+    assert 4242 in marked[0]

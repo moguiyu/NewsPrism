@@ -9,6 +9,7 @@
   {% if google_site_verification %}<meta name="google-site-verification" content="{{ google_site_verification }}" />{% endif %}
   {% if bing_site_verification %}<meta name="msvalidate.01" content="{{ bing_site_verification }}" />{% endif %}
   {% if canonical_url %}<link rel="canonical" href="{{ canonical_url }}" />{% endif %}
+  {% if robots_noindex %}<meta name="robots" content="noindex,nofollow" />{% endif %}
   {% for alt in hreflang_alternates %}<link rel="alternate" hreflang="{{ alt.lang }}" href="{{ alt.url }}" />
   {% endfor %}
   <link rel="icon" href="/favicon.ico" sizes="16x16" />

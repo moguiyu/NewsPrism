@@ -700,6 +700,8 @@ class HtmlRenderer:
         google_site_verification: str = "",
         bing_site_verification: str = "",
         schedule_timezone: str = "UTC",
+        url_prefix: str = "",
+        beta_mode: bool = False,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.template_file = "report-template.html"
@@ -717,6 +719,8 @@ class HtmlRenderer:
         self.bing_site_verification = (bing_site_verification or "").strip()
         # Schedule timezone (IANA name) — used for the RSS feed's pubDate offset.
         self.schedule_timezone = (schedule_timezone or "UTC").strip() or "UTC"
+        self.url_prefix = (url_prefix or "").rstrip("/")
+        self.beta_mode = beta_mode
         # Render a second English edition at /en/{date}/ (hreflang-linked with
         # the Chinese pages). Off by default; scheduler wires it from
         # output.english.separate_edition.
@@ -1415,9 +1419,9 @@ class HtmlRenderer:
         the root URL itself on zh-only fallback days.
         """
         if (self.output_dir / "cn" / date_str / "index.html").exists():
-            return f"/cn/{date_str}/"
+            return f"{self.url_prefix}/cn/{date_str}/"
         if (self.output_dir / date_str / "index.html").exists() and not self._is_en_primary(date_str):
-            return f"/{date_str}/"
+            return f"{self.url_prefix}/{date_str}/"
         return None
 
     def _build_day_links(
@@ -1440,7 +1444,7 @@ class HtmlRenderer:
             current = report_date + timedelta(days=offset)
             date_str = current.isoformat()
             if edition == "en":
-                href = f"/{date_str}/" if (
+                href = f"{self.url_prefix}/{date_str}/" if (
                     (self.output_dir / date_str / "index.html").exists()
                     and self._is_en_primary(date_str)
                 ) else None
@@ -1522,6 +1526,11 @@ class HtmlRenderer:
         positive_summaries = positive_summaries or []
         english_gaps = self._english_gaps(summaries, hot_topics, [], positive_summaries)
         english_available = not english_gaps
+        if self.beta_mode:
+            # Beta is deliberately Chinese-only. Do not emit English fields or
+            # a second edition even when translations happen to exist.
+            english_available = False
+            english_gaps = []
         if english_gaps:
             logger.warning(
                 "English edition withheld; rendering Chinese-only report: %s",
@@ -1814,7 +1823,7 @@ class HtmlRenderer:
             day_nav_cfg = {}
         day_link_count = int(day_nav_cfg.get("days", 3)) if isinstance(day_nav_cfg, dict) else 3
 
-        dual_edition = self.english_edition_enabled and english_available
+        dual_edition = self.english_edition_enabled and english_available and not self.beta_mode
         common = {
             "report_date": date_str,
             "report_date_display": report_date.strftime("%Y年%m月%d日"),
@@ -1835,11 +1844,12 @@ class HtmlRenderer:
             # Root is the English edition on dual days; falls back to Chinese
             # when no English content exists (data.json records which).
             "default_language": "en" if dual_edition else "zh",
-            "home_href": "/",
+            "robots_noindex": self.beta_mode,
+            "home_href": f"{self.url_prefix}/" if self.url_prefix else "/",
             "day_links": self._build_day_links(
                 report_date, day_link_count, edition="en" if dual_edition else "zh"
             ),
-            "archive_link": "/archive/" if dual_edition else "/cn/archive/",
+            "archive_link": None if self.beta_mode else ("/archive/" if dual_edition else "/cn/archive/"),
         }
         if dual_edition:
             common["language_crosslink"] = f"/cn/{date_str}/"
@@ -1898,7 +1908,7 @@ class HtmlRenderer:
             + common["focus_storyline_story_count"]
             + common["hot_topic_story_count"]
         )
-        if self.english_edition_enabled and total_story_count > 0:
+        if self.english_edition_enabled and total_story_count > 0 and not self.beta_mode:
             self._render_cn_edition(
                 report_date,
                 common,
@@ -1926,7 +1936,7 @@ class HtmlRenderer:
                 date_str,
             )
 
-        if write_public_indexes:
+        if write_public_indexes and not self.beta_mode:
             self._write_seo_files(report_date)
         logger.info("HTML report written: %s", html_path)
         return html_path

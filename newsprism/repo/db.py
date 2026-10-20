@@ -6,6 +6,7 @@ Layer:      repo  (may import types + config; never imports service or runtime)
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -13,12 +14,12 @@ from pathlib import Path
 from typing import Any, Generator
 
 from newsprism.types import (
-    Article, Cluster, ClusterQualityReport, ClusterSummary, LLMCallEvent,
-    SearchCandidateReview, SearchRequestEvent, is_placeholder_article,
+    Article, Cluster, ClusterQualityReport, ClusterSummary, JevCallEvent,
+    LLMCallEvent, SearchCandidateReview, SearchRequestEvent, is_placeholder_article,
     is_placeholder_url,
 )
 
-DB_PATH = Path("data/newsprism.db")
+DB_PATH = Path(os.environ.get("NEWSPRISM_DB_PATH", "data/newsprism.db"))
 
 
 def init_db(db_path: Path = DB_PATH) -> None:
@@ -262,6 +263,27 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 billed_cost_usd REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+
+            CREATE TABLE IF NOT EXISTS jev_call_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT NOT NULL,
+                model TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                report_date TEXT,
+                cluster_key TEXT,
+                item_count INTEGER,
+                shadow INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'ok',
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                duration_ms INTEGER,
+                billed_cost_usd REAL,
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_jev_call_events_stage_date
+                ON jev_call_events(stage, report_date);
 
             CREATE TABLE IF NOT EXISTS storylines (
                 storyline_key TEXT PRIMARY KEY,
@@ -584,11 +606,19 @@ def get_articles_by_ids(ids: list[int], db_path: Path = DB_PATH) -> list[Article
 
 
 def mark_articles_clustered(ids: list[int], db_path: Path = DB_PATH) -> None:
-    placeholders = ",".join("?" * len(ids))
+    if not ids:
+        return
+    # A publish can consume thousands of articles. Chunk the IN list to stay
+    # well under SQLite's bound-variable limit on older builds.
+    chunk_size = 500
     with get_conn(db_path) as conn:
-        conn.execute(
-            f"UPDATE articles SET clustered = 1 WHERE id IN ({placeholders})", ids
-        )
+        for start in range(0, len(ids), chunk_size):
+            chunk = ids[start:start + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(
+                f"UPDATE articles SET clustered = 1 WHERE id IN ({placeholders})",
+                chunk,
+            )
 
 
 def update_article_embedding(article_id: int, embedding: list[float], db_path: Path = DB_PATH) -> None:
@@ -633,6 +663,36 @@ def insert_llm_call_event(event: LLMCallEvent, db_path: Path = DB_PATH) -> int:
                 event.output_chars,
                 event.duration_ms,
                 event.billed_cost_usd,
+                event.created_at.isoformat() if event.created_at else None,
+            ),
+        )
+        return cur.lastrowid
+
+
+def insert_jev_call_event(event: JevCallEvent, db_path: Path = DB_PATH) -> int:
+    """Persist one Jev decision request for cost/quality telemetry."""
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            """INSERT INTO jev_call_events (
+                   stage, model, request_hash, report_date, cluster_key,
+                   item_count, shadow, status, prompt_tokens, completion_tokens,
+                   duration_ms, billed_cost_usd, error, created_at
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+            (
+                event.stage,
+                event.model,
+                event.request_hash,
+                event.report_date,
+                event.cluster_key,
+                event.item_count,
+                1 if event.shadow else 0,
+                event.status,
+                event.prompt_tokens,
+                event.completion_tokens,
+                event.duration_ms,
+                event.billed_cost_usd,
+                event.error,
                 event.created_at.isoformat() if event.created_at else None,
             ),
         )

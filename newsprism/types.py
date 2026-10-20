@@ -114,6 +114,25 @@ class LLMCallEvent:
 
 
 @dataclass
+class JevCallEvent:
+    """One TypeSafe Jev decision request (input billed, output free)."""
+    stage: str
+    model: str
+    request_hash: str
+    report_date: str | None = None
+    cluster_key: str | None = None
+    item_count: int | None = None
+    shadow: bool = True
+    status: str = "ok"
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    duration_ms: int | None = None
+    billed_cost_usd: float | None = None
+    error: str | None = None
+    created_at: datetime | None = None
+
+
+@dataclass
 class SearchRequestEvent:
     """One outbound search/social API request emitted by Active Seeker."""
     provider: str
@@ -217,6 +236,10 @@ class ImpactAssessment:
     summary_constraints: list[str] = field(default_factory=list)
     evaluated_by_llm: bool = True   # False when the signal-only fallback produced this
     model: str | None = None
+    # Beta-only Jev audit (0-1); None in production. Used as a ranking blend,
+    # never as a replacement for the LLM impact dims.
+    jev_importance: float | None = None
+    jev_importance_confidence: float | None = None
 
     def dim(self, name: str) -> float:
         return float(self.dims.get(name, 0.0))

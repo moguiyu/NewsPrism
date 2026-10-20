@@ -5,6 +5,8 @@
 runtime.env
 data/
 output/
+data-beta/
+output-beta/
 __pycache__/
 *.pyc
 *.pyo

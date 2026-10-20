@@ -51,6 +51,7 @@ def _add_scheduler_job(
 
 from newsprism.config import Config
 from newsprism.repo import (
+    DB_PATH,
     delete_clusters_for_date,
     get_articles_by_ids,
     get_clusters_for_date,
@@ -87,6 +88,7 @@ from newsprism.service.history import (
     StorylineStateMachine,
 )
 from newsprism.service.impact import ImpactAssessor
+from newsprism.service.jev import JevClient
 from newsprism.service.llm_telemetry import llm_run_context
 from newsprism.service.seeker import ActiveSeeker
 from newsprism.service.summarizer import Summarizer
@@ -361,6 +363,7 @@ class Scheduler:
         self.cfg = cfg
         init_db()
         self._pipeline_lock = asyncio.Lock()
+        self.beta_mode = bool(cfg.output.get("beta_mode", False))
         self.schedule_timezone = ZoneInfo(cfg.schedule.get("timezone", "Europe/Warsaw"))
         self.output_dir = Path(cfg.output.get("html_dir", "output"))
         self.staging_dir = self._resolve_output_path(cfg.output.get("staging_dir"), default="staging")
@@ -376,8 +379,10 @@ class Scheduler:
         self.clusterer = LLMClusterer(cfg) if cfg.use_llm_clustering else Clusterer(cfg)
         self.cluster_validator = EventClusterValidator(cfg)
         self.seeker = ActiveSeeker(cfg)
+        self.jev_client = JevClient(cfg.jev, db_path=DB_PATH)
+        self.seeker.jev_client = self.jev_client
         self.summarizer = Summarizer(cfg)
-        self.impact_assessor = ImpactAssessor(cfg)
+        self.impact_assessor = ImpactAssessor(cfg, jev_client=self.jev_client)
         seed_calibration_weights(self.impact_assessor.seed_weights)
         self.freshness_evaluator = FreshnessEvaluator(cfg)
         self.storyline_state_machine = StorylineStateMachine()
@@ -386,7 +391,7 @@ class Scheduler:
             summarizer=self.summarizer,
             similarity_fn=self.freshness_evaluator.score_text_to_historical_cluster,
         )
-        self.editorial_planner = EditorialPlanner(cfg)
+        self.editorial_planner = EditorialPlanner(cfg, jev_client=self.jev_client)
         self.publisher = TelegramPublisher(cfg)
         self.renderer = HtmlRenderer(
             output_dir=cfg.output.get("html_dir", "output"),
@@ -398,6 +403,8 @@ class Scheduler:
             google_site_verification=cfg.google_site_verification,
             bing_site_verification=cfg.bing_site_verification,
             schedule_timezone=cfg.schedule.get("timezone", "Europe/Warsaw"),
+            url_prefix=str(cfg.output.get("url_prefix", "") or ""),
+            beta_mode=bool(cfg.output.get("beta_mode", False)),
         )
         self.renderer.day_navigation_cfg = cfg.output.get("day_navigation", {}) if isinstance(cfg.output, dict) else {}
         english_cfg = cfg.output.get("english", {}) if isinstance(cfg.output, dict) else {}
@@ -650,6 +657,9 @@ class Scheduler:
             phase_name = "SHADOW_PUBLISH" if shadow else ("PUBLISH_STAGE" if not push_after_render else "PUBLISH")
             logger.info("=== %s phase started ===", phase_name)
             today = report_date or date.today()
+            jev_client = getattr(self, "jev_client", None)
+            if jev_client is not None:
+                jev_client.begin_run(today.isoformat())
 
             if articles_override is None:
                 existing_article_ids = get_report_article_ids(today.isoformat())
@@ -720,6 +730,27 @@ class Scheduler:
             clusters = self.cluster_validator.validate(clusters)
             logger.info("Event cluster validation stage: %d clusters after validation", len(clusters))
 
+            # Phase 0: every validated cluster is a real clustering decision, even
+            # when it is later dropped by the candidate window, freshness gate, or
+            # editorial selection. Mark all of their articles as consumed now;
+            # otherwise they stay unclustered and are fed back into the next
+            # publish, which both distorts the candidate set and dominates LLM
+            # clustering cost. Stored clusters keep their per-cluster marking below.
+            if not shadow:
+                consumed_ids = sorted({
+                    article.id
+                    for cluster in clusters
+                    for article in cluster.articles
+                    if article.id is not None
+                })
+                if consumed_ids:
+                    mark_articles_clustered(consumed_ids)
+                    logger.info(
+                        "Clustering consumption: marked %d articles as clustered across %d validated clusters",
+                        len(consumed_ids),
+                        len(clusters),
+                    )
+
             hot_cfg = self.cfg.output.get("hot_topics", {}) if isinstance(self.cfg.output, dict) else {}
             impact_cfg = (self.cfg.editorial_values or {}).get("impact", {})
             # Bound the impact-evaluation window by the local cross-source signal
@@ -740,6 +771,9 @@ class Scheduler:
 
             # Impact evaluation — the selection brain.
             _run_llm_stage(today.isoformat(), self.impact_assessor.assess_clusters, candidate_clusters)
+            audit = getattr(self.impact_assessor, "audit_importance", None)
+            if audit is not None:
+                audit(candidate_clusters, report_date=today.isoformat())
 
             if hot_cfg.get("enabled", False):
                 history_window_days = hot_cfg.get("history_window_days", 5)
@@ -907,10 +941,14 @@ class Scheduler:
                 stats["new"], stats["developing"], stats["stale"], stats["rejected"],
             )
 
-            base_plan = self.editorial_planner.base_plan(kept_summaries)
+            base_plan = self.editorial_planner.base_plan(kept_summaries, report_date=today.isoformat())
             # 今日正能量 is the feelgood dimension of the same impact evaluation.
             positive_summaries = select_positive_summaries(kept_summaries, self.cfg)
-            plan = self.editorial_planner.finalize(base_plan, positive_summaries=positive_summaries)
+            plan = self.editorial_planner.finalize(
+                base_plan,
+                positive_summaries=positive_summaries,
+                report_date=today.isoformat(),
+            )
             hot_topics = plan.hot_topics
             regular_summaries = plan.regular_summaries
             positive_summaries = plan.positive_summaries
@@ -1025,10 +1063,13 @@ class Scheduler:
                 ]
                 publish_summaries.extend(positive_summaries)
                 publish_summaries.extend(regular_summaries)
-                await self.publisher.publish(
-                    publish_summaries,
-                    today,
-                )
+                if getattr(self, "beta_mode", False):
+                    logger.info("Beta mode: skipping Telegram publish for %s", today.isoformat())
+                else:
+                    await self.publisher.publish(
+                        publish_summaries,
+                        today,
+                    )
                 logger.info(
                     "Report latest promotion: %s",
                     "updated latest symlink" if total_story_count > 0 else "kept dated-only output; latest unchanged",
@@ -1236,18 +1277,28 @@ class Scheduler:
                 CronTrigger.from_crontab(delta_collect_cron, timezone=llm_processing_tz),
                 "collect_delta",
             )
-        _add_scheduler_job(
-            sched,
-            partial(self.publish, push_after_render=False),
-            CronTrigger.from_crontab(publish_cron, timezone=llm_processing_tz),
-            "publish_stage",
-        )
-        _add_scheduler_job(
-            sched,
-            self.push,
-            CronTrigger.from_crontab(push_cron, timezone=tz),
-            "push_daily",
-        )
+        if getattr(self, "beta_mode", False):
+            # Beta renders straight to its own output and never sends Telegram;
+            # production keeps the staged-report -> push hand-off.
+            _add_scheduler_job(
+                sched,
+                partial(self.publish, push_after_render=True),
+                CronTrigger.from_crontab(publish_cron, timezone=llm_processing_tz),
+                "publish_beta",
+            )
+        else:
+            _add_scheduler_job(
+                sched,
+                partial(self.publish, push_after_render=False),
+                CronTrigger.from_crontab(publish_cron, timezone=llm_processing_tz),
+                "publish_stage",
+            )
+            _add_scheduler_job(
+                sched,
+                self.push,
+                CronTrigger.from_crontab(push_cron, timezone=tz),
+                "push_daily",
+            )
 
         # ─── Evolution loop (feedback → calibration → memory; retention) ──────
         evolution = self.cfg.evolution if isinstance(self.cfg.evolution, dict) else {}

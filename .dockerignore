@@ -4,6 +4,8 @@
 !.env.example
 data/
 output/
+data-beta/
+output-beta/
 logs/
 *.log
 .venv/

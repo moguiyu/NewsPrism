@@ -34,7 +34,7 @@ llm:
   # 0731 snapshot: the un-dated slug still serves the older 2026-04-23 build
   # (verified 2026-09-09 via OpenRouter /models). Actual billing still varies
   # by serving endpoint; llm_telemetry records the measured cost per call.
-  fallback_model: openai/deepseek/deepseek-v4-flash-0731
+  fallback_model: openai/deepseek/deepseek-v4.1-flash-1017
   # Stage-specific cheaper/free primary models. Leave empty to use the default
   # model for that stage. dots-3-note-preview:free is the only free model
   # verified (2026-09-08) to return valid JSON within the small per-stage
@@ -45,6 +45,39 @@ llm:
     storyline_name: "openai/dots-studio/dots-3-note-preview:free"
     summary_rewrite: ""
     seeker_verify: "openai/dots-studio/dots-3-note-preview:free"
+
+# ─── JEV DECISION MODEL (beta A/B) ─────────────────────────────────────────────
+# TypeSafe Jev via OpenRouter. Bounded editorial decisions only; never used for
+# summaries, translations or generated labels. Production keeps enabled=false;
+# the beta stack enables it with shadow=false. Every call is fail-open and
+# recorded in jev_call_events.
+jev:
+  enabled: false
+  shadow: true
+  model: "typesafe/jev-1.14"
+  base_url: "https://openrouter.ai/api/alpha/decisions"
+  api_key_env: "OPENROUTER_API_KEY"
+  timeout_seconds: 6.0
+  max_retries: 1
+  max_requests_per_run: 220
+  max_input_tokens_per_run: 900000
+  stages:
+    display_dedup:
+      enabled: true
+      similarity_min: 0.62
+      rule_confidence_max: 0.88
+      max_pairs: 90
+      merge_threshold: 0.76
+      veto_threshold: 0.34
+    hot_topics:
+      enabled: true
+      max_families: 8
+    importance:
+      enabled: true
+      max_clusters: 70
+    seeker:
+      enabled: true
+      reject_below: 0.14
 
 # ─── EVOLUTION (P2) ─────────────────────────────────────────────────────────────
 evolution:

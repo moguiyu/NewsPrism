@@ -1223,6 +1223,25 @@ class ActiveSeeker:
             return registry_identity
         if registry_reason:
             return CandidateIdentity()
+        jev = getattr(self, "jev_client", None)
+        if stage == "country" and jev is not None and jev.stage_enabled("seeker"):
+            probability = jev.score_candidate_event(
+                article_title=article.title,
+                article_content=article.content,
+                cluster_titles=[target.evidence_text or target.label],
+                target_label=target.label,
+            )
+            threshold = float(jev.stage_options("seeker").get("reject_below", 0.14))
+            if probability is not None:
+                logger.info(
+                    "Jev candidate event match: p=%.2f host=%s target=%s shadow=%s",
+                    probability,
+                    host,
+                    target.label,
+                    bool(getattr(jev, "shadow", True)),
+                )
+                if probability < threshold and not bool(getattr(jev, "shadow", True)):
+                    return CandidateIdentity()
         required = "official_web or official_social" if stage == "official" else "country_editorial"
         prompt = (
             "Verify one news-search candidate for a missing event voice. Return JSON only. "

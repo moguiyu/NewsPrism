@@ -3269,3 +3269,39 @@ def test_english_gaps_names_the_non_chinese_source_summary(renderer):
     assert len(reasons) == 1
     assert reasons[0].startswith("non_chinese_source_summary=1:")
     assert "Technology" in reasons[0]
+
+
+class TestBetaEdition:
+    def test_beta_render_is_chinese_only_prefixed_and_noindexed(self, tmp_path):
+        cluster = ArticleCluster(
+            topic_category="国际时政",
+            articles=[
+                Article(
+                    url="https://example.com/beta",
+                    title="Beta story",
+                    source_name="Reuters",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Beta story body",
+                    origin_region="us",
+                )
+            ],
+        )
+        summary = ClusterSummary(
+            cluster=cluster,
+            summary="**测试报道**\n\n这是测试正文。",
+            summary_en="Beta body",
+        )
+        renderer = HtmlRenderer(
+            output_dir=str(tmp_path),
+            template_dir="templates",
+            url_prefix="/beta",
+            beta_mode=True,
+        )
+        html_path = renderer.render([summary], date(2026, 10, 21))
+        html = html_path.read_text(encoding="utf-8")
+
+        assert 'href="/beta/' in html
+        assert '<meta name="robots" content="noindex,nofollow" />' in html
+        assert 'data-lang="en">' not in html
+        assert not (tmp_path / "cn" / "2026-10-21").exists()
+        assert (tmp_path / "latest").is_symlink()
