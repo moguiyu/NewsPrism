@@ -802,6 +802,36 @@ def test_freshness_new_when_no_history():
     assert result.state == "new"
 
 
+def test_freshness_stale_when_no_history_and_all_articles_older_than_24h():
+    evaluator = FreshnessEvaluator(_config())
+    cluster = _freshness_cluster(9, datetime(2026, 3, 13, 9, tzinfo=timezone.utc))
+    result = evaluator.evaluate(
+        cluster,
+        "Old event summary",
+        [],
+        date(2026, 3, 15),
+        now=datetime(2026, 3, 15, 12, tzinfo=timezone.utc),
+    )
+    assert result.state == "stale"
+    assert result.continues_cluster_id is None
+
+
+def test_freshness_new_when_no_history_and_one_article_is_recent():
+    evaluator = FreshnessEvaluator(_config())
+    cluster = _freshness_cluster(9, datetime(2026, 3, 13, 9, tzinfo=timezone.utc))
+    cluster.articles.append(_article("fresh angle", [1.0, 0.0]))
+    cluster.articles[-1].id = 10
+    cluster.articles[-1].published_at = datetime(2026, 3, 15, 9, tzinfo=timezone.utc)
+    result = evaluator.evaluate(
+        cluster,
+        "Old event summary",
+        [],
+        date(2026, 3, 15),
+        now=datetime(2026, 3, 15, 12, tzinfo=timezone.utc),
+    )
+    assert result.state == "new"
+
+
 def test_freshness_developing_when_new_article_and_new_source(monkeypatch):
     evaluator = FreshnessEvaluator(_config())
     monkeypatch.setattr(evaluator, "_compute_embedding", lambda text: __import__("numpy").array([1.0, 0.0]))

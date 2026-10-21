@@ -2907,9 +2907,12 @@
             <div class="positive-reason">{{ bilingual_text(c.positive_reason, c.positive_reason_en or c.positive_reason) }}</div>
             {% endif %}
             <div class="card-summary">{{ bilingual_text(c.summary, c.summary_en or c.summary) }}</div>
+            {% if c.perspective_preview %}
+            <div class="card-preview">{{ bilingual_text('视角差异：' ~ c.perspective_preview, 'Perspective split: ' ~ (c.perspective_preview_en or c.perspective_preview)) }}</div>
+            {% endif %}
           </div>
           {% if c.footer_sources %}
-          <div class="card-footer">
+          <div class="card-footer{% if c.has_expandable_perspectives %} is-expandable{% endif %}">
             <div class="source-row">
               <div class="source-chips">
                 {% for src in c.footer_sources %}
@@ -2924,7 +2927,36 @@
                 {% endif %}
                 {% endfor %}
               </div>
+              {% if c.has_expandable_perspectives %}
+              <div class="footer-actions">
+                <button class="expand-link" type="button" aria-expanded="false" onclick="toggleAllPerspectives(this,'panel-container-positive-{{ c.positive_seq_index }}')">
+                  {{ bilingual_text('查看 ' ~ c.distinct_perspective_count ~ ' 个视角', 'View ' ~ c.distinct_perspective_count ~ ' angles') }}
+                </button>
+              </div>
+              {% endif %}
             </div>
+          </div>
+          {% endif %}
+          {% if c.has_expandable_perspectives %}
+          <div class="persp-panel" id="panel-container-positive-{{ c.positive_seq_index }}">
+            {% for group in c.grouped_perspectives %}
+            <div class="persp-item">
+              <div class="persp-line">
+                <span class="persp-src">
+                  {% for src in group.sources %}
+                  {% if src.url and not src.is_placeholder %}
+                  <a href="{{ src.url }}" target="_blank" rel="noopener">
+                    {{ source_chip_body(src) }}
+                  </a>
+                  {% else %}
+                  <span{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>{{ source_chip_body(src) }}</span>
+                  {% endif %}
+                  {% endfor %}
+                </span>
+                <span class="persp-angle" title="{{ group.perspective }}">{{ bilingual_text(group.perspective, group.perspective_en or group.perspective) }}</span>
+              </div>
+            </div>
+            {% endfor %}
           </div>
           {% endif %}
         </article>

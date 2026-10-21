@@ -67,6 +67,7 @@ jev:
       similarity_min: 0.62
       rule_confidence_max: 0.88
       max_pairs: 90
+      cross_family_max_pairs: 12
       merge_threshold: 0.76
       veto_threshold: 0.34
     hot_topics:

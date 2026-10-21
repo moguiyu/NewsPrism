@@ -219,6 +219,12 @@ class EditorialPlanner:
         hot_topics = _strip_summaries_from_families(base_plan.hot_topics, positive_ids)
         focus_storylines = _strip_summaries_from_families(base_plan.focus_storylines, positive_ids)
         regular_summaries = split_positive_energy_lane(base_plan.regular_summaries, positive)
+        output_cfg = getattr(self, "cfg", None)
+        beta_mode = bool(
+            output_cfg.output.get("beta_mode", False)
+            if output_cfg is not None and isinstance(output_cfg.output, dict)
+            else False
+        )
         hot_topics, focus_storylines, regular_summaries, positive = resolve_display_duplicates(
             hot_topics,
             focus_storylines,
@@ -226,9 +232,36 @@ class EditorialPlanner:
             positive,
             jev_client=getattr(self, "jev_client", None),
             report_date=report_date,
+            cross_family_same_event=beta_mode,
         )
+        # A tab is admitted with >=2 members, but display dedup can remove
+        # members afterwards. Never ship a one-member tab: the survivor is a
+        # standalone story and belongs in the main lane.
+        multi_member_tabs: list[dict[str, object]] = []
+        demoted: list[ClusterSummary] = []
+        for family in hot_topics:
+            members = family.get("summaries", [])
+            if not isinstance(members, list):
+                continue
+            if len(members) >= 2:
+                multi_member_tabs.append(family)
+            else:
+                demoted.extend(summary for summary in members if isinstance(summary, ClusterSummary))
+        if demoted:
+            if hasattr(self, "cfg"):
+                regular_summaries = _rank_main_summaries(
+                    regular_summaries + demoted,
+                    self.cfg,
+                    len(regular_summaries) + len(demoted),
+                )
+            else:
+                regular_summaries = sorted(
+                    regular_summaries + demoted,
+                    key=_jev_adjusted_composite,
+                    reverse=True,
+                )
         return EditorialReportPlan(
-            hot_topics=hot_topics,
+            hot_topics=multi_member_tabs,
             focus_storylines=focus_storylines,
             regular_summaries=regular_summaries,
             positive_summaries=positive,
@@ -702,12 +735,19 @@ def _merge_duplicate_summary(target: ClusterSummary, duplicate: ClusterSummary, 
             for article in target.cluster.articles
             if is_real_article(article) and article.origin_region
         }
+        real_sources = {
+            article.source_name
+            for article in target.cluster.articles
+            if is_real_article(article) and article.source_name
+        }
         # The merged card gained articles/sources after the impact assessment
         # produced its evidence line; leaving the original counts in place made
         # the reader-facing "N 个来源、M 个地区" contradict the source list.
+        # Count real articles only: cluster.sources also carries placeholder
+        # outlet names, which must not inflate the reader-facing source count.
         target.evidence_summary = re.sub(
             r"^\s*\d+\s*个来源、\d+\s*个地区",
-            f"{len(target.cluster.sources)} 个来源、{len(regions)} 个地区",
+            f"{len(real_sources)} 个来源、{len(regions)} 个地区",
             target.evidence_summary,
             count=1,
         )
@@ -772,6 +812,44 @@ def _filter_family_summaries(families: list[dict[str, object]], keep_ids: set[in
     return filtered
 
 
+_CROSS_FAMILY_TOKEN_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "that", "this", "news", "update",
+    "美国", "中国", "全球", "今日", "最新", "消息", "报道", "事件", "表示", "已经",
+})
+
+
+def _event_entity_tokens(summary: ClusterSummary) -> set[str]:
+    headline = _extract_markdown_headline(summary.summary) or summary.cluster.topic_category
+    text = f"{headline}\n{summary.summary}"
+    tokens = {
+        token.lower()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9.\-]{2,}", text)
+        if token.lower() not in _CROSS_FAMILY_TOKEN_STOPWORDS
+    }
+    for sequence in re.findall(r"[\u4e00-\u9fff]{2,8}", text):
+        for size in (2, 3, 4):
+            tokens.update(
+                sequence[index : index + size]
+                for index in range(0, len(sequence) - size + 1)
+                if sequence[index : index + size] not in _CROSS_FAMILY_TOKEN_STOPWORDS
+            )
+    return tokens
+
+
+def _cross_family_same_event_candidate(left: ClusterSummary, right: ClusterSummary, similarity: float) -> bool:
+    """Cheap recall-only candidate for beta's cross-family Jev adjudication.
+
+    Embedding similarity can stay below the normal dedup floor when one family
+    key absorbs one framing and another key absorbs a sibling framing (SpaceX
+    101 vs 78 on 2026-10-21). Require a plausible similarity plus at least two
+    shared surface entities; Jev still decides, and this only runs in beta.
+    """
+    if similarity < 0.40:
+        return False
+    shared = _event_entity_tokens(left) & _event_entity_tokens(right)
+    return len(shared) >= 2
+
+
 def resolve_display_duplicates(
     hot_topics: list[dict[str, object]],
     focus_storylines: list[dict[str, object]],
@@ -779,6 +857,8 @@ def resolve_display_duplicates(
     positive_summaries: list[ClusterSummary],
     jev_client=None,
     report_date=None,
+    *,
+    cross_family_same_event: bool = False,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary], list[ClusterSummary]]:
     displayed = _flatten_display_summaries(hot_topics, focus_storylines, regular_summaries, positive_summaries)
     positive_ids = {id(summary) for summary in positive_summaries}
@@ -804,8 +884,10 @@ def resolve_display_duplicates(
 
     suppressed_ids: set[int] = set()
     jev_pairs = 0
+    cross_family_pairs = 0
     jev_cfg = jev_client.stage_options("display_dedup") if jev_client is not None else {}
     jev_max_pairs = max(0, int(jev_cfg.get("max_pairs", 0))) if jev_cfg else 0
+    cross_family_max_pairs = max(0, int(jev_cfg.get("cross_family_max_pairs", 0))) if jev_cfg else 0
     jev_sim_min = float(jev_cfg.get("similarity_min", 0.62)) if jev_cfg else 0.62
     jev_rule_max = float(jev_cfg.get("rule_confidence_max", 0.88)) if jev_cfg else 0.88
     jev_merge = float(jev_cfg.get("merge_threshold", 0.76)) if jev_cfg else 0.76
@@ -848,15 +930,30 @@ def resolve_display_duplicates(
                 )
                 if not same_event_inside_family:
                     continue
+            cross_family_candidate = False
+            if (
+                cross_family_same_event
+                and not is_family_pair
+                and not duplicate
+                and cross_family_pairs < cross_family_max_pairs
+                and _cross_family_same_event_candidate(left, right, confidence)
+            ):
+                cross_family_candidate = True
+                cross_family_pairs += 1
             # Jev adjudicates only the uncertain band: rule-duplicates below the
             # high-confidence bar can be vetoed, and near-threshold pairs the
             # embedding missed can be merged. High-confidence rules and family
-            # members stay deterministic.
+            # members stay deterministic. In beta, cross-family entity-overlap
+            # candidates below the embedding floor are also sent to Jev.
             if (
                 jev_client is not None
                 and not is_family_pair
                 and jev_pairs < jev_max_pairs
-                and (duplicate and confidence <= jev_rule_max or (not duplicate and confidence >= jev_sim_min))
+                and (
+                    duplicate and confidence <= jev_rule_max
+                    or (not duplicate and confidence >= jev_sim_min)
+                    or cross_family_candidate
+                )
             ):
                 jev_pairs += 1
                 probability = jev_client.adjudicate_duplicate(

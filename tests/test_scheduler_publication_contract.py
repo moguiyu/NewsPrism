@@ -12,11 +12,30 @@ from newsprism.runtime.scheduler import (
     Scheduler,
     _drop_blocked_summaries,
     _is_real_article,
+    _render_funnel_drop_reasons,
     _run_llm_stage,
     _summary_publication_rejection,
 )
 from newsprism.service.llm_telemetry import tracked_completion
 from newsprism.types import Article, ArticleCluster, ClusterSummary, EditorialReportPlan
+
+
+def test_render_funnel_reasons_name_duplicate_and_unselected_ids():
+    duplicate = _summary()
+    duplicate.cluster_db_id = 1
+    duplicate.duplicate_action = "suppressed"
+    duplicate.duplicate_reason = "shared_article_url"
+    unselected = _summary()
+    unselected.cluster_db_id = 2
+    rendered = _summary()
+    rendered.cluster_db_id = 3
+
+    reasons = _render_funnel_drop_reasons([duplicate, unselected, rendered], {3})
+
+    assert reasons == {
+        1: "display_duplicate:shared_article_url",
+        2: "not_selected",
+    }
 
 
 def _summary(
@@ -281,7 +300,7 @@ def _runtime_scheduler(monkeypatch, tmp_path: Path):
     scheduler.storyline_resolver = SimpleNamespace(resolve=lambda *args, **kwargs: None)
     scheduler.storyline_state_machine = SimpleNamespace(apply=lambda *args, **kwargs: None)
     scheduler.freshness_evaluator = SimpleNamespace(
-        classify_all=lambda items, historical, report_date=None: [
+        classify_all=lambda items, historical, report_date=None, **kwargs: [
             (summary.cluster, summary.summary, SimpleNamespace(state="new", continues_cluster_id=None))
             for summary in summaries
         ]

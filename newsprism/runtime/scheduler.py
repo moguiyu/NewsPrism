@@ -15,7 +15,7 @@ import re
 import shutil
 import time
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -218,6 +218,31 @@ def _telegram_cluster_ids(payload: dict) -> list[int]:
         if isinstance(card, dict) and isinstance(card.get("cluster_id"), int):
             ids.add(card["cluster_id"])
     return sorted(ids)
+
+
+def _render_funnel_drop_reasons(
+    kept_summaries: list[ClusterSummary],
+    rendered_ids: set[int],
+) -> dict[int, str]:
+    """Explain each kept-but-unrendered cluster id.
+
+    Display dedup marks a suppressed summary with ``duplicate_action`` and a
+    machine reason. Everything else that survived the freshness gate but not
+    editorial selection is reported as ``not_selected`` rather than leaving the
+    id unexplained.
+    """
+    reasons: dict[int, str] = {}
+    for summary in kept_summaries:
+        cluster_id = summary.cluster_db_id
+        if cluster_id is None or cluster_id in rendered_ids:
+            continue
+        action = getattr(summary, "duplicate_action", "kept")
+        if action == "suppressed":
+            detail = getattr(summary, "duplicate_reason", "") or "duplicate"
+            reasons[cluster_id] = f"display_duplicate:{detail}"
+        else:
+            reasons[cluster_id] = "not_selected"
+    return reasons
 
 
 def _drop_blocked_summaries(
@@ -869,6 +894,7 @@ class Scheduler:
                 [(cs.cluster, cs.summary) for cs in summaries],
                 historical,
                 today,
+                now=datetime.now(getattr(self, "tz", timezone.utc)),
             )
 
             # Filter out stale clusters and store freshness metadata
@@ -1005,12 +1031,14 @@ class Scheduler:
                     if isinstance(summary, ClusterSummary) and summary.cluster_db_id is not None:
                         rendered_ids.add(summary.cluster_db_id)
             dropped_ids = sorted(kept_ids - rendered_ids)
+            dropped_reasons = _render_funnel_drop_reasons(kept_summaries, rendered_ids)
             logger.info(
-                "Render funnel: kept=%d rendered=%d dropped=%d dropped_ids=%s",
+                "Render funnel: kept=%d rendered=%d dropped=%d dropped_ids=%s dropped_reasons=%s",
                 len(kept_ids),
                 len(rendered_ids),
                 len(dropped_ids),
                 dropped_ids,
+                dropped_reasons,
             )
             hot_storyline_keys = {
                 str(family.get("macro_topic_key", ""))

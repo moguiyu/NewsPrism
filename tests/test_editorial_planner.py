@@ -484,6 +484,33 @@ def test_display_dedup_keeps_related_but_distinct_at_064():
     assert len(regular) == 2
 
 
+def test_finalize_demotes_hot_family_left_with_one_member_after_dedup():
+    """A two-member tab can lose one member to display dedup. It must not ship
+    as a one-member tab; the survivor returns to the regular lane."""
+    from newsprism.service.editorial_planner import EditorialPlanner
+    from newsprism.types import EditorialReportPlan
+
+    kept = _summary("法国示威部署军队", 0.8, url="https://wire.example/fr")
+    duplicate = _summary("法国示威部署警力", 0.7, url="https://wire.example/fr")
+    base = EditorialReportPlan(
+        hot_topics=[{
+            "macro_topic_key": "fr",
+            "macro_topic_name": "法国骚乱与宵禁",
+            "macro_topic_name_full": "法国骚乱与宵禁",
+            "storyline_key": "fr",
+            "summaries": [kept, duplicate],
+            "member_count": 2,
+        }],
+        focus_storylines=[],
+        regular_summaries=[],
+        positive_summaries=[],
+    )
+    plan = EditorialPlanner.__new__(EditorialPlanner)
+    result = plan.finalize(base)
+    assert result.hot_topics == []
+    assert [s.cluster.topic_category for s in result.regular_summaries] == ["法国示威部署军队"]
+
+
 def test_finalize_positive_member_of_family_renders_in_positive_lane():
     """A positive pick that is also a storyline member must render once, in the
     positive lane — not be suppressed out of every lane by self-collision."""
@@ -726,6 +753,54 @@ def test_merge_refreshes_stale_evidence_summary_counts():
 
     assert regular == [kept]
     assert kept.evidence_summary == "2 个来源、2 个地区"
+
+
+def test_merge_evidence_counts_real_sources_only_ignore_placeholders():
+    shared = "https://wire.example/same-event"
+    kept = _summary("event one", 0.9, url=shared)
+    kept.cluster.sources = ["Reuters", "Missing Voice"]
+    kept.evidence_summary = "2 个来源、1 个地区"
+    dropped = _summary("event one update", 0.8, url=shared)
+    dropped.cluster.articles.append(
+        _article("event update detail", url="https://wire.example/update", region="gb")
+    )
+    dropped.cluster.articles[1].source_name = "BBC News"
+
+    _hot, _focus, regular, _positive = resolve_display_duplicates([], [], [kept, dropped], [])
+
+    assert regular == [kept]
+    assert kept.evidence_summary == "2 个来源、2 个地区"
+
+
+def test_beta_cross_family_candidate_lets_jev_merge_low_similarity_same_event():
+    class FakeJev:
+        shadow = False
+
+        def stage_options(self, stage):
+            return {
+                "max_pairs": 5,
+                "cross_family_max_pairs": 5,
+                "similarity_min": 0.62,
+                "rule_confidence_max": 0.88,
+                "merge_threshold": 0.76,
+                "veto_threshold": 0.34,
+            }
+
+        def adjudicate_duplicate(self, **kwargs):
+            return 0.91
+
+    left = _summary("SpaceX 星舰 发射 成功", 0.8, url="https://x.example/a", embedding=[1.0, 0.0])
+    right = _summary("SpaceX 星舰 发射 推迟", 0.7, url="https://y.example/b", embedding=[0.5, 0.866])
+    left.cluster.storyline_key = "family-a"
+    right.cluster.storyline_key = "family-b"
+
+    _hot, _focus, regular, _positive = resolve_display_duplicates(
+        [], [], [left, right], [], jev_client=FakeJev(), cross_family_same_event=True
+    )
+
+    assert regular == [left]
+    assert right.duplicate_action == "suppressed"
+    assert left.duplicate_action == "merged"
 
 
 def test_display_dedup_still_merges_same_event_across_different_storylines():

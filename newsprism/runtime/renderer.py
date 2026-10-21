@@ -337,6 +337,66 @@ _MILITARY_ESCALATION_RE = re.compile(
     r"strike|attack|drone|missile|military|border|Belarus|Zaporizhzhia)",
     re.IGNORECASE,
 )
+_HOT_LABEL_PLACE_GUARD_MODE = "shadow"
+_HOT_LABEL_SUPPORT_STOPWORDS = frozenset({
+    "袭击", "攻击", "打击", "空袭", "冲突", "爆炸", "发生", "遭遇", "目标",
+    "武装", "组织", "政府", "军队", "总统", "总统府", "总理", "总理府",
+    "全国", "地区", "边境", "港口", "机场",
+})
+_HOT_LABEL_PLACE_SUFFIX_RE = re.compile(
+    r"(.{2,8})(总统府|总理府|王宫|机场|港口|市|州|省|国|岛|港|湾|河|湖|海|地区|半岛|边境)$"
+)
+
+
+def _hot_topic_member_text(summaries: list[ClusterSummary]) -> str:
+    """Member evidence for label support, excluding the label fields.
+
+    ``short_topic_name``/``macro_topic_name``/``storyline_name`` are the very
+    values under review; including them would make every label support itself.
+    """
+    chunks: list[str] = []
+    for summary in summaries:
+        chunks.extend(
+            str(value)
+            for value in (
+                _extract_headline(summary.summary),
+                summary.summary,
+                summary.cluster.topic_category,
+            )
+            if value
+        )
+        chunks.extend(article.title for article in summary.cluster.articles[:5] if article.title)
+        chunks.extend(str(label) for label in getattr(summary, "storyline_anchor_labels", []) or [])
+    return re.sub(r"\s+", " ", "\n".join(chunks))
+
+
+def _hot_label_place_mismatch(name: str, summaries: list[ClusterSummary]) -> str | None:
+    """Return a place token when a place-ending tab label is absent from members.
+
+    Narrow by design: only labels ending in a place/institution noun are
+    checked, and only the last six characters before that noun are searched in
+    member headlines/body/anchors. This catches a recycled label such as
+    ``胡塞袭击亚丁总统府`` over Saudi strikes without turning the earlier
+    lexical-support heuristic (which mislabelled valid broad tabs) back on.
+    """
+    if not name or not summaries:
+        return None
+    match = _HOT_LABEL_PLACE_SUFFIX_RE.search(name)
+    if match is None:
+        return None
+    prefix = match.group(1)[-6:]
+    member_text = _hot_topic_member_text(summaries)
+    # The token immediately before the place/institution noun is the place;
+    # checking the whole prefix would match the actor ("胡塞") and mask a
+    # recycled place ("亚丁").
+    place = prefix[-2:]
+    if place in _HOT_LABEL_SUPPORT_STOPWORDS or place.endswith(("郊外", "附近", "周边")):
+        return None
+    if place in member_text:
+        return None
+    return place
+
+
 _NON_RU_UA_CONFLICT_RE = re.compile(
     r"(美以伊|伊朗|以色列|加沙|哈马斯|Iran|Israeli?|Gaza|Hamas)",
     re.IGNORECASE,
@@ -469,6 +529,17 @@ def _repair_hot_topic_label(
 ) -> tuple[str, str | None]:
     topic_name = _normalize_hot_topic_name(name, summaries[0] if summaries else None, max_chars)
     topic_name_en = (name_en or "").strip() or None
+    unsupported_place = _hot_label_place_mismatch(topic_name, summaries)
+    if unsupported_place:
+        # Shadow first: report only. The 2026-10-21 Houthi tab is the motivating
+        # case; enforcing a rewrite before a few editions of evidence would risk
+        # replacing valid labels whose place is phrased differently.
+        logger.warning(
+            "Hot label place guard (%s): label=%s unsupported_place=%s",
+            _HOT_LABEL_PLACE_GUARD_MODE,
+            topic_name,
+            unsupported_place,
+        )
     family_text = _hot_topic_family_text(summaries)
     is_ru_ua_escalation = _is_russia_ukraine_military_escalation(family_text)
     is_stale_refinery_label = bool(_REFINERY_RE.search(f"{topic_name}\n{topic_name_en or ''}"))

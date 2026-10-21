@@ -22,7 +22,7 @@ import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 
@@ -239,9 +239,12 @@ class FreshnessEvaluator:
         summary: str,
         historical_clusters: list[Cluster],
         report_date: date | None = None,
+        *,
+        now: datetime | None = None,
     ) -> FreshnessResult:
+        now = now or datetime.now(timezone.utc)
         if not historical_clusters or self.window_days <= 0:
-            return FreshnessResult(state="new")
+            return FreshnessResult(state=self._no_history_state(cluster, now))
 
         new_embedding = self._get_text_embedding(summary)
         best_match: Cluster | None = None
@@ -255,7 +258,10 @@ class FreshnessEvaluator:
                 best_match = hist
 
         if best_similarity < self.similarity_threshold or best_match is None:
-            return FreshnessResult(state="new", similarity_score=best_similarity)
+            return FreshnessResult(
+                state=self._no_history_state(cluster, now),
+                similarity_score=best_similarity,
+            )
 
         new_sources = list(set(cluster.sources) - set(best_match.perspectives.keys()))
         # A new outlet name is not evidence of a new development: re-collected
@@ -291,11 +297,31 @@ class FreshnessEvaluator:
         cluster_summaries: list[tuple[ArticleCluster, str]],
         historical_clusters: list[Cluster],
         report_date: date | None = None,
+        *,
+        now: datetime | None = None,
     ) -> list[tuple[ArticleCluster, str, FreshnessResult]]:
         return [
-            (cluster, summary, self.evaluate(cluster, summary, historical_clusters, report_date))
+            (cluster, summary, self.evaluate(cluster, summary, historical_clusters, report_date, now=now))
             for cluster, summary in cluster_summaries
         ]
+
+    @staticmethod
+    def _no_history_state(cluster: ArticleCluster, now: datetime) -> str:
+        """Reject an all-old cluster even when no similar history exists.
+
+        Similarity history answers "is this a new development of a known
+        story"; it cannot answer "was this published for today". A cluster with
+        no historical match used to sail through as ``new`` even when every
+        article was days old. Keep undated articles (legacy/placeholder rows)
+        on the old path; only a fully dated, fully old cluster is downgraded.
+        """
+        cutoff = now - timedelta(hours=24)
+        dated = [article.published_at for article in cluster.articles if article.published_at is not None]
+        if not dated:
+            return "new"
+        if all(published_at < cutoff for published_at in dated):
+            return "stale"
+        return "new"
 
     def score_text_to_historical_cluster(self, text: str, historical_cluster: Cluster) -> float:
         if not historical_cluster.summary:

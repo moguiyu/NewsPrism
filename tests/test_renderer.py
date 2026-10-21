@@ -15,6 +15,7 @@ from newsprism.runtime.renderer import (
     _broad_category,
     _chinese_label_fallback,
     _disambiguate_hot_topic_label,
+    _hot_label_place_mismatch,
     _is_public_chinese_hot_topic_name,
     _repair_hot_topic_label,
 )
@@ -1179,6 +1180,25 @@ class TestPerspectivesContext:
         assert payload["clusters"][0]["perspective_preview"]
         assert payload["clusters"][0]["has_expandable_perspectives"] is True
 
+    def test_hot_label_place_guard_detects_unsupported_place(self):
+        def summary(title, body):
+            return ClusterSummary(
+                cluster=ArticleCluster(
+                    topic_category="World News",
+                    articles=[Article(url=f"https://x.example/{title}", title=title, source_name="Wire", published_at=datetime.now(tz=timezone.utc), content=body)],
+                ),
+                summary=f"**{title}**\n\n{body}",
+                perspectives={},
+            )
+
+        saudi = summary("胡塞武装袭击沙特目标", "胡塞武装在48小时内袭击沙特多个目标，英国派出战机。")
+        aden = summary("亚丁总统府遭袭", "也门亚丁总统府附近发生爆炸。")
+
+        assert _hot_label_place_mismatch("胡塞袭击亚丁总统府", [saudi]) == "亚丁"
+        assert _hot_label_place_mismatch("亚丁总统府遭袭", [aden]) is None
+        # Shadow mode: the guard reports but does not rewrite the label.
+        assert _repair_hot_topic_label("胡塞袭击亚丁总统府", None, [saudi])[0] == "胡塞袭击亚丁总统府"
+
     def test_invalid_perspective_groups_are_suppressed(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
         summary = ClusterSummary(
@@ -2230,6 +2250,51 @@ class TestHotTopics:
         assert not tree.xpath('//*[@data-main-feed-card and contains(., "博物馆开放趣味新展")]')
         assert len(tree.xpath('//*[@id="positive-1"]//a[@href="https://bbc.com/fun-duplicate"]')) == 1
         assert len(tree.xpath('//*[@id="positive-1"]//a[contains(@class, "src-chip-link")]')) == 1
+
+    def test_positive_card_renders_reachable_perspective_panel(self, renderer, tmp_path):
+        renderer.output_dir = tmp_path
+        positive_summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="Culture",
+                articles=[
+                    Article(
+                        url="https://a.example/story",
+                        title="Museum opens a playful exhibition",
+                        source_name="Outlet A",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Culture body.",
+                    ),
+                    Article(
+                        url="https://b.example/story",
+                        title="Museum opens a playful exhibition",
+                        source_name="Outlet B",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="Culture body.",
+                    ),
+                ],
+            ),
+            summary="**博物馆开放趣味新展**\n\n新展面向家庭观众，互动项目轻松有趣。",
+            perspectives={
+                "Outlet A": "关注家庭观众体验",
+                "Outlet B": "关注展览的互动设计",
+            },
+        )
+        positive_summary.positive_energy_reason = "轻松文化好消息"
+        positive_summary.positive_energy_reason_en = "Light culture"
+
+        html_path = renderer.render([], date(2026, 3, 27), positive_summaries=[positive_summary])
+        html = html_path.read_text(encoding="utf-8")
+        payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+        card = payload["positive_stories"][0]
+
+        assert card["has_expandable_perspectives"] is True
+        assert card["distinct_perspective_count"] == 2
+        tree = lxml_html.fromstring(html)
+        assert tree.xpath('//*[@id="positive-1"]//button[contains(@class, "expand-link")]')
+        panel = tree.xpath('//*[@id="panel-container-positive-1"]')
+        assert panel
+        assert "关注家庭观众体验" in html
+        assert "关注展览的互动设计" in html
 
     def test_positive_only_source_language_content_does_not_enable_language_toggle(self, renderer, tmp_path):
         renderer.output_dir = tmp_path
