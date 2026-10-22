@@ -923,6 +923,46 @@ def test_merge_evidence_counts_real_sources_only_ignore_placeholders():
     assert kept.evidence_summary == "2 个来源、2 个地区"
 
 
+def test_merge_rechecks_pairs_whose_shared_url_arrived_with_the_merge():
+    """A merge can hand a card the URL it needed in order to be caught.
+
+    2026-10-22 beta: cards 127 and 129 both rendered the NPR/Davos article.
+    127 starts without it, so 127/129 is same-family and has no shared URL —
+    skipped. 127 then absorbs 126 (a *different* family, 0.84 similarity), which
+    is where the URL lived. 129 runs later in the outer loop and its only
+    remaining partner is already suppressed, so nothing re-tests 127/129 and the
+    article ships on two cards. Comparing every pair exactly once is only
+    correct if a card's article set never changes — and merging changes it.
+    """
+    shared = "https://www.npr.org/2026/10/21/nx-s1-6009545/davos-cancelled"
+
+    def member(title, composite, url, embedding, family):
+        summary = _summary(title, composite, url=url, embedding=embedding)
+        summary.cluster.storyline_key = family
+        summary.cluster.storyline_role = "core"
+        summary.cluster.storyline_membership_status = "core"
+        return summary
+
+    absorber = member("美国撤离驻沙特人员", 0.80, "https://example.com/a",
+                      [1.0, 0.0, 0.0], "single-a204a995")
+    same_family = member("胡塞袭击亚丁", 0.60, shared,
+                         [0.0, 1.0, 0.0], "single-a204a995")
+    carrier = member("美国撤离非必要人员", 0.75, shared,
+                     [0.84, 0.54, 0.0], "single-5ac314c2")
+
+    _h, _f, regular, _p = resolve_display_duplicates(
+        [], [], [absorber, same_family, carrier], []
+    )
+
+    surviving_urls = [
+        article.url for summary in regular for article in summary.cluster.articles
+    ]
+    assert surviving_urls.count(shared) == 1, (
+        f"shared URL survived on {surviving_urls.count(shared)} cards; "
+        f"survivors={[s.cluster.topic_category for s in regular]}"
+    )
+
+
 def test_beta_cross_family_candidate_lets_jev_merge_low_similarity_same_event():
     class FakeJev:
         shadow = False

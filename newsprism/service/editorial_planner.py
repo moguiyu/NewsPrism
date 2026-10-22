@@ -1270,6 +1270,44 @@ def resolve_display_duplicates(
             )
             if suppressed is left:
                 break
+            # ``preferred`` just absorbed ``suppressed``'s articles, so it can
+            # now share a URL with a card it was already compared against — and
+            # that comparison happened before the merge, when the URL was not
+            # there yet. 2026-10-22 beta: 127 absorbed 126, the merge handed it
+            # the NPR/Davos URL that 129 also carries, but the 127/129 pair had
+            # already been dismissed, so both cards shipped the same story.
+            # Re-test against every surviving card, on either side of ``left``:
+            # ``left`` keeps absorbing later cards, so the partner that newly
+            # shares a URL is often one that has not been reached yet.
+            for candidate in displayed:
+                if id(preferred) in suppressed_ids:
+                    break
+                if candidate is preferred or candidate is suppressed:
+                    continue
+                if id(candidate) in suppressed_ids:
+                    continue
+                if not (_summary_urls(candidate) & _summary_urls(preferred)):
+                    continue
+                candidate_positive = id(candidate) in positive_ids
+                preferred_positive = id(preferred) in positive_ids
+                if candidate_positive != preferred_positive:
+                    winner = candidate if candidate_positive else preferred
+                else:
+                    winner = _prefer_summary(candidate, preferred)
+                loser = preferred if winner is candidate else candidate
+                _merge_duplicate_summary(
+                    winner, loser, "shared_article_url", 0.95, source_regions
+                )
+                suppressed_ids.add(id(loser))
+                logger.info(
+                    "Display duplicate suppressed after merge: kept='%s' suppressed='%s' reason=shared_article_url",
+                    _extract_markdown_headline(winner.summary) or winner.cluster.topic_category,
+                    _extract_markdown_headline(loser.summary) or loser.cluster.topic_category,
+                )
+                if loser is preferred:
+                    # The absorbing card was itself absorbed; nothing left to
+                    # re-test against.
+                    break
 
     keep_ids = {id(summary) for summary in displayed} - suppressed_ids
     kept_hot = _filter_family_summaries(hot_topics, keep_ids)
