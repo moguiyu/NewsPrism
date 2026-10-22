@@ -753,7 +753,12 @@ def test_translated_numeric_grounding_fails_closed_for_live_fragment(monkeypatch
     assert "certain number" not in (summary.summary_en or "").casefold()
     assert "70,000." not in (summary.summary_en or "")
     assert not summarizer._numeric_safety_violations(summary.summary_en or "")
-    assert summary.quality_status == "needs_review"
+    # The English text is sanitized and the miss is recorded against the
+    # translation only; the Chinese card still publishes (2026-10-22: 8421/8426
+    # were withheld from both editions by an English-only grounding miss).
+    assert "unsupported_numeric_claim" in summary.translation_quality_flags
+    assert summary.quality_status == "publishable"
+    assert "unsupported_numeric_claim" not in summary.quality_flags
 
 
 def test_canonical_number_distinguishes_comma_decimal_from_thousands():
@@ -862,11 +867,16 @@ def test_comma_decimal_evidence_rejects_a_tenfold_overstatement(monkeypatch):
 
     matching = build("The restructuring will cost $2.8 billion.")
     summarizer._enforce_translated_numeric_grounding(matching)
-    assert "unsupported_numeric_claim" not in matching.quality_flags
+    assert "unsupported_numeric_claim" not in matching.translation_quality_flags
 
     overstated = build("The restructuring will cost $28 billion.")
     summarizer._enforce_translated_numeric_grounding(overstated)
-    assert "unsupported_numeric_claim" in overstated.quality_flags
+    # An English-only grounding miss is recorded on the translation, never on
+    # ``quality_flags``/``quality_status``: those decide whether the Chinese
+    # card publishes (2026-10-22 withheld 8421/8426 that way).
+    assert "unsupported_numeric_claim" in overstated.translation_quality_flags
+    assert "unsupported_numeric_claim" not in overstated.quality_flags
+    assert overstated.quality_status == "publishable"
 
 
 def test_summarize_cluster_keeps_raw_output_when_structured_parse_fails(monkeypatch):

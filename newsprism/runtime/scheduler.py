@@ -78,6 +78,7 @@ from newsprism.service.collector import Collector
 from newsprism.service.dedup import Deduplicator
 from newsprism.service.editorial_planner import (
     EditorialPlanner,
+    readmit_hot_topic_families,
     select_positive_summaries,
     select_report_clusters,
 )
@@ -999,6 +1000,24 @@ class Scheduler:
                     "Post-translation gate withheld %d summary: %s",
                     len(post_gate_dropped),
                     "; ".join(post_gate_dropped),
+                )
+
+            # Tab admission ran before dedup and before this gate, so a family
+            # can now hold one card or have lost its quota to a family that
+            # dedup folded away. Re-decide admission from the survivors so the
+            # page never ships a "topic" with a single story nor hides a real
+            # multi-story family in the main lane.
+            hot_topics, regular_summaries, demoted, promoted = readmit_hot_topic_families(
+                hot_topics,
+                regular_summaries,
+                self.cfg,
+            )
+            if demoted or promoted:
+                logger.info(
+                    "Hot-topic re-admission: tabs=%d demoted=%d promoted=%d",
+                    len(hot_topics),
+                    len(demoted),
+                    len(promoted),
                 )
 
             hot_topic_story_count = sum(

@@ -19,6 +19,7 @@ import litellm
 from pydantic import BaseModel, Field
 
 from newsprism.config import Config
+from newsprism.service.evidence import evidence_summary_text
 from newsprism.service.language import looks_like_chinese_text
 from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.service.llm_telemetry import tracked_completion, tracked_completion_with_fallback
@@ -174,6 +175,12 @@ class Summarizer:
             "icon_allowlist",
             ["globe", "war", "trade", "chip", "ai", "energy"],
         )
+        # Configured outlet → region. Article rows only carry ``origin_region``
+        # for searched articles, so the evidence line needs this fallback to
+        # report how many regions a card actually covers.
+        self.source_regions = {
+            source.name: source.region for source in getattr(cfg, "sources", []) or []
+        }
 
         style_file = Path(cfg.summarizer.get("style_guide_file", "config/style-guide.md"))
         self.style_guide = style_file.read_text(encoding="utf-8") if style_file.exists() else ""
@@ -342,13 +349,11 @@ class Summarizer:
     def _cluster_metadata_kwargs(self, cluster: ArticleCluster) -> dict[str, object]:
         """Storyline/impact fields copied from the cluster onto its summary."""
         impact = getattr(cluster, "impact", None)
-        regions = {
-            article.origin_region
-            for article in cluster.articles
-            if article.origin_region and is_real_article(article)
-        }
+        # Same counting rules as the post-merge recount in the editorial
+        # planner: distinct real sources, and regions from the article's own
+        # origin or its configured source region.
         evidence_summary = (
-            f"{len(cluster.sources)} 个来源、{len(regions)} 个地区参与评估。"
+            evidence_summary_text(cluster, self.source_regions)
             if impact is not None
             else ""
         )
@@ -1537,7 +1542,17 @@ class Summarizer:
         )
 
     def _enforce_translated_numeric_grounding(self, summary: ClusterSummary) -> None:
-        """Apply the same numeric and malformed-output gate to English text."""
+        """Apply the numeric and malformed-output gate to the English text.
+
+        The verdict lands in ``translation_quality_flags``, never in
+        ``quality_flags``/``quality_status``: those decide whether the Chinese
+        card publishes, and an English-only grounding miss says nothing about
+        the Chinese summary being wrong. 2026-10-22 withheld clusters 8421 and
+        8426 for exactly that reason (Chinese "第三十一次" has no Arabic digits
+        for the English "31st" to match; "31.15 亿港元" does not string-match
+        "HK$3.115 billion"), dropping two correct stories from the Chinese
+        edition while the English edition never shipped them either.
+        """
         if not summary.summary_en:
             return
         translated_text = summary.summary_en
@@ -1559,14 +1574,15 @@ class Summarizer:
             for group in summary.grouped_perspectives_en:
                 if self._numeric_safety_violations(group.perspective):
                     group.perspective = self._fallback_perspective_text_en()
-        summary.quality_status = "needs_review"
-        if unsupported and "unsupported_numeric_claim" not in summary.quality_flags:
-            summary.quality_flags.append("unsupported_numeric_claim")
+        flags = summary.translation_quality_flags
+        if unsupported and "unsupported_numeric_claim" not in flags:
+            flags.append("unsupported_numeric_claim")
+        if "numeric_safety_failed" not in flags:
+            flags.append("numeric_safety_failed")
+        if unsupported:
             summary.contested_claims.extend(
                 claim for claim in unsupported if claim not in summary.contested_claims
             )
-        if "numeric_safety_failed" not in summary.quality_flags:
-            summary.quality_flags.append("numeric_safety_failed")
 
     def _format_articles(self, cluster: ArticleCluster) -> str:
         lines: list[str] = []

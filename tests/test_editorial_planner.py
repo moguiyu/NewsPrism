@@ -511,6 +511,157 @@ def test_finalize_demotes_hot_family_left_with_one_member_after_dedup():
     assert [s.cluster.topic_category for s in result.regular_summaries] == ["法国示威部署军队"]
 
 
+def test_readmit_demotes_tab_left_with_one_member_after_gate():
+    """A tab that lost a member to the post-translation gate must not ship.
+
+    2026-10-22: ``港股A股双双下跌`` shipped cluster 8427 alone because the gate
+    withheld 8426 after tab admission had already run. The survivor belongs in
+    the main lane, exactly like a dedup-shrunk tab.
+    """
+    from newsprism.service.editorial_planner import readmit_hot_topic_families
+
+    survivor = _storyline_summary("港股午盘下跌", 0.6, "single-b32161b3", role="core")
+    tab = {
+        "macro_topic_key": "single-b32161b3",
+        "macro_topic_name": "港股A股双双下跌",
+        "storyline_key": "single-b32161b3",
+        "summaries": [survivor],
+        "member_count": 1,
+    }
+
+    hot, regular, demoted, promoted = readmit_hot_topic_families(
+        [tab], [], _config()
+    )
+
+    assert hot == []
+    assert [summary.cluster.topic_category for summary in regular] == ["港股午盘下跌"]
+    assert demoted == [survivor]
+    assert promoted == []
+    assert survivor.is_hot_topic is False
+
+
+def test_readmit_promotes_starved_family_back_into_a_tab():
+    """A real multi-member family must win a tab back from a collapsed one.
+
+    2026-10-22: the third tab slot went to a family that display dedup then
+    folded away, so France (8438/8441, both ``core`` of
+    ``single-4acb7a74``) rendered as two unrelated main cards instead of a
+    topic. Re-admission regroups survivors, not the original admission set.
+    """
+    from newsprism.service.editorial_planner import readmit_hot_topic_families
+
+    fr_one = _storyline_summary("法国骚乱升级", 0.7, "single-4acb7a74", role="core")
+    fr_two = _storyline_summary("法国冲突归因争议", 0.6, "single-4acb7a74", role="core")
+    lone = _storyline_summary("乌克兰无人机袭击", 0.8, "single-188350cd", role="core")
+    collapsed_tab = {
+        "macro_topic_key": "single-188350cd",
+        "macro_topic_name": "美俄高层会谈与乌克兰",
+        "storyline_key": "single-188350cd",
+        "summaries": [lone],
+        "member_count": 1,
+    }
+
+    hot, regular, demoted, promoted = readmit_hot_topic_families(
+        [collapsed_tab], [fr_one, fr_two], _config()
+    )
+
+    assert [family["macro_topic_key"] for family in hot] == ["single-4acb7a74"]
+    assert [family["member_count"] for family in hot] == [2]
+    assert promoted == [fr_one, fr_two]
+    assert [summary.cluster.topic_category for summary in regular] == ["乌克兰无人机袭击"]
+    assert demoted == [lone]
+    # Promoted members must leave the main lane, or they render twice.
+    assert all(id(summary) not in {id(s) for s in promoted} for summary in regular)
+
+
+def test_readmit_keeps_existing_tab_order_and_does_not_reshuffle():
+    """Re-admission must not reorder tabs that survived intact.
+
+    Ordering is editorial: tab 1 is the lead story. Rebuilding from scratch
+    would let a larger but lower-ranked family jump to the top after every
+    render, so a surviving tab keeps the slot it already won.
+    """
+    from newsprism.service.editorial_planner import readmit_hot_topic_families
+
+    first_a = _storyline_summary("头题甲", 0.7, "single-aaaa", role="core")
+    first_b = _storyline_summary("头题乙", 0.6, "single-aaaa", role="core")
+    second_a = _storyline_summary("次题甲", 0.9, "single-bbbb", role="core")
+    second_b = _storyline_summary("次题乙", 0.8, "single-bbbb", role="core")
+    second_c = _storyline_summary("次题丙", 0.75, "single-bbbb", role="core")
+    tabs = [
+        {"macro_topic_key": "single-aaaa", "macro_topic_name": "头题", "summaries": [first_a, first_b]},
+        {"macro_topic_key": "single-bbbb", "macro_topic_name": "次题",
+         "summaries": [second_a, second_b, second_c]},
+    ]
+
+    hot, regular, demoted, promoted = readmit_hot_topic_families(tabs, [], _config())
+
+    assert [family["macro_topic_key"] for family in hot] == ["single-aaaa", "single-bbbb"]
+    assert promoted == []
+    assert demoted == []
+    assert regular == []
+
+
+def test_readmit_preserves_translated_tab_labels():
+    """Re-admission runs after translation and must not drop the ``*_en`` keys.
+
+    Losing them makes ``_english_gaps`` report ``untranslated_family_label`` and
+    withholds the whole English edition for a tab that was translated fine.
+    """
+    from newsprism.service.editorial_planner import readmit_hot_topic_families
+
+    one = _storyline_summary("法国骚乱升级", 0.7, "single-4acb7a74", role="core")
+    two = _storyline_summary("法国冲突归因争议", 0.6, "single-4acb7a74", role="core")
+    tab = {
+        "macro_topic_key": "single-4acb7a74",
+        "macro_topic_name": "法国骚乱与宵禁",
+        "macro_topic_name_en": "French riots and curfew",
+        "storyline_name_en": "French riots and curfew",
+        "macro_topic_name_full_en": "French riots and curfew",
+        "summaries": [one, two],
+        "member_count": 2,
+    }
+
+    hot, _regular, _demoted, _promoted = readmit_hot_topic_families([tab], [], _config())
+
+    assert hot[0]["macro_topic_name_en"] == "French riots and curfew"
+    assert hot[0]["storyline_name_en"] == "French riots and curfew"
+
+
+def test_readmit_skips_new_tab_when_translation_lacks_its_label():
+    """The English edition is all-or-nothing, so a new tab must be translatable.
+
+    If a family wins a tab only after the translation stage already ran, its
+    label has no English counterpart; lifting it into a tab makes
+    ``_english_gaps`` report ``untranslated_family_label`` and withholds the whole
+    English edition. Keep it in the main lane instead.
+    """
+    from newsprism.service.editorial_planner import readmit_hot_topic_families
+
+    one = _storyline_summary("法国骚乱升级", 0.7, "single-4acb7a74", role="core")
+    two = _storyline_summary("法国冲突归因争议", 0.6, "single-4acb7a74", role="core")
+    cfg = _config()
+    cfg.output["english"] = {"enabled": True}
+    translated_existing = {
+        "macro_topic_key": "single-other",
+        "macro_topic_name": "既有专题",
+        "macro_topic_name_en": "Existing topic",
+        "storyline_name_en": "Existing topic",
+        "summaries": [],
+        "member_count": 2,
+    }
+
+    hot, regular, _demoted, _promoted = readmit_hot_topic_families(
+        [translated_existing], [one, two], cfg
+    )
+
+    assert hot == []
+    assert {summary.cluster.articles[0].title for summary in regular} == {
+        "法国骚乱升级",
+        "法国冲突归因争议",
+    }
+
+
 def test_finalize_positive_member_of_family_renders_in_positive_lane():
     """A positive pick that is also a storyline member must render once, in the
     positive lane — not be suppressed out of every lane by self-collision."""

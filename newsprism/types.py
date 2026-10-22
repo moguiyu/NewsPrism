@@ -387,6 +387,13 @@ class ClusterSummary:
     quality_status: str = "unknown"
     quality_score: float = 0.0
     quality_flags: list[str] = field(default_factory=list)
+    # Translation-stage verdicts. Kept apart from ``quality_flags`` on purpose:
+    # those flags gate publication of the Chinese card, and the English text is
+    # a translation of it. A grounding miss that only exists after translation
+    # (Chinese "第三十一次" → English "31st", "31.15 亿港元" → "HK$3.115 billion")
+    # must not withhold a correct Chinese story — it only downgrades the English
+    # copy, which ``_english_gaps`` can then leave out of the English edition.
+    translation_quality_flags: list[str] = field(default_factory=list)
     confirmed_claims: list[str] = field(default_factory=list)
     contested_claims: list[str] = field(default_factory=list)
     evidence_summary: str = ""

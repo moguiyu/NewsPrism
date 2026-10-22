@@ -1365,6 +1365,12 @@ class HtmlRenderer:
             "quality_score": round(float(getattr(summary, "quality_score", 0.0) or 0.0), 3),
             "quality_status": getattr(summary, "quality_status", "unknown"),
             "quality_flags": list(getattr(summary, "quality_flags", []) or []),
+            # English-only verdicts, kept out of ``quality_flags`` so they cannot
+            # withhold the Chinese card. Surfaced here so a review can see that a
+            # shipped English body was sanitized (2026-10-22: 8421/8426).
+            "translation_quality_flags": list(
+                getattr(summary, "translation_quality_flags", []) or []
+            ),
             "confirmed_claims": list(getattr(summary, "confirmed_claims", []) or []),
             "contested_claims": list(getattr(summary, "contested_claims", []) or []),
             "evidence_summary": getattr(summary, "evidence_summary", ""),

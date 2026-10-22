@@ -237,6 +237,17 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
         quality_status="publishable",
         body=publishable_body,
     )
+    # A tab needs at least two surviving members: post-render re-admission
+    # demotes a one-member "topic" back to the main lane (2026-10-22, cluster
+    # 8427 shipped alone under 港股A股双双下跌). Keep this fixture a real tab so
+    # the test still asserts what it is about — focus storylines staying out of
+    # the public report.
+    hot_summary_two = _summary(
+        _cluster("Hot follow-up", storyline_key="hot", storyline_name="热点"),
+        "Hot follow-up",
+        quality_status="publishable",
+        body=publishable_body,
+    )
     # Left non-publishable on purpose: excluding the focus storyline from the
     # public report is exactly what this test asserts.
     focus_summary = _summary(_cluster("Focus", storyline_key="focus", storyline_name="兼容主线"), "Focus")
@@ -253,7 +264,7 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
         quality_status="publishable",
         body=publishable_body,
     )
-    summaries = [hot_summary, focus_summary, regular_summary, positive_summary]
+    summaries = [hot_summary, hot_summary_two, focus_summary, regular_summary, positive_summary]
 
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.cfg = cfg
@@ -293,7 +304,12 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
     scheduler.summarizer.translate_report_content = translate_report_content
 
     plan = EditorialReportPlan(
-        hot_topics=[{"macro_topic_key": "hot", "macro_topic_name": "热点", "summaries": [hot_summary]}],
+        hot_topics=[{
+            "macro_topic_key": "hot",
+            "macro_topic_name": "热点",
+            "summaries": [hot_summary, hot_summary_two],
+            "member_count": 2,
+        }],
         focus_storylines=[{"storyline_key": "focus", "storyline_name": "兼容主线", "summaries": [focus_summary]}],
         regular_summaries=[regular_summary],
         positive_summaries=[positive_summary],
@@ -346,14 +362,20 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
 
     assert render_calls
     _, render_kwargs = render_calls[0]
-    assert render_kwargs["hot_topics"] == plan.hot_topics
+    # Re-admission rebuilds the family dict, so compare the tab's identity and
+    # membership rather than dict identity.
+    rendered_tabs = render_kwargs["hot_topics"]
+    assert [tab["macro_topic_key"] for tab in rendered_tabs] == ["hot"]
+    assert [
+        summary.cluster.articles[0].title for summary in rendered_tabs[0]["summaries"]
+    ] == ["Hot", "Hot follow-up"]
     assert render_kwargs["focus_storylines"] == []
     assert render_kwargs["positive_summaries"] == [positive_summary]
 
-    assert published == [hot_summary, positive_summary, regular_summary]
+    assert published == [hot_summary, hot_summary_two, positive_summary, regular_summary]
     assert focus_summary not in published
     assert "focus storyline" not in caplog.text
-    assert "3 kept stories after freshness (1 regular main, 1 positive, 1 hot topic stories)" in caplog.text
+    assert "4 kept stories after freshness (1 regular main, 1 positive, 2 hot topic stories)" in caplog.text
 
 
 def _positive_summary(

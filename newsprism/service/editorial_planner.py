@@ -18,6 +18,7 @@ import numpy as np
 
 from newsprism.config import Config
 from newsprism.service.categories import normalize_display_category
+from newsprism.service.evidence import evidence_counts
 from newsprism.service.perspectives import canonicalize_perspective_groups
 from newsprism.types import ArticleCluster, ClusterSummary, EditorialReportPlan, is_real_article
 
@@ -185,6 +186,12 @@ class EditorialPlanner:
     def __init__(self, cfg: Config, jev_client=None) -> None:
         self.cfg = cfg
         self.jev_client = jev_client
+        # Source name -> configured region, for the evidence region fallback.
+        # Only searched articles carry ``origin_region``; organically collected
+        # ones do not, so without this every card reported "0 个地区".
+        self.source_regions = {
+            source.name: source.region for source in (getattr(cfg, "sources", None) or [])
+        }
 
     def base_plan(
         self,
@@ -233,6 +240,7 @@ class EditorialPlanner:
             jev_client=getattr(self, "jev_client", None),
             report_date=report_date,
             cross_family_same_event=beta_mode,
+            source_regions=getattr(self, "source_regions", None),
         )
         # A tab is admitted with >=2 members, but display dedup can remove
         # members afterwards. Never ship a one-member tab: the survivor is a
@@ -519,30 +527,15 @@ def select_hot_topic_families(
     for position, key in enumerate(hot_keys, 1):
         # D3/D4: cap each family at max_items_per_topic; overflow is dropped.
         members = sorted(grouped[key], key=_jev_adjusted_composite, reverse=True)[:max_items_per_topic]
-        family_name = _normalize_storyline_name(
-            members[0].storyline_name or members[0].macro_topic_name,
-            members[0],
-            max_name_chars,
-        )
-        family_name_full = _normalize_storyline_name(
-            members[0].storyline_name or members[0].macro_topic_name,
-            members[0],
-            max_name_full_chars,
-        )
         hot_topics.append(
-            {
-                "dom_id": f"hot-topic-{position}",
-                "macro_topic_key": key,
-                "macro_topic_name": family_name,
-                "macro_topic_name_full": family_name_full,
-                "storyline_key": key,
-                "storyline_name": family_name,
-                "storyline_name_full": family_name_full,
-                "topic_icon_key": group_icons.get(key, _DEFAULT_HOT_TOPIC_ICON_KEY),
-                "anchor_labels": list(members[0].storyline_anchor_labels) if members else [],
-                "member_count": len(members),
-                "summaries": members,
-            }
+            _build_hot_topic_family(
+                key,
+                members,
+                position,
+                group_icons.get(key, _DEFAULT_HOT_TOPIC_ICON_KEY),
+                max_name_chars,
+                max_name_full_chars,
+            )
         )
 
     main_candidates = list(standalone)
@@ -646,6 +639,269 @@ def split_positive_energy_lane(
     return [summary for summary in main_summaries if id(summary) not in positive_ids]
 
 
+def _build_hot_topic_family(
+    key: str,
+    members: list[ClusterSummary],
+    position: int,
+    icon_key: str,
+    max_name_chars: int,
+    max_name_full_chars: int,
+) -> dict[str, object]:
+    """Assemble one hot-topic tab dict.
+
+    Extracted so a family rebuilt during re-admission (see
+    :func:`readmit_hot_topic_families`) is byte-identical to the one the first
+    pass would have produced.
+    """
+    lead = members[0] if members else None
+    source_name = (lead.storyline_name or lead.macro_topic_name) if lead else None
+    family_name = _normalize_storyline_name(source_name, lead, max_name_chars)
+    family_name_full = _normalize_storyline_name(source_name, lead, max_name_full_chars)
+    return {
+        "dom_id": f"hot-topic-{position}",
+        "macro_topic_key": key,
+        "macro_topic_name": family_name,
+        "macro_topic_name_full": family_name_full,
+        "storyline_key": key,
+        "storyline_name": family_name,
+        "storyline_name_full": family_name_full,
+        "topic_icon_key": icon_key,
+        "anchor_labels": list(lead.storyline_anchor_labels) if lead else [],
+        "member_count": len(members),
+        "summaries": members,
+    }
+
+
+def readmit_hot_topic_families(
+    hot_topics: list[dict[str, object]],
+    regular_summaries: list[ClusterSummary],
+    cfg: Config | None,
+    *,
+    min_members: int = 2,
+    max_topic_tabs: int | None = None,
+    max_items_per_topic: int | None = None,
+) -> tuple[list[dict[str, object]], list[ClusterSummary], list[ClusterSummary], list[ClusterSummary]]:
+    """Re-decide which storyline families own a tab, from the *surviving* set.
+
+    Tab admission happens before display dedup and before the post-translation
+    gate, so by render time a tab can be stale in two opposite ways:
+
+    * **Shrunk** — a two-member family loses a member and ships with one card
+      (2026-10-22 ``港股A股双双下跌`` shipped ``8427`` alone after the gate
+      withheld ``8426``). A single card is a standalone story, not a topic.
+    * **Starved** — the tab quota was spent on a family that later collapsed
+      into another card, so a surviving multi-member family never got a tab
+      (2026-10-22 France ``8438``/``8441``: quota went to ``single-c3664e0f``,
+      which dedup then merged into ``8415``).
+
+    Both are fixed by recomputing admission here instead of patching the two
+    symptoms separately.
+
+    Returns ``(hot_topics, regular_summaries, demoted, promoted)``. ``demoted``
+    are members released back to the main lane, ``promoted`` are summaries
+    pulled *out* of the main lane into a rebuilt tab, so callers can log the
+    move instead of letting it vanish into a count.
+    """
+    hot_cfg = cfg.output.get("hot_topics", {}) if cfg is not None and isinstance(cfg.output, dict) else {}
+    if max_topic_tabs is None:
+        max_topic_tabs = int(hot_cfg.get("max_topic_tabs", 3))
+    if max_items_per_topic is None:
+        max_items_per_topic = max(1, int(hot_cfg.get("max_items_per_topic", 10)))
+    max_name_chars = int(hot_cfg.get("tab_name_max_chars", 10))
+    max_name_full_chars = int(hot_cfg.get("tab_name_full_max_chars", 60))
+
+    # Keep each family's original icon and translations: re-admission decides
+    # *which* families own a tab, it does not restyle or untranslate them. This
+    # runs after the translation stage, so dropping the ``*_en`` keys here would
+    # withhold the entire English edition (``_english_gaps`` reports
+    # ``untranslated_family_label``).
+    icons: dict[str, str] = {}
+    translated_labels: dict[str, dict[str, str]] = {}
+    for family in hot_topics:
+        key = str(family.get("macro_topic_key") or family.get("storyline_key") or "")
+        if not key:
+            continue
+        icon = family.get("topic_icon_key")
+        if isinstance(icon, str) and icon:
+            icons.setdefault(key, icon)
+        for name, value in family.items():
+            if name.endswith("_en") and isinstance(value, str) and value:
+                translated_labels.setdefault(key, {}).setdefault(name, value)
+
+    # Group every surviving summary by its family key. Main-lane members join
+    # their family here: that is what lets a starved family be rebuilt, and it
+    # keeps the two lanes from holding half a family each.
+    families: dict[str, list[ClusterSummary]] = defaultdict(list)
+    family_order: dict[str, int] = {}
+    kept_main: list[ClusterSummary] = []
+    for summary in regular_summaries:
+        # ``_family_key`` — not ``_summary_is_hot_member`` — because the latter
+        # treats the literal default ``"none"`` as a role and so reports every
+        # summary as a non-member unless the role was copied over first.
+        key = _family_key(summary)
+        if not key:
+            kept_main.append(summary)
+            continue
+        family_order.setdefault(key, len(family_order))
+        families[key].append(summary)
+
+    # Fold the surviving tab members into the same buckets. A family that lost
+    # its quota to a collapsed family is only in the main lane, and must still
+    # be able to win a tab back here.
+    for family in hot_topics:
+        key = str(family.get("macro_topic_key") or family.get("storyline_key") or "")
+        if not key:
+            continue
+        members = [
+            summary
+            for summary in family.get("summaries", []) or []
+            if isinstance(summary, ClusterSummary)
+        ]
+        if not members:
+            continue
+        bucket = families.setdefault(key, [])
+        known = {id(summary) for summary in bucket}
+        bucket.extend(summary for summary in members if id(summary) not in known)
+        family_order.setdefault(key, len(family_order))
+
+    admitted: dict[str, list[ClusterSummary]] = {
+        key: members for key, members in families.items() if len(members) >= min_members
+    }
+
+    # Rank surviving families. A tab that still has two members keeps the slot
+    # it already won (that admission may have come from Jev ranking); families
+    # that never had one compete for whatever slots collapse freed, largest
+    # first, then by strongest member.
+    prior_rank: dict[str, int] = {}
+    for position, family in enumerate(hot_topics):
+        key = str(family.get("macro_topic_key") or family.get("storyline_key") or "")
+        if key:
+            prior_rank.setdefault(key, position)
+    unranked = len(hot_topics)
+    ranked = sorted(
+        admitted.items(),
+        key=lambda item: (
+            prior_rank.get(item[0], unranked),
+            -min(len(item[1]), max_items_per_topic),
+            -max(_jev_adjusted_composite(summary) for summary in item[1]),
+            family_order.get(item[0], 0),
+        ),
+    )
+    # A family that wins a tab after translation has no stored English label, and
+    # the English edition is all-or-nothing: a tab without ``macro_topic_name_en``
+    # makes ``_english_gaps`` report ``untranslated_family_label`` and withholds
+    # the whole edition. Recover the label from the lead member (translated in
+    # the same pass, same source string) and skip the promotion if even that is
+    # missing, rather than silently costing the English edition.
+    english_enabled = bool(
+        (cfg.output.get("english") or {}).get("enabled", False)
+        if cfg is not None and isinstance(cfg.output, dict)
+        else False
+    )
+    # Only enforce the label rule once the translation stage has actually run:
+    # before it, every tab legitimately has no ``*_en`` key yet.
+    translations_present = any(translated_labels.values())
+
+    def _labels_for(key: str, members: list[ClusterSummary]) -> dict[str, str]:
+        stored = translated_labels.get(key, {})
+        if stored.get("macro_topic_name_en") and stored.get("storyline_name_en"):
+            return stored
+        lead = max(members, key=_jev_adjusted_composite)
+        inherited = str(lead.storyline_name_en or lead.macro_topic_name_en or "").strip()
+        if not inherited:
+            return stored
+        merged = dict(stored)
+        merged.setdefault("macro_topic_name_en", inherited)
+        merged.setdefault("storyline_name_en", inherited)
+        merged.setdefault("macro_topic_name_full_en", inherited)
+        merged.setdefault("storyline_name_full_en", inherited)
+        return merged
+
+    admitted_labels: dict[str, dict[str, str]] = {}
+    for key, members in ranked:
+        labels = _labels_for(key, members)
+        # Only a *new* tab needs a label it never had. A tab that already shipped
+        # keeps its slot: demoting it would not fix the missing translation, and
+        # it would silently move stories between lanes.
+        if (
+            english_enabled
+            and translations_present
+            and key not in prior_rank
+            and not labels.get("macro_topic_name_en")
+        ):
+            logger.warning(
+                "Hot-topic re-admission skipped key=%s: no English tab label after translation",
+                key,
+            )
+            continue
+        admitted_labels[key] = labels
+
+    selected = [(key, members) for key, members in ranked if key in admitted_labels][:max_topic_tabs]
+    selected_keys = {key for key, _members in selected}
+
+    was_hot = {
+        id(summary)
+        for family in hot_topics
+        for summary in (family.get("summaries") or [])
+        if isinstance(summary, ClusterSummary)
+    }
+
+    in_tab: list[ClusterSummary] = []
+    rebuilt: list[dict[str, object]] = []
+    for position, (key, members) in enumerate(selected, 1):
+        members = sorted(members, key=_jev_adjusted_composite, reverse=True)[:max_items_per_topic]
+        in_tab.extend(members)
+        family = _build_hot_topic_family(
+            key,
+            members,
+            position,
+            icons.get(key, _DEFAULT_HOT_TOPIC_ICON_KEY),
+            max_name_chars,
+            max_name_full_chars,
+        )
+        family.update(admitted_labels.get(key, {}))
+        rebuilt.append(family)
+    released: list[ClusterSummary] = [
+        summary
+        for key, members in families.items()
+        if key not in selected_keys
+        for summary in members
+    ]
+
+    promoted_ids = {id(summary) for summary in in_tab}
+    # ``promoted`` is reported, not internal: only summaries that actually moved
+    # from the main lane into a tab, so the log line stays meaningful.
+    promoted = [summary for summary in in_tab if id(summary) not in was_hot]
+    # Main lane = survivors that were never in a tab, minus anyone promoted
+    # into one, plus members of families that lost their tab.
+    next_main = [summary for summary in kept_main if id(summary) not in promoted_ids]
+    seen = {id(summary) for summary in next_main}
+    rejoined = [
+        summary
+        for summary in released
+        if id(summary) not in seen and id(summary) not in promoted_ids
+    ]
+    if rejoined:
+        # Released members rejoin the lane ranked the same way the first pass
+        # ranked it, so a demoted card does not silently sink to the bottom.
+        next_main = (
+            _rank_main_summaries(next_main + rejoined, cfg, len(next_main) + len(rejoined))
+            if cfg is not None
+            else sorted(next_main + rejoined, key=_jev_adjusted_composite, reverse=True)
+        )
+    for summary in in_tab:
+        summary.is_hot_topic = True
+        summary.cluster.is_hot_topic = True
+    for summary in released:
+        summary.is_hot_topic = False
+        summary.cluster.is_hot_topic = False
+
+    # Only members that were in a tab before count as demoted; the rest merely
+    # never had one, and reporting them as demotions would be misleading.
+    moved_out = [summary for summary in released if id(summary) in was_hot]
+    return rebuilt, next_main, moved_out, promoted
+
+
 def _strip_summaries_from_families(
     families: list[dict[str, object]],
     drop_ids: set[int],
@@ -688,7 +944,13 @@ def _prefer_summary(left: ClusterSummary, right: ClusterSummary) -> ClusterSumma
     return left if left_rank >= right_rank else right
 
 
-def _merge_duplicate_summary(target: ClusterSummary, duplicate: ClusterSummary, reason: str, confidence: float) -> None:
+def _merge_duplicate_summary(
+    target: ClusterSummary,
+    duplicate: ClusterSummary,
+    reason: str,
+    confidence: float,
+    source_regions: dict[str, str] | None = None,
+) -> None:
     seen_urls = {article.url for article in target.cluster.articles}
     for article in duplicate.cluster.articles:
         if article.url in seen_urls:
@@ -730,24 +992,16 @@ def _merge_duplicate_summary(target: ClusterSummary, duplicate: ClusterSummary, 
     }
 
     if target.evidence_summary:
-        regions = {
-            article.origin_region
-            for article in target.cluster.articles
-            if is_real_article(article) and article.origin_region
-        }
-        real_sources = {
-            article.source_name
-            for article in target.cluster.articles
-            if is_real_article(article) and article.source_name
-        }
         # The merged card gained articles/sources after the impact assessment
         # produced its evidence line; leaving the original counts in place made
         # the reader-facing "N 个来源、M 个地区" contradict the source list.
-        # Count real articles only: cluster.sources also carries placeholder
-        # outlet names, which must not inflate the reader-facing source count.
+        # Count real articles only (cluster.sources also carries placeholder
+        # outlet names) and use the same region lookup as ``evidence.py``, so
+        # the two producers cannot drift again.
+        sources, regions = evidence_counts(target.cluster, source_regions)
         target.evidence_summary = re.sub(
             r"^\s*\d+\s*个来源、\d+\s*个地区",
-            f"{len(real_sources)} 个来源、{len(regions)} 个地区",
+            f"{sources} 个来源、{regions} 个地区",
             target.evidence_summary,
             count=1,
         )
@@ -859,6 +1113,7 @@ def resolve_display_duplicates(
     report_date=None,
     *,
     cross_family_same_event: bool = False,
+    source_regions: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary], list[ClusterSummary]]:
     displayed = _flatten_display_summaries(hot_topics, focus_storylines, regular_summaries, positive_summaries)
     positive_ids = {id(summary) for summary in positive_summaries}
@@ -1002,7 +1257,9 @@ def resolve_display_duplicates(
             else:
                 preferred = _prefer_summary(left, right)
             suppressed = right if preferred is left else left
-            _merge_duplicate_summary(preferred, suppressed, reason, confidence)
+            _merge_duplicate_summary(
+                preferred, suppressed, reason, confidence, source_regions
+            )
             suppressed_ids.add(id(suppressed))
             logger.info(
                 "Display duplicate suppressed: kept='%s' suppressed='%s' reason=%s confidence=%.2f",
