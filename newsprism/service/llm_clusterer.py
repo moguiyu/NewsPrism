@@ -85,12 +85,61 @@ def _parse_cluster_entries(raw_content: str) -> list[dict[str, Any]]:
     return entries
 
 
+def _coerce_ids(value: Any) -> list[Any]:
+    """Normalize the model's ``ids`` field into a list.
+
+    The prompt asks for ``"ids": [0, 1, 4]`` but models sometimes emit a bare
+    scalar (``"ids": 5``) or an object (``"ids": {"id": 5}``). A scalar used to
+    reach ``for idx in ids`` and abort the whole chunk with ``'int' object is
+    not iterable`` (2026-10-22, 59 articles), so every article in that chunk
+    lost its event grouping until the retry.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        flat: list[Any] = []
+        for item in value:
+            if isinstance(item, dict):
+                inner = item.get("id")
+                if inner is not None:
+                    flat.append(inner)
+            else:
+                flat.append(item)
+        return flat
+    if isinstance(value, dict):
+        return [value.get("id")] if value.get("id") is not None else []
+    if isinstance(value, (int, float, str)):
+        return [value]
+    return []
+
+
+def _coerce_index(value: Any) -> int | None:
+    """Return a usable article index, or None.
+
+    Accepts ``3`` and ``"3"``; rejects ``True``/``False`` (``isinstance(x, int)``
+    would accept them as 1/0 and silently claim the wrong article), floats,
+    and anything non-numeric.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _build_clusters(entries: list[dict[str, Any]], articles: list[Article]) -> list[ArticleCluster]:
     result: list[ArticleCluster] = []
     n = len(articles)
     assigned: set[int] = set()
     for entry in entries:
-        ids = entry.get("ids", [])
+        ids = _coerce_ids(entry.get("ids", []))
         if not ids:
             continue
         # One article belongs to one event cluster. If the model emits the
@@ -98,9 +147,10 @@ def _build_clusters(entries: list[dict[str, Any]], articles: list[Article]) -> l
         # later duplicate assignments are dropped.
         valid_indices: list[int] = []
         seen_in_entry: set[int] = set()
-        for idx in ids:
+        for raw_idx in ids:
+            idx = _coerce_index(raw_idx)
             if (
-                isinstance(idx, int)
+                idx is not None
                 and 0 <= idx < n
                 and idx not in assigned
                 and idx not in seen_in_entry

@@ -2731,13 +2731,15 @@
    Placeholders (missing regional perspectives) render muted with a tooltip
    carrying the failure reason; flat styling, no card/lift/shadow per AGENTS.md. #}
 {% macro source_chip_body(src) -%}
-{% if src.region_code %}<span class="region-code">{{ src.region_code }}</span> {% endif %}{% if src.is_searched %}{{ icon('ui-searched') }}{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ src.source }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
+{% if src.region_code %}<span class="region-code">{{ src.region_code }}</span> {% endif %}{% if src.is_searched %}{{ icon('ui-searched') }}{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ bilingual_text(src.source, src.compact_label_en or src.source) }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
 {%- endmacro %}
 
 <body>
 {{ icon_sprite }}
 
-  <h1 class="sr-only">NewsPrism · {{ report_date_display }} {{ day_name }} 全球新闻多角度解读</h1>
+  {# Screen readers announce the active language, so the document heading needs
+     the edition's own text, not the Chinese one behind a data-lang-en span. #}
+  <h1 class="sr-only">{{ bilingual_text("NewsPrism · " ~ report_date_display ~ " " ~ day_name ~ " 全球新闻多角度解读", "NewsPrism · " ~ report_date_display_en ~ " " ~ day_name_en ~ " Global news, multiple perspectives") }}</h1>
 
   <div class="mobile-brand-bar">
     <a class="logo" href="{{ home_href }}" aria-label="NewsPrism latest edition" title="NewsPrism latest edition">NewsPrism</a>

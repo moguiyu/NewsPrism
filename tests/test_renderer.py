@@ -378,7 +378,9 @@ class TestPerspectivesContext:
         assert '<meta name="twitter:card" content="summary_large_image"' in html
         # Exactly one <h1> describing the edition
         assert html.count("<h1") == 1
-        assert "<h1 class=\"sr-only\">NewsPrism · 2026年08月13日" in html
+        # The heading is bilingual markup now (screen readers announce the
+        # active language), so assert the Chinese text inside its span.
+        assert '<h1 class="sr-only"><span data-lang-zh>NewsPrism · 2026年08月13日' in html
         # JSON-LD NewsArticle structured data
         assert '<script type="application/ld+json">' in html
         assert '"@type": "NewsArticle"' in html
@@ -865,6 +867,57 @@ class TestPerspectivesContext:
         assert payload["default_language"] == "zh"
         assert payload["clusters"][0]["headline_en"] == "English Headline"
         assert "English summary content." in payload["clusters"][0]["summary_en"]
+
+    def test_english_h1_is_translated_and_placeholder_chips_are_bilingual(
+        self, renderer, tmp_path
+    ):
+        """The English page must not show a Chinese-only h1 or chip text.
+
+        2026-10-22: the ``sr-only`` h1 stayed ``NewsPrism · 2026年10月22日 周四
+        全球新闻多角度解读`` on the English edition (screen readers announce that
+        language), and ``<em class="source-placeholder-text">[France声音待补]</em>``
+        printed Chinese on the English page even though the redirect detail next
+        to it was translated.
+        """
+        renderer.output_dir = tmp_path
+        placeholder = Article(
+            url="placeholder:fr:fr-story",
+            title="待补充：France声音",
+            source_name="[France声音待补]",
+            published_at=datetime.now(tz=timezone.utc),
+            content="",
+            is_placeholder=True,
+            origin_region="fr",
+            search_acceptance_reason="not_related_country_source",
+        )
+        summary = ClusterSummary(
+            cluster=ArticleCluster(
+                topic_category="French unrest",
+                articles=[
+                    Article(
+                        url="https://lemonde.fr/story",
+                        title="French unrest story",
+                        source_name="Le Monde",
+                        published_at=datetime.now(tz=timezone.utc),
+                        content="French unrest body.",
+                    ),
+                    placeholder,
+                ],
+            ),
+            summary="**法国骚乱升级**\n\n法国骚乱持续。",
+            summary_en="**French unrest escalates**\n\nUnrest continues in France.",
+            perspectives={},
+        )
+
+        html_path = renderer.render([summary], date(2026, 10, 22))
+        html = html_path.read_text(encoding="utf-8")
+
+        assert '<span data-lang-en>NewsPrism · Oct 22, 2026' in html
+        assert (
+            '<em class="source-placeholder-text">'
+            '<span data-lang-zh>[France声音待补]</span>'
+            '<span data-lang-en>[France voice pending]</span></em>'
+        ) in html
 
     def test_render_includes_duplicate_audit_metadata(self, renderer, tmp_path):
         renderer.output_dir = tmp_path

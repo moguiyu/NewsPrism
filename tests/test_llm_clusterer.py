@@ -206,6 +206,37 @@ def test_build_clusters_assigns_each_article_only_once():
     assert all(len({id(a) for a in cluster.articles}) == len(cluster.articles) for cluster in clusters)
 
 
+def test_build_clusters_tolerates_scalar_ids_instead_of_crashing():
+    """A scalar ``ids`` value must not abort the whole chunk.
+
+    2026-10-22: one chunk of 59 articles failed with ``'int' object is not
+    iterable`` because the model returned ``{"ids": 5}`` instead of
+    ``{"ids": [5]}``. The chunk was retried as halves and the run continued, but
+    every article in it lost its event grouping for that pass. Accept the
+    plausible scalar shapes and skip anything that cannot be an index.
+    """
+    from newsprism.service.llm_clusterer import _build_clusters
+
+    articles = [_article(index) for index in range(4)]
+    entries = [
+        {"label": "scalar id", "ids": 1},
+        {"label": "string id", "ids": "2"},
+        {"label": "dict entries", "ids": [{"id": 3}]},
+        {"label": "garbage", "ids": "not-a-number"},
+        {"label": "null ids", "ids": None},
+    ]
+
+    clusters = _build_clusters(entries, articles)
+
+    assert [cluster.topic_category for cluster in clusters] == [
+        "scalar id",
+        "string id",
+        "dict entries",
+    ]
+    covered = {article.title for cluster in clusters for article in cluster.articles}
+    assert covered == {"Event 1", "Event 2", "Event 3"}
+
+
 def test_salvage_follows_up_only_with_uncovered_articles(monkeypatch):
     clusterer = LLMClusterer(_config())
     articles = [_article(index) for index in range(6)]
