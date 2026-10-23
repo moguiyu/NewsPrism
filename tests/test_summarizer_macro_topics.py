@@ -761,6 +761,83 @@ def test_translated_numeric_grounding_fails_closed_for_live_fragment(monkeypatch
     assert "unsupported_numeric_claim" not in summary.quality_flags
 
 
+def test_english_headline_fallback_strips_instead_of_discarding_the_title():
+    """An English numeric miss must degrade the headline, not erase it.
+
+    2026-10-23: five of eighteen English headlines shipped as the bare
+    placeholder ``Related report: specific figures remain unverified`` because
+    ``_safe_headline_without_unsupported_values`` short-circuited on
+    ``language == "en"``. The Chinese path strips the unsupported values and
+    keeps the story; English threw the whole title away, so readers got cards
+    with no headline at all. Batch A unmasked this: before it, the English miss
+    also set ``quality_status=needs_review`` and the card was withheld entirely.
+    """
+    headline = "Houthi attack on Saudi airport kills 2, claims strike on Defense Ministry"
+
+    result = Summarizer._safe_headline_without_unsupported_values(
+        headline, ["2"], language="en"
+    )
+
+    assert result != Summarizer._SAFE_HEADLINE_FALLBACK_EN
+    assert "Houthi" in result
+    # The unsupported figure itself must not survive.
+    assert "2," not in result and "kills 2" not in result
+
+
+def test_english_headline_fallback_clears_the_dangling_predicate():
+    """Stripping "kills 2" must not leave "kills," behind.
+
+    The remnant is itself a malformed-numeric violation, so leaving it makes the
+    degraded headline fail the very check it was built to satisfy and bounce back
+    to the placeholder — the regression this branch fixes.
+    """
+    result = Summarizer._safe_headline_without_unsupported_values(
+        "Houthi attack on Saudi airport kills 2, group claims strike on Defense Ministry",
+        ["2"],
+        language="en",
+    )
+
+    assert "kills," not in result
+    assert result != Summarizer._SAFE_HEADLINE_FALLBACK_EN
+    assert not Summarizer._numeric_safety_violations(result)
+
+
+def test_english_numeric_fallback_end_to_end_keeps_a_usable_headline():
+    """The whole fallback path must not collapse a card with a real story."""
+    text = (
+        "**Houthi attack on Saudi airport kills 2, group claims strike on Defense Ministry**\n\n"
+        "Yemen's Houthi movement said it attacked King Fahd International Airport in eastern "
+        "Saudi Arabia, killing a Saudi citizen and an Indian resident and wounding 8 people."
+    )
+
+    out = Summarizer._safe_numeric_fallback(text, ["2"], language="en")
+
+    assert "Related report: specific figures remain unverified" not in out
+    assert "King Fahd" in out
+    assert "Houthi" in out.split("\n\n")[0]
+
+
+def test_english_headline_fallback_keeps_boilerplate_only_when_nothing_remains():
+    """A headline that is *only* an unsupported figure still has to fall back."""
+    result = Summarizer._safe_headline_without_unsupported_values(
+        "2,700", ["2,700"], language="en"
+    )
+    assert result == Summarizer._SAFE_HEADLINE_FALLBACK_EN
+
+
+def test_english_body_fallback_keeps_surviving_sentences_when_any_exists():
+    """Only the unsupported sentence goes; the rest of the English body stays."""
+    body = (
+        "Houthi fighters attacked an airport in eastern Saudi Arabia. "
+        "The strike killed 2 people and wounded 8. "
+        "The group also claimed attacks on the Defense Ministry in Riyadh."
+    )
+    result = Summarizer._safe_body_without_unsupported_values(body, ["2"], language="en")
+    assert "Houthi fighters attacked" in result
+    assert "Defense Ministry" in result
+    assert "killed 2" not in result
+
+
 def test_canonical_number_distinguishes_comma_decimal_from_thousands():
     """A lone comma followed by 1-2 digits is a decimal separator."""
     assert Summarizer._canonical_number("1,5") == 1.5

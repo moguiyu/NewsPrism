@@ -3314,6 +3314,74 @@ def test_english_gaps_names_summaries_missing_translation(renderer):
     assert gaps[0].startswith("missing_summary_en=1:")
 
 
+def test_payload_replaces_placeholder_english_headline_with_a_real_sentence(renderer):
+    """A sentinel headline must not reach the page, but the card must still ship.
+
+    2026-10-23: five of eighteen English headlines were the numeric-fallback
+    sentinel ``Related report: specific figures remain unverified``. Withholding
+    the edition over one thin headline would be worse than the bug, so the
+    headline is derived from the English body instead.
+    """
+    summary = _english_fixture(
+        "**Related report: specific figures remain unverified**\n\n"
+        "Houthi fighters attacked an airport in eastern Saudi Arabia. "
+        "The group also claimed strikes on the Defense Ministry."
+    )
+
+    payload, _ = renderer._build_cluster_payload(summary, 0, include_english=True)
+
+    assert payload["headline_en"]
+    assert "specific figures remain unverified" not in str(payload["headline_en"])
+    assert "Houthi" in str(payload["headline_en"])
+
+
+def test_payload_clears_placeholder_english_headline_when_body_is_placeholder_too(renderer):
+    """With no usable English text the template falls back to the Chinese title."""
+    summary = _english_fixture(
+        "**Related report: specific figures remain unverified**\n\n"
+        "The report describes the development, while specific figures remain unverified."
+    )
+
+    payload, _ = renderer._build_cluster_payload(summary, 0, include_english=True)
+
+    assert payload["headline_en"] is None
+
+
+def test_derived_english_headline_is_trimmed_to_headline_length(renderer):
+    """A promoted body sentence must not become a 150-character card title."""
+    summary = _english_fixture(
+        "**Related report: specific figures remain unverified**\n\n"
+        "Hours after saying it agreed to resume talks, Russia launched a large-scale missile "
+        "attack on Kyiv, killing at least two people and injuring more than twenty, with "
+        "targets including energy facilities, bridges and civilian buildings across the city."
+    )
+
+    payload, _ = renderer._build_cluster_payload(summary, 0, include_english=True)
+    headline = str(payload["headline_en"])
+
+    assert len(headline) <= 91
+    assert headline.endswith("…")
+    assert "Hours after saying" in headline
+
+
+def test_payload_clears_placeholder_english_body_so_template_falls_back(renderer):
+    """A sentinel body must fall back to Chinese, like a missing one does.
+
+    8461/8464 shipped ``The report describes the development, while specific
+    figures remain unverified.`` as the whole English body. The template already
+    falls back on a missing ``summary_en``; the sentinel just never looked missing.
+    """
+    summary = _english_fixture(
+        "**Related report: specific figures remain unverified**\n\n"
+        "The report describes the development, while specific figures remain unverified."
+    )
+
+    payload, _ = renderer._build_cluster_payload(summary, 0, include_english=True)
+
+    assert payload["summary_en"] is None
+    assert payload["headline_en"] is None
+
+
 def test_english_gaps_names_family_without_english_label(renderer):
     summary = _english_fixture("**Title**\n\nBody.")
     family = {

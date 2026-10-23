@@ -1378,6 +1378,14 @@ class Summarizer:
         r"\s*[.,。!?！？]",
         re.IGNORECASE,
     )
+    # A dangling predicate left behind when a stripped figure took its object:
+    # "airport kills 2, group says" -> "airport kills, group says". Without this
+    # the degraded headline still trips _numeric_safety_violations and bounces
+    # back to the placeholder (2026-10-23 English regression).
+    _LATIN_ORPHAN_VERB_PATTERN = re.compile(
+        r"\b(?:kills?|killed|deaths?|dead|injured?|wounds?|wounded|hurts?|hurt)\s*[,;:](?=\s|$)",
+        re.IGNORECASE,
+    )
     _MALFORMED_NUMERIC_REMNANT_PATTERN = re.compile(
         r"(?:超|超过|约|近|达|至少|至多|致|导致|造成)\s*"
         r"(?:例|病例|人|名|死亡|受伤|%|％|[，,。.!！？?])"
@@ -1431,12 +1439,19 @@ class Summarizer:
         unsupported: list[str],
         language: str = "zh",
     ) -> str:
-        if language == "en":
-            return cls._SAFE_HEADLINE_FALLBACK_EN
+        # English used to short-circuit here and return the bare placeholder for
+        # *any* numeric miss, which shipped five of eighteen cards with no
+        # headline at all on 2026-10-23 (8461/8464/8467/8447/8459). The Chinese
+        # path strips the offending figure and keeps the story; English must do
+        # the same and only fall back when nothing usable survives. Batch A
+        # exposed this by no longer withholding the whole card on an English miss.
+        fallback = (
+            cls._SAFE_HEADLINE_FALLBACK_EN if language == "en" else cls._SAFE_HEADLINE_FALLBACK
+        )
 
         candidate = cls._strip_unsupported_values(headline, unsupported)
         if not candidate:
-            return cls._SAFE_HEADLINE_FALLBACK
+            return fallback
 
         # Removing a quantity from phrases such as “致4人死亡” or “超3500例”
         # can leave a grammatical-looking but semantically broken remnant.
@@ -1446,10 +1461,20 @@ class Summarizer:
                 if marker_index > 1:
                     candidate = candidate[:marker_index].rstrip(" ，,、:：")
                     break
+        if language == "en":
+            # "kills 2," -> "kills," when the figure is stripped. The dangling
+            # verb is itself a malformed-numeric remnant, so leaving it makes the
+            # degraded headline fail the same safety check and bounce back to the
+            # placeholder — the exact bug this branch exists to remove.
+            candidate = cls._LATIN_ORPHAN_VERB_PATTERN.sub("", candidate)
+            candidate = re.sub(r"[,;]\s*[,;]+", ",", candidate)
+            candidate = re.sub(r"\s+", " ", candidate)
 
         candidate = candidate.strip(" *，,、。.!！？?;；:：")
         if len(candidate) < 2 or cls._NUMERIC_PLACEHOLDER_PATTERN.search(candidate):
-            return cls._SAFE_HEADLINE_FALLBACK
+            return fallback
+        if language == "en":
+            return f"{candidate} — specific figures unverified"
         return f"{candidate}，具体数字有待进一步核实"
 
     @classmethod

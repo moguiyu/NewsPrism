@@ -29,7 +29,7 @@ from newsprism.service.categories import (
     display_category_label_zh,
     normalize_display_category,
 )
-from newsprism.service.language import looks_like_chinese_text
+from newsprism.service.language import is_placeholder_output, looks_like_chinese_text
 from newsprism.service.locales import is_recognized_country
 from newsprism.types import ClusterSummary, SourceCertification, is_real_article
 
@@ -225,6 +225,49 @@ def _placeholder_stage_detail(
 
 
 # ── TEXT HELPERS ──────────────────────────────────────────────────────────────
+
+
+def _first_sentence(text: str) -> str:
+    """Return the first sentence of a body paragraph, or "" when there is none."""
+    compact = re.sub(r"\s+", " ", (text or "").strip())
+    if not compact:
+        return ""
+    match = re.match(r"(.+?[.!?。！？])(?:\s|$)", compact)
+    candidate = (match.group(1) if match else compact).strip()
+    return candidate if len(candidate) >= 24 else ""
+
+
+def _shorten_headline(text: str, max_chars: int = 90) -> str:
+    """Trim a derived headline at a word boundary, keeping it readable."""
+    value = re.sub(r"\s+", " ", (text or "").strip())
+    if len(value) <= max_chars:
+        return value
+    cut = value[:max_chars].rstrip()
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" ,;:—-") + "…"
+
+
+def _resolve_english_headline(headline_en: str, body_en: str) -> str:
+    """Pick a usable English headline, or "" when the card has none.
+
+    The numeric-grounding fallback writes a sentinel headline that carries no
+    story. On 2026-10-23 five of eighteen English cards shipped it verbatim.
+    Version 0.6.1 had the same sentinel, but a numeric miss also withheld the
+    whole card, so it never reached a page; decoupling translation quality from
+    publishability exposed it.
+
+    Withholding the English edition over one thin headline would be worse than
+    the bug, so the headline is repaired instead: keep it if it is real, else
+    promote the first English body sentence, else return "" so the template
+    falls back to the Chinese title.
+    """
+    if headline_en and not is_placeholder_output(headline_en):
+        return headline_en
+    derived = _first_sentence(body_en)
+    if derived and not is_placeholder_output(derived):
+        return _shorten_headline(derived)
+    return ""
 
 
 def _extract_headline(text: str) -> str:
@@ -1275,8 +1318,16 @@ class HtmlRenderer:
 
         headline_raw = _extract_headline(summary.summary) or summary.cluster.topic_category
         body_text = _body_only(summary.summary)
-        headline_raw_en = _extract_headline(summary.summary_en or "") if include_english and summary.summary_en else ""
+        headline_raw_en = _resolve_english_headline(
+            _extract_headline(summary.summary_en or "") if include_english and summary.summary_en else "",
+            _body_only(summary.summary_en or "") if include_english and summary.summary_en else "",
+        )
         body_text_en = _body_only(summary.summary_en or "") if include_english and summary.summary_en else ""
+        # A sentinel is not a translation either. The template falls back to the
+        # Chinese body on a missing ``summary_en``; clearing the sentinel routes
+        # it through that existing path instead of shipping boilerplate as news.
+        if body_text_en and is_placeholder_output(body_text_en):
+            body_text_en = ""
         perspective_payload = self._build_perspective_payload(summary)
         perspective_payload_en = (
             self._build_single_language_perspective_payload(summary, english=True)
