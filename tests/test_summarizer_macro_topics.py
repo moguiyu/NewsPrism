@@ -45,6 +45,23 @@ def _cluster(title: str) -> ArticleCluster:
     )
 
 
+def _positive_summary(reason: str) -> ClusterSummary:
+    article = Article(
+        url="https://example.com/ipod",
+        title="iPod turns 25",
+        source_name="Example",
+        published_at=datetime.now(tz=timezone.utc),
+        content="Apple hid an Easter egg in Apple Music to mark the iPod 25th anniversary.",
+    )
+    summary = ClusterSummary(
+        cluster=ArticleCluster(topic_category="Technology", articles=[article]),
+        summary="**iPod问世25周年，苹果在Apple Music隐藏彩蛋**\n\n苹果在网页版404页面隐藏了初代iPod的虚拟复刻版。",
+        quality_status="publishable",
+    )
+    summary.positive_energy_reason = reason  # type: ignore[attr-defined]
+    return summary
+
+
 def _response(content: str):
     return SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
@@ -761,6 +778,133 @@ def test_translated_numeric_grounding_fails_closed_for_live_fragment(monkeypatch
     assert "unsupported_numeric_claim" not in summary.quality_flags
 
 
+def test_headline_keeps_its_wording_when_no_figure_was_removed():
+    """A caveat is only honest when a figure was actually stripped.
+
+    2026-10-24: after narrowing the remnant pattern, a passive headline still
+    came back as "... — specific figures unverified" even though nothing had
+    been removed. That tells readers to distrust a figure the headline never had.
+    """
+    text = (
+        "**Two Israeli soldiers were killed, and the attackers were shot dead**\n\n"
+        "Netanyahu ordered a broad operation."
+    )
+
+    out = Summarizer._safe_numeric_fallback(text, [], language="en")
+
+    assert out.split("\n\n")[0] == (
+        "**Two Israeli soldiers were killed, and the attackers were shot dead**"
+    )
+
+
+def test_headline_caveat_appears_only_when_a_figure_is_removed():
+    """The Chinese and English caveats mark a real deletion."""
+    text = "**Attack kills 2, officials say**\n\nBody text survives."
+
+    out = Summarizer._safe_numeric_fallback(text, ["2"], language="en")
+
+    assert "specific figures unverified" in out
+    assert "kills 2" not in out
+
+
+def test_ordinary_english_kill_reports_are_not_malformed_remnants():
+    """Complete English sentences must not trip the remnant check.
+
+    2026-10-24: card 8484 ("two Israeli soldiers killed near Hebron") had a
+    correct English translation, ``Two Israeli soldiers were killed, and the
+    attackers were shot dead.``, which
+    ``_MALFORMED_NUMERIC_REMNANT_PATTERN`` read as a stripped-figure remnant.
+    The fallback then erased headline and body, and the card rendered in Chinese
+    on the English edition. The English alternative only ever needed to catch an
+    active transitive verb whose object was stripped ("airport kills,"); a
+    passive participle ("soldiers were killed,") is normal English.
+    """
+    legitimate = [
+        "Two Israeli soldiers were killed, and the attackers were shot dead.",
+        "At least 16 people are dead, and 76 were injured, state media reported.",
+        "Authorities said 3 police officers were injured, while 40 protesters were detained.",
+        "Three people are dead, officials said.",
+        "He was wounded, according to the ministry.",
+        "Two soldiers have been killed, the military said.",
+        "The blast killed 12 people, officials said.",
+    ]
+
+    for sentence in legitimate:
+        assert "malformed_numeric_remnant" not in Summarizer._numeric_safety_violations(
+            sentence
+        ), sentence
+
+
+def test_stripped_object_still_registers_as_a_malformed_remnant():
+    """The genuine remnant the check exists for must still be caught."""
+    remnants = [
+        "Houthi attack on Saudi airport kills, group claims strike on Defense Ministry",
+        "The blast injures, officials said.",
+    ]
+
+    for sentence in remnants:
+        assert "malformed_numeric_remnant" in Summarizer._numeric_safety_violations(
+            sentence
+        ), sentence
+
+
+def test_english_fallback_keeps_a_grounded_body_when_the_headline_trips():
+    """A numeric miss in the headline must not erase a clean English body.
+
+    8484's body was entirely correct; the fallback discarded it because the
+    headline remnant check failed the whole candidate.
+    """
+    text = (
+        "**Two Israeli soldiers were killed, and the attackers were shot dead**\n\n"
+        "Netanyahu ordered a very extensive military operation in the West Bank, "
+        "including house-to-house searches and demolitions."
+    )
+
+    out = Summarizer._safe_numeric_fallback(text, [], language="en")
+
+    assert "Netanyahu ordered" in out
+    assert "Related report: specific figures remain unverified" not in out
+
+
+def test_positive_reason_is_translated_with_the_summary(monkeypatch):
+    """A positive card's reason must be translated, not silently reused.
+
+    2026-10-24: the English edition rendered
+    ``<span data-lang-en>iPod纪念彩蛋，怀旧趣味无实质影响</span>`` because the
+    renderer did ``getattr(summary, "positive_energy_reason_en", reason)`` and
+    nothing ever assigned that attribute; the default made Chinese pass as
+    English. Sixth recurrence (10-14/15/16/17/18 all logged it).
+    """
+    summarizer = Summarizer(_config())
+    summary = _positive_summary("iPod纪念彩蛋，怀旧趣味无实质影响")
+    payload = (
+        '{"items":[{"index":0,"headline":"iPod turns 25","body":"Apple hid an Easter egg.",'
+        '"short_topic_name":"iPod anniversary","perspective_groups":[],'
+        '"positive_reason":"A nostalgic Easter egg with no substantive impact"}],'
+        '"labels":{}}'
+    )
+    monkeypatch.setattr(litellm, "completion", lambda **_kwargs: _response(payload))
+
+    assert summarizer.translate_report_content([summary]) is True
+
+    assert summary.positive_energy_reason_en == "A nostalgic Easter egg with no substantive impact"
+
+
+def test_positive_reason_falls_back_to_chinese_when_translation_omits_it(monkeypatch):
+    """A missing translation degrades honestly instead of impersonating English."""
+    summarizer = Summarizer(_config())
+    summary = _positive_summary("iPod纪念彩蛋，怀旧趣味无实质影响")
+    payload = (
+        '{"items":[{"index":0,"headline":"iPod turns 25","body":"Apple hid an Easter egg.",'
+        '"short_topic_name":"iPod anniversary","perspective_groups":[]}],"labels":{}}'
+    )
+    monkeypatch.setattr(litellm, "completion", lambda **_kwargs: _response(payload))
+
+    assert summarizer.translate_report_content([summary]) is True
+
+    assert not getattr(summary, "positive_energy_reason_en", "")
+
+
 def test_english_headline_fallback_strips_instead_of_discarding_the_title():
     """An English numeric miss must degrade the headline, not erase it.
 
@@ -800,6 +944,26 @@ def test_english_headline_fallback_clears_the_dangling_predicate():
     assert "kills," not in result
     assert result != Summarizer._SAFE_HEADLINE_FALLBACK_EN
     assert not Summarizer._numeric_safety_violations(result)
+
+
+def test_orphan_sweep_leaves_passive_and_adjectival_casualties_intact():
+    """The sweep that repairs "kills 2," must not delete "were killed,".
+
+    2026-10-24: ``_LATIN_ORPHAN_VERB_PATTERN`` listed ``killed|dead|injured``,
+    so it rewrote "Two soldiers were killed, and..." into "Two soldiers were
+    and...". Both the pattern and the sweep must target active transitives only.
+    """
+    for sentence in (
+        "Two Israeli soldiers were killed, and the attackers were shot dead",
+        "Three people are dead, officials said",
+        "He was wounded, according to the ministry",
+    ):
+        assert Summarizer._LATIN_ORPHAN_VERB_PATTERN.sub("", sentence) == sentence
+
+    repaired = Summarizer._LATIN_ORPHAN_VERB_PATTERN.sub(
+        "", "Airport attack kills, group says"
+    )
+    assert "kills," not in repaired
 
 
 def test_english_numeric_fallback_end_to_end_keeps_a_usable_headline():

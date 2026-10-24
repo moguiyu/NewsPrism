@@ -100,16 +100,62 @@ def test_english_text_checks_run_by_default():
     """``include_english`` defaults to True, so every pre-existing caller keeps
     validating the translated field.
 
-    Ordinary grammatical English satisfies
-    ``_MALFORMED_NUMERIC_REMNANT_PATTERN``'s English alternative
-    (``\\b(?:kills?|killed|dead|deaths?|injured?)\\s*[,.;:]``), which is exactly
-    why a caller that publishes a Chinese-only render set must opt out.
+    The trigger is a genuine stripped-object remnant, not an ordinary casualty
+    sentence: 2026-10-24 showed that flagging ``soldiers were killed,`` erased a
+    correct English card (8484) and rendered it in Chinese on the English
+    edition. See ``test_ordinary_casualty_sentences_are_not_malformed_remnants``.
     """
-    summary = _summary(summary_en="Several people were killed, according to local officials.")
+    summary = _summary(
+        summary_en="**A confirmed event**\n\nHouthi attack on Saudi airport kills, group says."
+    )
 
     codes = {issue.code for issue in validate_publication_contract([summary])}
 
     assert "malformed_numeric_remnant" in codes
+
+
+def test_ordinary_casualty_sentences_are_not_malformed_remnants():
+    """Passive and adjectival casualty phrasing is complete English.
+
+    2026-10-24: card 8484 shipped as Chinese on the English edition because
+    ``Several people were killed, according to local officials.`` was read as a
+    stripped-figure remnant and the fallback erased headline and body.
+    """
+    for sentence in (
+        "Several people were killed, according to local officials.",
+        "At least 16 people are dead, and 76 were injured, state media reported.",
+        "Two soldiers have been killed, the military said.",
+    ):
+        summary = _summary(summary_en=f"**A confirmed event**\n\n{sentence}")
+
+        codes = {issue.code for issue in validate_publication_contract([summary])}
+
+        assert "malformed_numeric_remnant" not in codes, sentence
+
+
+def test_validator_and_summarizer_agree_on_the_remnant_pattern():
+    """The pattern is duplicated across layers; the copies must not drift.
+
+    ``runtime.publication_validator`` cannot import ``service.summarizer``
+    without inverting the dependency order, so both carry the regex. A silent
+    divergence here would mean a card validates cleanly and then fails the
+    summarizer gate (or vice versa).
+    """
+    from newsprism.runtime import publication_validator
+    from newsprism.service.summarizer import Summarizer
+
+    samples = [
+        "Houthi attack on Saudi airport kills, group says.",
+        "The blast injures, officials said.",
+        "Two Israeli soldiers were killed, and the attackers were shot dead.",
+        "At least 16 people are dead, and 76 were injured, state media reported.",
+        "该事件造成3人死亡，另有10人受伤。",
+        "袭击致2名士兵死亡。",
+    ]
+    for sample in samples:
+        assert bool(publication_validator._MALFORMED_NUMERIC_REMNANT_PATTERN.search(sample)) == bool(
+            Summarizer._MALFORMED_NUMERIC_REMNANT_PATTERN.search(sample)
+        ), sample
 
 
 def test_include_english_false_still_validates_the_chinese_text():

@@ -3364,6 +3364,80 @@ def test_derived_english_headline_is_trimmed_to_headline_length(renderer):
     assert "Hours after saying" in headline
 
 
+def test_english_leaks_flags_chinese_in_english_fields(renderer):
+    """A Chinese value inside an English field must be reported, not ignored.
+
+    2026-10-24: card 8484 rendered its headline and body in Chinese on the
+    English edition while ``english_available`` was true. Nothing failed because
+    every check asked "is the field populated?", and the template's own fallback
+    makes it populated with Chinese.
+    """
+    clusters = [
+        {
+            "cluster_id": 8484,
+            "headline_en": "两名以军士兵在希伯伦附近被杀",
+            "summary_en": "",
+            "positive_reason_en": "",
+        },
+        {
+            "cluster_id": 8490,
+            "headline_en": "SpaceX plans to access 80,000 cell sites",
+            "summary_en": "SpaceX will tap cell sites.",
+            "positive_reason_en": "",
+        },
+    ]
+
+    leaks = renderer._english_leaks(clusters, [])
+
+    assert leaks == ["headline_en@8484"]
+
+
+def test_english_leaks_reports_positive_reason_leaks(renderer):
+    positive = [
+        {
+            "cluster_id": 8494,
+            "headline_en": "iPod turns 25",
+            "summary_en": "Apple hid an Easter egg.",
+            "positive_reason_en": "iPod纪念彩蛋，怀旧趣味无实质影响",
+        }
+    ]
+
+    leaks = renderer._english_leaks([], positive)
+
+    assert leaks == ["positive_reason_en@8494"]
+
+
+def test_positive_reason_en_is_never_the_chinese_reason(renderer):
+    """An untranslated positive reason must fall back, not impersonate English.
+
+    2026-10-24 shipped ``<span data-lang-en>iPod纪念彩蛋，怀旧趣味无实质影响</span>``
+    because the renderer defaulted ``positive_energy_reason_en`` to the Chinese
+    reason. The template's ``or`` fallback already handles a missing value.
+    """
+    summary = _english_fixture("**iPod turns 25**\n\nApple hid an Easter egg.")
+    summary.positive_energy_reason = "iPod纪念彩蛋，怀旧趣味无实质影响"  # type: ignore[attr-defined]
+
+    html_path = renderer.render([], date(2026, 8, 13), positive_summaries=[summary])
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "iPod纪念彩蛋" in html
+    # Chinese may appear as the template's own fallback, but the payload must
+    # carry an empty English value rather than a copy of the Chinese reason.
+    payload = json.loads((html_path.parent / "data.json").read_text(encoding="utf-8"))
+    assert payload["positive_stories"][0]["positive_reason_en"] == ""
+
+
+def test_positive_reason_en_uses_the_translation_when_present(renderer):
+    summary = _english_fixture("**iPod turns 25**\n\nApple hid an Easter egg.")
+    summary.positive_energy_reason = "iPod纪念彩蛋，怀旧趣味无实质影响"  # type: ignore[attr-defined]
+    summary.positive_energy_reason_en = "A nostalgic Easter egg"  # type: ignore[attr-defined]
+
+    html_path = renderer.render([], date(2026, 8, 13), positive_summaries=[summary])
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "A nostalgic Easter egg" in html
+
+
 def test_payload_clears_placeholder_english_body_so_template_falls_back(renderer):
     """A sentinel body must fall back to Chinese, like a missing one does.
 

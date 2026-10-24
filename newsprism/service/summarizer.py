@@ -131,6 +131,10 @@ class BatchTranslationItem(BaseModel):
     body: str = ""
     short_topic_name: str | None = None
     perspective_groups: list[PerspectiveGroupItem] = Field(default_factory=list)
+    positive_reason: str | None = Field(
+        default=None,
+        description="English translation of the 'today's positive energy' reason, when the item has one.",
+    )
 
 
 class BatchTranslationResponse(BaseModel):
@@ -457,6 +461,7 @@ class Summarizer:
                     "headline": _extract_headline(summary.summary),
                     "body": _body_only(summary.summary),
                     "short_topic_name": summary.short_topic_name or "",
+                    "positive_reason": getattr(summary, "positive_energy_reason", "") or "",
                     "perspective_groups": [
                         {"sources": list(group.sources), "perspective": group.perspective}
                         for group in summary.grouped_perspectives
@@ -512,6 +517,13 @@ class Summarizer:
             self._enforce_translated_numeric_grounding(summary)
             if item.short_topic_name and item.short_topic_name.strip():
                 summary.short_topic_name_en = self._clean_short_label(item.short_topic_name)
+            # 2026-10-24: nothing ever assigned this, so the renderer's
+            # getattr(..., default=reason) published the Chinese reason inside
+            # data-lang-en (sixth recurrence). Only set it when the translation
+            # is real; the renderer falls back to Chinese on an empty value.
+            translated_reason = (item.positive_reason or "").strip()
+            if translated_reason:
+                summary.positive_energy_reason_en = translated_reason  # type: ignore[attr-defined]
         return {key: self._clean_short_label(value) for key, value in parsed.labels.items() if value}
 
     def classify_storyline_relations(
@@ -858,6 +870,9 @@ class Summarizer:
             summary.short_topic_name_en = None
             summary.storyline_name_en = None
             summary.macro_topic_name_en = None
+            # Reset the positive-card reason too, or a partial batch leaves a
+            # translated reason next to an untranslated summary.
+            summary.positive_energy_reason_en = ""  # type: ignore[attr-defined]
         for family in hot_topics:
             family.pop("macro_topic_name_en", None)
             family.pop("storyline_name_en", None)
@@ -1383,13 +1398,24 @@ class Summarizer:
     # the degraded headline still trips _numeric_safety_violations and bounces
     # back to the placeholder (2026-10-23 English regression).
     _LATIN_ORPHAN_VERB_PATTERN = re.compile(
-        r"\b(?:kills?|killed|deaths?|dead|injured?|wounds?|wounded|hurts?|hurt)\s*[,;:](?=\s|$)",
+        # Only active transitives whose object was just stripped: "kills 2," ->
+        # "kills,". Passive participles and adjectives ("were killed," "shot
+        # dead,") are complete English; sweeping them corrupts the sentence
+        # instead of repairing it (2026-10-24: "soldiers were killed," became
+        # "soldiers were  and ...").
+        r"\b(?:kills|injures|wounds)\s*[,;:](?=\s|$)",
         re.IGNORECASE,
     )
     _MALFORMED_NUMERIC_REMNANT_PATTERN = re.compile(
         r"(?:超|超过|约|近|达|至少|至多|致|导致|造成)\s*"
         r"(?:例|病例|人|名|死亡|受伤|%|％|[，,。.!！？?])"
-        r"|\b(?:kills?|killed|dead|deaths?|injured?)\s*[,.;:]",
+        # English alternative: ONLY third-person-singular active transitives,
+        # which cannot be passive voice. "airport kills," lost its object when
+        # the figure was stripped; "soldiers were killed," is complete English.
+        # The previous form listed the passive participles too, so it flagged
+        # every ordinary casualty sentence (2026-10-24: card 8484 was erased and
+        # then rendered in Chinese on the English edition).
+        r"|\b(?:kills|injures|wounds)\s*[,.;:]",
         re.IGNORECASE,
     )
 
@@ -1452,6 +1478,7 @@ class Summarizer:
         candidate = cls._strip_unsupported_values(headline, unsupported)
         if not candidate:
             return fallback
+        stripped_a_figure = candidate != headline.strip()
 
         # Removing a quantity from phrases such as “致4人死亡” or “超3500例”
         # can leave a grammatical-looking but semantically broken remnant.
@@ -1473,6 +1500,11 @@ class Summarizer:
         candidate = candidate.strip(" *，,、。.!！？?;；:：")
         if len(candidate) < 2 or cls._NUMERIC_PLACEHOLDER_PATTERN.search(candidate):
             return fallback
+        if not stripped_a_figure:
+            # Nothing was removed, so there is nothing to caveat: the headline is
+            # the original text. Appending "specific figures unverified" here
+            # would tell readers to distrust a figure the headline never had.
+            return candidate
         if language == "en":
             return f"{candidate} — specific figures unverified"
         return f"{candidate}，具体数字有待进一步核实"

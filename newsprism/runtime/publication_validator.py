@@ -49,7 +49,13 @@ _LEADING_NUMERIC_FRAGMENT_PATTERN = re.compile(
 _MALFORMED_NUMERIC_REMNANT_PATTERN = re.compile(
     r"(?:超|超过|约|近|达|至少|至多|致|导致|造成)\s*"
     r"(?:例|病例|人|名|死亡|受伤|%|％|[，,。.!！？?])"
-    r"|\b(?:kills?|killed|dead|deaths?|injured?)\s*[,.;:]",
+    # English alternative: ONLY third-person-singular active transitives, which
+    # cannot be passive voice. "airport kills," lost its object; "soldiers were
+    # killed," is complete English. Kept byte-identical to
+    # ``Summarizer._MALFORMED_NUMERIC_REMNANT_PATTERN`` (service cannot be
+    # imported here without inverting the layer order); a test asserts the two
+    # agree so the copies cannot drift.
+    r"|\b(?:kills|injures|wounds)\s*[,.;:]",
     re.IGNORECASE,
 )
 

@@ -35,6 +35,10 @@ from newsprism.types import ClusterSummary, SourceCertification, is_real_article
 
 logger = logging.getLogger(__name__)
 
+# Any CJK codepoint. Used to decide whether an "English" payload field actually
+# contains Chinese (see ``HtmlRenderer._english_leaks``).
+_CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
+
 # Matches a published daily report directory (YYYY-MM-DD) at the output root.
 _REPORT_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -1273,6 +1277,30 @@ class HtmlRenderer:
                 gaps.append(f"untranslated_family_label={name}")
         return gaps
 
+    def _english_leaks(
+        self,
+        clusters_json: list[dict],
+        positive_json: list[dict],
+    ) -> list[str]:
+        """Return English-payload fields that still hold Chinese text.
+
+        ``_english_gaps`` asks whether a translation exists. This asks whether it
+        is actually English. On 2026-10-24 card 8484 shipped with a Chinese
+        headline and body inside ``data-lang-en`` while ``english_available`` was
+        true, and nothing noticed: the edition-level check only looked for empty
+        fields, and an empty field is what the payload repair produces right
+        before the template substitutes the Chinese text.
+        """
+        leaks: list[str] = []
+        for card in list(clusters_json) + list(positive_json):
+            for field in ("headline_en", "summary_en", "positive_reason_en", "perspective_preview_en"):
+                value = card.get(field)
+                if not isinstance(value, str):
+                    continue
+                if _CJK_CHAR.search(value):
+                    leaks.append(f"{field}@{card.get('cluster_id') or card.get('topic') or '?'}")
+        return leaks
+
     def _english_available(
         self,
         summaries: list[ClusterSummary],
@@ -1681,7 +1709,6 @@ class HtmlRenderer:
         # clusters share a storyline_key (e.g. a 2-member family that didn't
         # claim a tab because of max_topic_tabs), tag them with a shared label
         # so the reader can see the connection. Flat tag — no card/lift/shadow.
-        _CJK_CHAR = re.compile(r"[一-鿿]")
         shared_label_by_key: dict[str, str] = {}
         shared_label_en_by_key: dict[str, str] = {}
         key_counts: dict[str, int] = {}
@@ -1916,7 +1943,18 @@ class HtmlRenderer:
                 include_english=english_available,
             )
             reason = getattr(summary, "positive_energy_reason", "")
-            reason_en = getattr(summary, "positive_energy_reason_en", reason)
+            # Never default an English field to its Chinese counterpart: the
+            # template renders ``positive_reason_en or positive_reason`` and
+            # would otherwise publish Chinese inside ``data-lang-en``, which
+            # happened on 2026-10-24 and five earlier days. The template's own
+            # fallback still applies when the translation is absent, so record
+            # that case instead of letting it pass silently.
+            reason_en = getattr(summary, "positive_energy_reason_en", "") or ""
+            if english_available and reason and not reason_en:
+                logger.warning(
+                    "Positive card reason has no English translation; falling back to Chinese: %s",
+                    summary.cluster.topic_category,
+                )
             score = getattr(summary, "positive_energy_score", 0.0)
             category = getattr(summary, "positive_energy_category", summary.cluster.topic_category)
             source = getattr(summary, "positive_energy_source", summary.cluster.sources[0] if summary.cluster.sources else "")
@@ -1934,6 +1972,16 @@ class HtmlRenderer:
             json_payload["positive_source"] = source
             positive_ctx.append(ctx_payload)
             positive_json.append(json_payload)
+
+        english_leaks: list[str] = []
+        if english_available:
+            english_leaks = self._english_leaks(clusters_json, positive_json)
+            if english_leaks:
+                logger.warning(
+                    "English payload still contains Chinese text (%d field(s)): %s",
+                    len(english_leaks),
+                    "; ".join(english_leaks[:8]),
+                )
 
         display_rank = 1
         for ctx_payload, json_payload in zip(clusters_ctx, clusters_json):
@@ -1968,6 +2016,10 @@ class HtmlRenderer:
             "positive_story_count": len(positive_ctx),
             "total_cluster_count": len(summaries) + len(positive_ctx) + hot_topic_story_count,
             "english_available": english_available,
+            # Field-level count of English values that are still Chinese, so an
+            # operator or a review script sees today's 8484-style leak in
+            # data.json instead of discovering it by reading the page.
+            "english_leak_count": len(english_leaks),
             "available_languages": ["zh", "en"] if english_available else ["zh"],
             # Root is the English edition on dual days; falls back to Chinese
             # when no English content exists (data.json records which).
