@@ -3364,6 +3364,114 @@ def test_derived_english_headline_is_trimmed_to_headline_length(renderer):
     assert "Hours after saying" in headline
 
 
+def test_english_leaks_flags_empty_english_where_chinese_exists(renderer):
+    """An empty English field is a leak too: the template substitutes Chinese.
+
+    2026-10-25: card 8517 held the numeric-fallback sentinel in ``summary_en``,
+    so ``_english_gaps`` saw a non-empty value and published the English
+    edition; the renderer then cleared the sentinel, and the template rendered
+    the Chinese body inside ``data-lang-en``. A detector that only looks for CJK
+    misses this, because the leak is an *absence*.
+    """
+    clusters = [
+        {
+            "cluster_id": 8517,
+            "headline": "徐嘉余一晚两破纪录",
+            "summary": "10月24日全国短池游泳锦标赛，徐嘉余打破亚洲纪录。",
+            "headline_en": "Xu Jiayu breaks two records in one night",
+            "summary_en": None,
+        }
+    ]
+
+    leaks = renderer._english_leaks(clusters, [])
+
+    assert leaks == ["summary_en@8517"]
+
+
+def test_placeholder_chip_translates_a_chinese_entity_name(renderer):
+    """A Chinese entity name in a placeholder chip must not reach the English page.
+
+    2026-10-25 shipped ``[金正恩 voice pending]``, ``[王沪宁 voice pending]`` and
+    ``[法国内政部长努涅斯 voice pending]``: ``_placeholder_source_label_en``
+    translated the marker but passed the entity name through untranslated. When
+    no English name exists, the region is a truthful label; a half-translated
+    Chinese entity is not.
+    """
+    zh = _english_fixture("**Kim visits Dandong**\n\n" + "English body text here.")
+    placeholder = Article(
+        url="placeholder:kp:x",
+        title="待补充：金正恩声音",
+        source_name="[金正恩声音待补]",
+        published_at=datetime(2026, 10, 25, tzinfo=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="kp",
+        source_kind="news",
+        origin_region="kp",
+        searched_provider="tavily_search",
+    )
+    placeholder.is_placeholder = True
+    placeholder.search_acceptance_status = "failed"
+    placeholder.search_acceptance_reason = "event_mismatch"
+    zh.cluster.articles.append(placeholder)
+
+    html_path = renderer.render([zh], date(2026, 8, 13))
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "金正恩 voice pending" not in html
+    assert "voice pending" in html
+
+
+def test_english_leaks_flags_chinese_entity_names_in_placeholder_chips(renderer):
+    """``[金正恩 voice pending]`` is still Chinese on the English page.
+
+    2026-10-25 shipped four of these: the marker is translated by
+    ``_placeholder_source_label_en`` but the entity name is passed through, so
+    ``data-lang-en`` carries Chinese. Real outlet names (``연합뉴스``) are their
+    own script, not a translation miss, and must not be counted.
+    """
+    clusters = [
+        {
+            "cluster_id": 8506,
+            "headline": "金正恩访问丹东",
+            "summary": "中文正文。",
+            "headline_en": "Kim Jong Un visits Dandong",
+            "summary_en": "English body.",
+            "footer_sources_en": [
+                {
+                    "source": "[金正恩声音待补]",
+                    "is_placeholder": True,
+                    "compact_label_en": "[金正恩 voice pending]",
+                },
+                {
+                    "source": "연합뉴스",
+                    "is_placeholder": False,
+                    "compact_label_en": "연합뉴스",
+                },
+            ],
+        }
+    ]
+
+    leaks = renderer._english_leaks(clusters, [])
+
+    assert leaks == ["chip_[金正恩 voice pending]@8506"]
+
+
+def test_english_leaks_ignores_empty_english_on_a_placeholder_card(renderer):
+    """A card with no Chinese body has nothing to leak by falling back."""
+    clusters = [
+        {
+            "cluster_id": 9001,
+            "headline": "",
+            "summary": "",
+            "headline_en": None,
+            "summary_en": None,
+        }
+    ]
+
+    assert renderer._english_leaks(clusters, []) == []
+
+
 def test_english_leaks_flags_chinese_in_english_fields(renderer):
     """A Chinese value inside an English field must be reported, not ignored.
 

@@ -30,7 +30,7 @@ from newsprism.service.categories import (
     normalize_display_category,
 )
 from newsprism.service.language import is_placeholder_output, looks_like_chinese_text
-from newsprism.service.locales import is_recognized_country
+from newsprism.service.locales import country_name, is_recognized_country
 from newsprism.types import ClusterSummary, SourceCertification, is_real_article
 
 logger = logging.getLogger(__name__)
@@ -624,8 +624,15 @@ def _is_renderable_perspective(text: str) -> bool:
     return not any(pattern.search(normalized) for pattern in _INVALID_PERSPECTIVE_PATTERNS)
 
 
-def _placeholder_source_label_en(source_name: str) -> str:
-    """Translate the compact synthetic source marker without an LLM call."""
+def _placeholder_source_label_en(source_name: str, region: str = "") -> str:
+    """Translate the compact synthetic source marker without an LLM call.
+
+    The marker is Chinese (``[金正恩声音待补]``) but the entity name inside it may
+    be too. Translating only the marker produced ``[金正恩 voice pending]`` on the
+    English edition (2026-10-25: four such chips). A CJK entity name has no
+    translation available at render time, so the region is used instead: it is
+    truthful and readable, where a half-translated label is neither.
+    """
     label = str(source_name or "").strip()
     bracketed = label.startswith("[") and label.endswith("]")
     inner = label[1:-1] if bracketed else label
@@ -633,6 +640,11 @@ def _placeholder_source_label_en(source_name: str) -> str:
     inner = inner.replace("视角待补", " perspective pending")
     inner = inner.replace("待补", " pending")
     inner = re.sub(r"\s+", " ", inner).strip()
+    entity = inner[: -len(" voice pending")].strip() if inner.endswith(" voice pending") else inner
+    if _CJK_CHAR.search(entity):
+        fallback = country_name(region) if region else ""
+        if fallback and not _CJK_CHAR.search(fallback):
+            inner = f"{fallback} voice pending"
     return f"[{inner}]" if bracketed else inner
 
 
@@ -1022,7 +1034,10 @@ class HtmlRenderer:
         placeholder_reason_zh, placeholder_reason_en = _placeholder_failure_label(acceptance_reason)
         if is_placeholder:
             compact_label = source_name
-            compact_label_en = _placeholder_source_label_en(source_name)
+            compact_label_en = _placeholder_source_label_en(
+                source_name,
+                str(meta.get("search_region") or search_region or meta.get("origin_region") or ""),
+            )
             stage_detail = _placeholder_stage_detail(meta.get("search_stage_trace"))
             provenance_label, provenance_label_en = stage_detail or (
                 placeholder_reason_zh,
@@ -1293,12 +1308,32 @@ class HtmlRenderer:
         """
         leaks: list[str] = []
         for card in list(clusters_json) + list(positive_json):
+            card_ref = card.get("cluster_id") or card.get("topic") or "?"
             for field in ("headline_en", "summary_en", "positive_reason_en", "perspective_preview_en"):
                 value = card.get(field)
-                if not isinstance(value, str):
+                if isinstance(value, str) and _CJK_CHAR.search(value):
+                    leaks.append(f"{field}@{card_ref}")
                     continue
-                if _CJK_CHAR.search(value):
-                    leaks.append(f"{field}@{card.get('cluster_id') or card.get('topic') or '?'}")
+                # An empty English field is also a leak: ``bilingual_text``
+                # substitutes the Chinese value, so the English edition shows
+                # Chinese. Only count it when there IS Chinese to fall back to
+                # (2026-10-25: 8517 cleared its sentinel summary_en this way).
+                if value:
+                    continue
+                zh_field = field[: -len("_en")] if field.endswith("_en") else field
+                zh_value = card.get(zh_field)
+                if isinstance(zh_value, str) and _CJK_CHAR.search(zh_value):
+                    leaks.append(f"{field}@{card_ref}")
+            # Synthesised placeholder chips read as ``[金正恩 voice pending]``:
+            # the marker is translated but the entity name is not, so the
+            # English page carries Chinese (2026-10-25 showed four of these).
+            # Real outlet names keep their own script and are not counted.
+            for source in card.get("footer_sources_en") or []:
+                if not isinstance(source, dict) or not source.get("is_placeholder"):
+                    continue
+                label_en = source.get("compact_label_en")
+                if isinstance(label_en, str) and _CJK_CHAR.search(label_en):
+                    leaks.append(f"chip_{label_en}@{card_ref}")
         return leaks
 
     def _english_available(
