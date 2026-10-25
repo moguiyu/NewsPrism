@@ -1,6 +1,6 @@
 """Tests for the merged history module: freshness, validation, storyline grouping."""
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from newsprism.config import Config, load_config
 from newsprism.service.history import (
@@ -793,6 +793,42 @@ def _freshness_cluster(article_id: int, published_at: datetime, title: str = "t"
     cluster.articles[0].id = article_id
     cluster.articles[0].published_at = published_at
     return cluster
+
+
+def test_placeholder_articles_do_not_defeat_the_staleness_gate():
+    """A synthetic placeholder must not make an old cluster look fresh.
+
+    ``ActiveSeeker._placeholder_article`` stamps ``published_at`` with
+    ``datetime.now()`` because it has no source timestamp. That made
+    ``_no_history_state`` see one "fresh" article and pass a cluster whose only
+    real reporting was 32 hours old (2026-10-25: card 8504 published this way,
+    two 10-23 articles and one placeholder).
+    """
+    evaluator = FreshnessEvaluator(_config())
+    old_article = Article(
+        id=356829,
+        url="https://example.com/old",
+        title="Iran plans to strike Gulf cables",
+        source_name="Yonhap",
+        published_at=datetime.now(tz=timezone.utc) - timedelta(hours=32),
+        content="Old reporting.",
+    )
+    placeholder = Article(
+        id=None,
+        url="placeholder:ir:x",
+        title="待补充：Iran声音",
+        source_name="[Iran声音待补]",
+        published_at=datetime.now(tz=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="ir",
+    )
+    placeholder.is_placeholder = True
+    cluster = ArticleCluster(topic_category="World", articles=[old_article, placeholder])
+
+    state = evaluator._no_history_state(cluster, datetime.now(tz=timezone.utc))
+
+    assert state == "stale"
 
 
 def test_freshness_new_when_no_history():

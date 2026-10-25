@@ -29,7 +29,7 @@ import numpy as np
 from newsprism.config import Config
 from newsprism.service.embeddings import get_model
 from newsprism.service.language import looks_like_chinese_label
-from newsprism.types import Article, ArticleCluster, Cluster, StorylineEvent
+from newsprism.types import Article, ArticleCluster, Cluster, StorylineEvent, is_real_article
 
 logger = logging.getLogger(__name__)
 
@@ -316,7 +316,15 @@ class FreshnessEvaluator:
         on the old path; only a fully dated, fully old cluster is downgraded.
         """
         cutoff = now - timedelta(hours=24)
-        dated = [article.published_at for article in cluster.articles if article.published_at is not None]
+        # Only real articles carry a publisher timestamp. ``_placeholder_article``
+        # stamps ``datetime.now()`` because it has no source time, so counting
+        # placeholders here let a 32-hour-old cluster pass as fresh whenever one
+        # missing-voice marker was attached (2026-10-25: card 8504).
+        dated = [
+            article.published_at
+            for article in cluster.articles
+            if article.published_at is not None and is_real_article(article)
+        ]
         if not dated:
             return "new"
         if all(published_at < cutoff for published_at in dated):
