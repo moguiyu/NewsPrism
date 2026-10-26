@@ -63,6 +63,8 @@ def _config() -> Config:
                     "review_floor": 0.34,
                     "single_source_severity_review": 6.0,
                 },
+                # Mirrors config/editorial-values.yaml.
+                "positive": {"min_feelgood": 6.0, "max_severity": 4.0},
             },
             "source_reliability": {
                 "tier_scores": {
@@ -310,3 +312,69 @@ def test_voice_needs_are_normalized_and_preserved_on_recompute():
         ("Acme Labs", "us", "company"),
         ("Donald Trump", "us", "person"),
     ]
+
+
+# ─── 今日正能量 lane vs the review floor ──────────────────────────────────────
+
+_POSITIVE_SOFT_DIMS = {
+    "scope": 2.0,
+    "severity": 1.0,
+    "novelty": 2.0,
+    "actor_influence": 4.0,
+    "decision_relevance": 1.0,
+    "feelgood": 6.0,
+}
+
+
+def test_positive_uplift_story_is_not_blocked_by_the_review_floor():
+    """A cheerful low-impact story is not an under-evidenced hard story.
+
+    2026-10-26 shipped zero 正能量 stories because the only uplift candidate
+    (NBA 52-point game, feelgood 6.0) scored composite 0.2462, landed under
+    ``review_floor`` 0.34, became ``needs_review``, and was withheld by the
+    publish gate. Soft news is low-impact by construction.
+    """
+    assessor = _assessor()
+    status, _constraints = assessor._status(_POSITIVE_SOFT_DIMS, 0.2462, [], True)
+    assert status == "publishable"
+
+
+def test_low_composite_without_uplift_still_needs_review():
+    """Dropping the review floor for soft stories must not drop it generally."""
+    assessor = _assessor()
+    dims = dict(_POSITIVE_SOFT_DIMS, feelgood=0.0)
+    status, _constraints = assessor._status(dims, 0.2462, [], True)
+    assert status == "needs_review"
+
+
+def test_positive_uplift_story_about_a_harmful_event_still_needs_review():
+    """Uplift alone is not enough: a cheerful framing of a deadly event is out."""
+    assessor = _assessor()
+    dims = dict(_POSITIVE_SOFT_DIMS, severity=7.0)
+    status, _constraints = assessor._status(dims, 0.2462, [], True)
+    assert status == "needs_review"
+
+
+def test_positive_lane_never_bypasses_the_suppress_floor():
+    """The lowest-confidence stories stay suppressed no matter how uplifting."""
+    assessor = _assessor()
+    status, _constraints = assessor._status(_POSITIVE_SOFT_DIMS, 0.10, [], True)
+    assert status == "suppress"
+
+
+def test_positive_lane_respects_the_enabled_switch():
+    """Disabling the lane restores the plain review-floor behaviour."""
+    cfg = _config()
+    cfg.output["positive_energy"] = {"enabled": False}
+    assessor = ImpactAssessor(cfg, weights_loader=lambda: {}, policy_loader=lambda: None)
+    status, _constraints = assessor._status(_POSITIVE_SOFT_DIMS, 0.2462, [], True)
+    assert status == "needs_review"
+
+
+def test_positive_lane_thresholds_come_from_config():
+    """Raising min_feelgood above the story's score keeps it in review."""
+    cfg = _config()
+    cfg.editorial_values["impact"]["positive"] = {"min_feelgood": 8.0, "max_severity": 4.0}
+    assessor = ImpactAssessor(cfg, weights_loader=lambda: {}, policy_loader=lambda: None)
+    status, _constraints = assessor._status(_POSITIVE_SOFT_DIMS, 0.2462, [], True)
+    assert status == "needs_review"

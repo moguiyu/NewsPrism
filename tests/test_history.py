@@ -1122,3 +1122,91 @@ def test_resolver_detached_singleton_does_not_reuse_claimed_component_key():
     assert keys[0] == keys[1] == "single-67f6d8c1"
     assert keys[2] != "single-67f6d8c1"
     assert max(Counter(keys).values()) == 2
+
+
+def test_cross_script_name_is_rebuilt_when_today_has_chinese_material():
+    """A drifted Chinese label must not ride a foreign-language family forever.
+
+    2026-10-26: card 8538 (Moscow to host the 2030 weightlifting championships)
+    inherited ``俄乌和平谈判重启`` from the family it rejoined. Its articles had no
+    Chinese titles at all, so ``_storyline_name_matches_content`` saw a
+    cross-script pair and granted the benefit of the doubt — the label was
+    re-adopted daily.
+
+    The LLM's Chinese ``short_topic_name`` is same-script material, so the name
+    can be checked against it; a mismatch rebuilds the label while the storyline
+    KEY (family continuity) is untouched.
+    """
+    resolver = StorylineResolver(_config(), _StubSummarizer([]), lambda *_args: 0.66)
+    cluster = ArticleCluster(
+        topic_category="Sports",
+        articles=[
+            _article("Russia to host first Olympic federation world event since Ukraine invasion", [1.0]),
+            _article("Москву выбрали местом проведения чемпионата мира", [0.99]),
+        ],
+    )
+    cluster.impact = ImpactAssessment(
+        cluster_key="weightlifting",
+        short_topic_name="莫斯科主办举重世锦赛",
+    )
+    profile = {
+        "lead_title": "Russia to host first Olympic federation world event since Ukraine invasion",
+        "text": "",
+    }
+    history_match = {
+        "storyline_key": "single-c3664e0f",
+        "storyline_name": "俄乌和平谈判重启",
+        "score": 0.9,
+    }
+
+    resolver._apply_singleton(cluster, profile, history_match)
+
+    # Continuity preserved, label corrected.
+    assert cluster.storyline_key == "single-c3664e0f"
+    assert cluster.storyline_name != "俄乌和平谈判重启"
+    assert "举重" in cluster.storyline_name or "莫斯科" in cluster.storyline_name
+
+
+def test_cross_script_name_is_kept_when_today_has_no_chinese_material():
+    """Legitimate cross-language reuse must survive.
+
+    A Chinese label over purely English coverage is the common case for
+    translated wire stories. With no Chinese material to compare against, the
+    pair is unverifiable — keep the historical label rather than replacing it
+    with an English fragment such as ``US announc``.
+    """
+    resolver = StorylineResolver(_config(), _StubSummarizer([]), lambda *_args: 0.6)
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[_article("US announces sweeping tariff hike on Chinese imports", [1.0])],
+    )
+    profile = {"lead_title": "US announces sweeping tariff hike on Chinese imports", "text": ""}
+    history_match = {"storyline_key": "tariff-war", "storyline_name": "关税战", "score": 0.8}
+
+    resolver._apply_singleton(cluster, profile, history_match)
+
+    assert cluster.storyline_key == "tariff-war"
+    assert cluster.storyline_name == "关税战"
+
+
+def test_chinese_anchor_text_collects_short_topic_name_and_chinese_titles():
+    from newsprism.service.history import _chinese_anchor_text
+
+    translated = ArticleCluster(
+        topic_category="World News",
+        articles=[_article("Ukraine strikes refinery in Rostov region", [1.0])],
+    )
+    translated.impact = ImpactAssessment(cluster_key="x", short_topic_name="乌军袭击俄炼油厂")
+
+    chinese_outlet = ArticleCluster(
+        topic_category="World News",
+        articles=[_article("乌军无人机袭击俄罗斯炼油厂", [1.0])],
+    )
+    no_chinese = ArticleCluster(
+        topic_category="Sports",
+        articles=[_article("Moscow to host weightlifting worlds", [1.0])],
+    )
+
+    assert "乌军袭击俄炼油厂" in _chinese_anchor_text([translated])
+    assert "乌军无人机" in _chinese_anchor_text([chinese_outlet])
+    assert _chinese_anchor_text([no_chinese]) == ""

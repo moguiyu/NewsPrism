@@ -168,15 +168,16 @@ output:
     # The header language control navigates between the two edition URLs.
     separate_edition: true
   positive_energy:
+    # 今日正能量 lane. Bounds live in config/editorial-values.yaml
+    # (impact.positive.min_feelgood / max_severity) because they gate the impact
+    # status, not the selection. This block only carries the lane switch and cap.
+    #
+    # Removed 2026-10-26: min_confidence, candidate_min_items, target_items,
+    # empty_rate_target, source_diversity, use_llm_classifier. None of them were
+    # read by any code path — empty_rate_target in particular advertised a
+    # calibration loop that was never implemented.
     enabled: true
-    min_items: 1
     max_items: 5
-    min_confidence: 0.78
-    candidate_min_items: 20
-    target_items: 5
-    empty_rate_target: 0.05
-    source_diversity: true
-    use_llm_classifier: false
   day_navigation:
     # Footer shows prev/next-day links as real /YYYY-MM-DD/ URLs (always on).
     # `days` now only controls how many legacy /p/N/ symlinks are maintained

@@ -3422,6 +3422,47 @@ def test_placeholder_chip_translates_a_chinese_entity_name(renderer):
     assert "voice pending" in html
 
 
+def test_placeholder_chip_tooltip_carries_plain_text_not_markup(renderer):
+    """A title attribute must not receive the data-lang span markup.
+
+    ``bilingual_text()`` returns ``<span data-lang-zh>…</span>`` pairs, which is
+    right in the body but wrong inside ``title="..."``: Jinja escapes the tags,
+    the browser un-escapes the attribute, and the tooltip shows raw HTML. 2026-10-26
+    shipped eight such chips, so the one piece of text explaining *why* a voice is
+    missing was unreadable.
+    """
+    zh = _english_fixture("**Protest in Paris**\n\n" + "English body text here.")
+    placeholder = Article(
+        url="placeholder:fr:x",
+        title="待补充：法国政府声音",
+        source_name="[法国政府声音待补]",
+        published_at=datetime(2026, 10, 26, tzinfo=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="fr",
+        source_kind="news",
+        origin_region="fr",
+        searched_provider="tavily_search",
+    )
+    placeholder.is_placeholder = True
+    placeholder.search_acceptance_status = "failed"
+    placeholder.search_acceptance_reason = "not_related_country_source"
+    placeholder.provenance_label = "当地：非相关当地来源；官方：未找到可信官方渠道"
+    placeholder.provenance_label_en = "Local: Not related local reporting; Official: No verified official channel found"
+    zh.cluster.articles.append(placeholder)
+
+    html_path = renderer.render([zh], date(2026, 8, 13))
+    html = html_path.read_text(encoding="utf-8")
+
+    # No attribute may carry markup, escaped or otherwise.
+    assert 'title="<span' not in html
+    assert "title=\"<span" not in html
+    tooltips = re.findall(r'title="([^"]*非相关当地来源[^"]*)"', html)
+    assert tooltips, "the provenance tooltip should still be present"
+    for tooltip in tooltips:
+        assert "<span" not in tooltip, f"tooltip carries markup: {tooltip[:80]}"
+
+
 def test_english_leaks_flags_chinese_entity_names_in_placeholder_chips(renderer):
     """``[金正恩 voice pending]`` is still Chinese on the English page.
 
@@ -3676,3 +3717,60 @@ class TestBetaEdition:
         assert "/feed.xml" not in html
         assert not (tmp_path / "cn" / "2026-10-21").exists()
         assert (tmp_path / "latest").is_symlink()
+
+
+class TestEnglishSourceNames:
+    """The English edition must not print Chinese outlet names.
+
+    2026-10-26: the English page carried 凤凰网, IT之家, 中国新闻网, 华尔街见闻 and
+    澎湃新闻 verbatim plus 朝日新聞/卫星通讯社 self-names. Every source in
+    config/config.yaml has `name_en`; the renderer simply never used it.
+    """
+
+    def test_configured_english_name_replaces_chinese_outlet(self):
+        renderer = HtmlRenderer(
+            source_names_en={"凤凰网": "iFeng", "IT之家": "ITHome"},
+        )
+        assert renderer.source_names_en.get("凤凰网") == "iFeng"
+        assert renderer.source_names_en.get("IT之家") == "ITHome"
+
+    def test_latin_source_name_is_left_alone(self):
+        renderer = HtmlRenderer(source_names_en={"Reuters": "Reuters"})
+        # Identical names are dropped from the map, so the fallback is the name.
+        assert renderer.source_names_en.get("Reuters") is None
+
+    def test_unknown_source_falls_back_to_its_own_name(self):
+        renderer = HtmlRenderer(source_names_en={"凤凰网": "iFeng"})
+        assert (renderer.source_names_en.get("Unknown Outlet") or "Unknown Outlet") == "Unknown Outlet"
+
+
+def test_english_leaks_flags_untranslated_outlet_chip():
+    """A Chinese outlet on the English page must be reported, not ignored.
+
+    Real chips render ``src.source`` as plain text, so before the payload
+    carried ``source_en`` the detector deliberately skipped non-placeholder
+    chips. On 2026-10-26 the English page printed 凤凰网, IT之家, 中国新闻网,
+    华尔街见闻 and 澎湃新闻 while ``english_leak_count`` stayed 0.
+    """
+    renderer = HtmlRenderer(source_names_en={"凤凰网": "iFeng"})
+    cards = [
+        {
+            "cluster_id": 8500,
+            "footer_sources_en": [
+                {"source": "凤凰网", "source_en": "iFeng", "is_placeholder": False},
+                {"source": "未知社", "source_en": "未知社", "is_placeholder": False},
+            ],
+        }
+    ]
+
+    leaks = renderer._english_leaks(cards, [])
+
+    assert leaks == ["chip_未知社@8500"]
+
+
+def test_source_en_uses_configured_english_name_in_payload():
+    renderer = HtmlRenderer(source_names_en={"凤凰网": "iFeng"})
+    assert renderer._build_source_entry("凤凰网", {})["source_en"] == "iFeng"
+    # A latin name is unchanged, and an unconfigured outlet keeps its own name.
+    assert renderer._build_source_entry("Reuters", {})["source_en"] == "Reuters"
+    assert renderer._build_source_entry("未知社", {})["source_en"] == "未知社"

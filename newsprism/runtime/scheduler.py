@@ -423,6 +423,7 @@ class Scheduler:
             output_dir=cfg.output.get("html_dir", "output"),
             source_regions={s.name: s.region for s in cfg.sources},
             source_certifications=cfg.certifications,
+            source_names_en={s.name: (s.name_en or s.name) for s in cfg.sources},
             report_base_url=cfg.report_base_url,
             umami_website_id=cfg.umami_website_id,
             umami_script_url=cfg.umami_script_url,

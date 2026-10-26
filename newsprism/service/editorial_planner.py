@@ -628,6 +628,28 @@ def select_positive_summaries(
         min_feelgood,
         [_extract_markdown_headline(summary.summary) or summary.cluster.topic_category for summary in selected],
     )
+    if not selected:
+        # The lane ran 33% empty over 2026-10-15..26 and each occurrence was
+        # silent in the logs. Name the two ways it empties so the next empty day
+        # is diagnosable from the log alone.
+        near_miss = [
+            summary
+            for summary in kept_summaries
+            if _feelgood(summary) > 0
+            and _severity(summary) <= max_severity
+            and _feelgood(summary) < min_feelgood
+        ]
+        near_miss.sort(key=lambda summary: -_feelgood(summary))
+        highest = f"{_feelgood(near_miss[0]):.1f}" if near_miss else "none"
+        logger.warning(
+            "Positive energy lane is empty: %d kept summaries, %d carry any uplift "
+            "(highest below the %.1f bar: %s). Check whether uplift stories were "
+            "judged needs_review by the impact review floor.",
+            len(kept_summaries),
+            len(near_miss),
+            min_feelgood,
+            highest,
+        )
     return selected
 
 

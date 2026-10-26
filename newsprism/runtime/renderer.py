@@ -824,6 +824,7 @@ class HtmlRenderer:
         template_dir: str = "templates",
         source_regions: dict[str, str] | None = None,
         source_certifications: dict[str, SourceCertification] | None = None,
+        source_names_en: dict[str, str] | None = None,
         report_base_url: str = "",
         umami_website_id: str = "",
         umami_script_url: str = "",
@@ -837,6 +838,13 @@ class HtmlRenderer:
         self.template_file = "report-template.html"
         self.source_regions: dict[str, str] = source_regions or {}
         self.source_certifications: dict[str, SourceCertification] = source_certifications or {}
+        # Configured English names for outlets whose configured name is Chinese.
+        # Only entries that actually differ are kept, so lookup cost is minimal.
+        self.source_names_en: dict[str, str] = {
+            name: english
+            for name, english in (source_names_en or {}).items()
+            if english and english != name
+        }
         # Public base URL used for SEO canonical / sitemap / OG absolute URLs.
         # Empty in tests or when REPORT_BASE_URL is unset — SEO URL tags are
         # then omitted rather than emitting broken localhost/relative URLs.
@@ -1021,7 +1029,11 @@ class HtmlRenderer:
         # drawn by the template as icon('ui-searched'); the label stays a plain
         # source name so no glyph is baked into the data contract.
         compact_label = source_name
-        compact_label_en = source_name
+        # The English edition must not print a Chinese outlet name. Every source
+        # in config/config.yaml carries `name_en`, so use it when the configured
+        # name is not already latin (2026-10-26: 凤凰网/iFeng, 中国新闻网/China
+        # News Service and 18 others appeared verbatim on the English page).
+        compact_label_en = self.source_names_en.get(source_name) or source_name
         if provenance_label:
             compact_label = f"{compact_label} · {provenance_label}"
         if provenance_label_en:
@@ -1046,6 +1058,11 @@ class HtmlRenderer:
             url = None  # Nullify synthetic placeholder URL to prevent broken links in template
         return {
             "source": source_name,
+            # English rendering of the outlet name for the EN edition. The
+            # template prints this inside data-lang-en so a Chinese outlet is
+            # never shown verbatim to an English reader (2026-10-26: 凤凰网,
+            # IT之家, 中国新闻网 and others appeared on the English page).
+            "source_en": self.source_names_en.get(source_name) or source_name,
             "region_code": self._source_region_code(source_name, search_region),
             "is_searched": is_searched,
             "is_placeholder": is_placeholder,
@@ -1327,11 +1344,13 @@ class HtmlRenderer:
             # Synthesised placeholder chips read as ``[金正恩 voice pending]``:
             # the marker is translated but the entity name is not, so the
             # English page carries Chinese (2026-10-25 showed four of these).
-            # Real outlet names keep their own script and are not counted.
+            # Real outlet chips are checked the same way: `source_en` falls back
+            # to the Chinese configured name when a source has no `name_en`
+            # (2026-10-26: 18 chips, incl. 凤凰网/中国新闻网/华尔街见闻).
             for source in card.get("footer_sources_en") or []:
-                if not isinstance(source, dict) or not source.get("is_placeholder"):
+                if not isinstance(source, dict):
                     continue
-                label_en = source.get("compact_label_en")
+                label_en = source.get("compact_label_en") or source.get("source_en")
                 if isinstance(label_en, str) and _CJK_CHAR.search(label_en):
                     leaks.append(f"chip_{label_en}@{card_ref}")
         return leaks

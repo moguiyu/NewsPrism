@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import litellm
+import pytest
 
 from newsprism.config import Config
 from newsprism.service.summarizer import PerspectiveGroupItem, PerspectiveItem, Summarizer
@@ -1136,3 +1137,52 @@ def test_summarize_cluster_keeps_raw_output_when_structured_parse_fails(monkeypa
     assert "Fallback body from the model." in summary.summary
     assert summary.perspectives == {}
     assert summary.grouped_perspectives == []
+
+
+@pytest.mark.parametrize(
+    "evidence, claim",
+    [
+        # German: 4,2 Milliarden == 42亿美元 (2026-10-26 Audi card).
+        ("Audi will 4,2 Milliarden Dollar in sein erstes US-Werk investieren.", "42亿美元"),
+        # English.
+        ("Audi to invest $4.2 billion in its first U.S. plant.", "42亿美元"),
+        # Dutch.
+        ("Lula kreeg 51,78 procent van de stemmen.", "51.78%"),
+        # French.
+        ("Le groupe a investi 2,5 milliards d'euros.", "25亿欧元"),
+        # Japanese: 億 is the same magnitude as Chinese 亿.
+        ("同社は15億円を投じる方針だ。", "15億日元"),
+        # Korean.
+        ("셀트리온, 1천억원 규모 자사주 매입", "1000亿韩元"),
+    ],
+)
+def test_latin_and_japanese_scale_words_ground_chinese_claims(evidence, claim):
+    """A Chinese figure must be provably supported by foreign-language evidence.
+
+    ``_numeric_values`` converted CJK/Cyrillic scale words to absolute values
+    but ignored Latin ones, so "4,2 Milliarden" parsed as 4.2 while the Chinese
+    summary said 42亿美元. Five cards were withheld on 2026-10-26 for exactly
+    this reason, all with non-Chinese headlines.
+    """
+    assert Summarizer._scale_factor("Milliarden") == 1e9
+    assert Summarizer._scale_factor("billion") == 1e9
+    assert Summarizer._scale_factor("億") == 1e8
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a millionaire", "der Milliardär", "millionenstadt"],
+)
+def test_scale_word_matching_does_not_fire_inside_longer_words(text):
+    """Word boundaries must stop ``million`` matching ``millionaire``.
+
+    The looser ``startswith`` variant of this check previously turned
+    "миллионер" into 1e6; widening the pattern to Latin words must not
+    reintroduce that over-match.
+    """
+    assert Summarizer._numeric_values(text) == []
+
+
+def test_fabricated_scale_claim_is_still_rejected():
+    """Widening the scale table must not disable the check."""
+    assert Summarizer._scale_factor("trillion") == 1e12

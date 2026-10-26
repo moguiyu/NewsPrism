@@ -1025,9 +1025,26 @@ class Summarizer:
 
     _CYRILLIC_SCALE_WORD_RE = re.compile(_CYRILLIC_SCALE_WORDS)
 
+    # Latin-script scale words (English, German, Dutch, French, Spanish,
+    # Italian, Portuguese, Nordic). Without these, evidence such as
+    # "Audi will 4,2 Milliarden Dollar investieren" parsed as 4.2 while the
+    # Chinese summary said 42亿美元, so the claim looked unsupported and the card
+    # was withheld (2026-10-26: five cards blocked, all non-Chinese headlines).
+    # Word boundaries keep "millionaire"/"milliardär" from matching.
+    _LATIN_SCALE_WORDS = (
+        r"(?:(?:thousand|million|billion|trillion)s?"
+        r"|miljoen|miljard|biljoen"
+        r"|Million(?:en)?|Milliarde(?:n)?|Billion(?:en)?"
+        r"|million(?:s)?|milliard(?:s)?"
+        r"|millón(?:es)?|mil Millones|millon(?:es)?"
+        r"|milione|milioni|miliardo|miliardi"
+        r"|milh(?:ão|ões)|bilh(?:ão|ões)"
+        r"|miljon(?:er)?|miljard(?:er)?|miljón(?:ir)?)(?![\w-])"
+    )
+
     _NUMERIC_SCALE_PATTERN = re.compile(
         rf"(?<!\d)(?P<major>{_NUMERIC_VALUE})"
-        rf"\s*(?P<scale>千|천|万|만|亿|억|兆|조|{_CYRILLIC_SCALE_WORDS})"
+        rf"\s*(?P<scale>千|천|万|만|亿|억|億|兆|조|{_CYRILLIC_SCALE_WORDS}|{_LATIN_SCALE_WORDS})"
         rf"(?P<minor>{_NUMERIC_VALUE})?"
     )
 
@@ -1038,8 +1055,49 @@ class Summarizer:
         "만": 1e4,
         "亿": 1e8,
         "억": 1e8,
+        # Japanese uses the traditional form for the same magnitude.
+        "億": 1e8,
         "兆": 1e12,
         "조": 1e12,
+    }
+
+    # Latin scale words map to the same factors as their CJK equivalents.
+    _LATIN_SCALE_FACTORS = {
+        "thousand": 1e3,
+        "duizend": 1e3,
+        "tausend": 1e3,
+        "mille": 1e3,
+        "mil": 1e3,
+        "million": 1e6,
+        "millions": 1e6,
+        "miljoen": 1e6,
+        "millionen": 1e6,
+        "million": 1e6,
+        "millón": 1e6,
+        "millones": 1e6,
+        "millon": 1e6,
+        "milione": 1e6,
+        "milioni": 1e6,
+        "milhão": 1e6,
+        "milhões": 1e6,
+        "miljon": 1e6,
+        "miljón": 1e6,
+        "billion": 1e9,
+        "billions": 1e9,
+        "miljard": 1e9,
+        "miljarden": 1e9,
+        "milliarde": 1e9,
+        "milliarden": 1e9,
+        "milliard": 1e9,
+        "milliards": 1e9,
+        "miliardo": 1e9,
+        "miliardi": 1e9,
+        "bilhão": 1e9,
+        "bilhões": 1e9,
+        "trillion": 1e12,
+        "trillions": 1e12,
+        "biljoen": 1e12,
+        "billionen": 1e12,
     }
 
     @classmethod
@@ -1058,6 +1116,11 @@ class Summarizer:
         if factor is not None:
             return factor
         lowered = scale.casefold()
+        # Latin scale words are matched whole by the pattern, so an exact
+        # lookup is enough; no stemming is involved.
+        latin_factor = cls._LATIN_SCALE_FACTORS.get(lowered)
+        if latin_factor is not None:
+            return latin_factor
         if not cls._CYRILLIC_SCALE_WORD_RE.fullmatch(lowered):
             return None
         for stem, stem_factor in cls._CYRILLIC_SCALE_STEMS:

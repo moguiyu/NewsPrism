@@ -1014,3 +1014,26 @@ def test_display_dedup_still_merges_same_event_across_different_storylines():
     _hot, _focus, regular, _positive = resolve_display_duplicates([], [], [left, right], [])
 
     assert len(regular) == 1
+
+
+def test_empty_positive_lane_is_logged_with_the_reason(caplog):
+    """An empty 正能量 lane must say why, not just report zero.
+
+    The lane was empty on 4 of 12 days (2026-10-15..26) and every occurrence
+    logged `candidates=0 selected=0` with no indication of whether the stories
+    were absent or were withheld upstream.
+    """
+    cfg = _config()
+    cfg.output["hot_topics"] = {"enabled": False}
+    # Two uplift stories, both under the bar the config sets.
+    near_miss = [_summary(f"soft{i}", 0.3, feelgood=4.0, severity=1.0) for i in range(2)]
+    plain = [_summary(f"hard{i}", 0.7, feelgood=0.0, severity=6.0) for i in range(3)]
+
+    with caplog.at_level(logging.WARNING):
+        selected = select_positive_summaries(near_miss + plain, cfg)
+
+    assert selected == []
+    warnings = [r.message for r in caplog.records if "lane is empty" in r.message]
+    assert warnings, "an empty lane must emit a diagnostic"
+    assert "2 carry any uplift" in warnings[0]
+    assert "4.0" in warnings[0]

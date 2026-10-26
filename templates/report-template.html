@@ -2726,12 +2726,21 @@
 <span data-lang-zh>{{ zh|safe }}</span><span data-lang-en>{{ (en if en is not none else zh)|safe }}</span>
 {%- endmacro %}
 
+{# Attribute-safe variant. An HTML attribute cannot carry the data-lang-zh/en
+   spans that bilingual_text() emits: Jinja escapes the tags, the browser then
+   shows the raw markup as tooltip text (2026-10-26: eight placeholder chips
+   rendered "<span data-lang-zh>当地：…</span>"). Join both languages as plain
+   text instead, matching cert_badge's "zh / en" convention. #}
+{% macro bilingual_attr(zh, en=None) -%}
+{{- zh -}}{% if en and en != zh %} / {{ en }}{% endif %}
+{%- endmacro %}
+
 {# ── 源条目内容宏 ──
    ISO region code + magnifier icon for searched/placeholder + source name + cert badge + provenance label.
    Placeholders (missing regional perspectives) render muted with a tooltip
    carrying the failure reason; flat styling, no card/lift/shadow per AGENTS.md. #}
 {% macro source_chip_body(src) -%}
-{% if src.region_code %}<span class="region-code">{{ src.region_code }}</span> {% endif %}{% if src.is_searched %}{{ icon('ui-searched') }}{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ bilingual_text(src.source, src.compact_label_en or src.source) }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ src.source }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
+{% if src.region_code %}<span class="region-code">{{ src.region_code }}</span> {% endif %}{% if src.is_searched %}{{ icon('ui-searched') }}{% endif %}{% if src.is_placeholder %}<em class="source-placeholder-text">{{ bilingual_text(src.source, src.compact_label_en or src.source) }}</em>{{ cert_badge(src) }}{% if src.provenance_label %} · <span class="source-placeholder-detail">{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}</span>{% endif %}{% else %}{{ bilingual_text(src.source, src.source_en or src.source) }}{{ cert_badge(src) }}{% if src.provenance_label %} · {{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}{% endif %}{% endif %}
 {%- endmacro %}
 
 <body>
@@ -2848,7 +2857,7 @@
                   <span class="dot"></span>{{ source_chip_body(src) }}
                 </a>
                 {% else %}
-                <span class="src-chip"{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>
+                <span class="src-chip"{% if src.is_placeholder %} title="{{ bilingual_attr(src.provenance_label, src.provenance_label_en) }}"{% endif %}>
                   <span class="dot"></span>{{ source_chip_body(src) }}
                 </span>
                 {% endif %}
@@ -2876,7 +2885,7 @@
                     {{ source_chip_body(src) }}
                   </a>
                   {% else %}
-                  <span{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>{{ source_chip_body(src) }}</span>
+                  <span{% if src.is_placeholder %} title="{{ bilingual_attr(src.provenance_label, src.provenance_label_en) }}"{% endif %}>{{ source_chip_body(src) }}</span>
                   {% endif %}
                   {% endfor %}
                 </span>
@@ -2923,7 +2932,7 @@
                   <span class="dot"></span>{{ source_chip_body(src) }}
                 </a>
                 {% else %}
-                <span class="src-chip"{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>
+                <span class="src-chip"{% if src.is_placeholder %} title="{{ bilingual_attr(src.provenance_label, src.provenance_label_en) }}"{% endif %}>
                   <span class="dot"></span>{{ source_chip_body(src) }}
                 </span>
                 {% endif %}
@@ -2951,7 +2960,7 @@
                     {{ source_chip_body(src) }}
                   </a>
                   {% else %}
-                  <span{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>{{ source_chip_body(src) }}</span>
+                  <span{% if src.is_placeholder %} title="{{ bilingual_attr(src.provenance_label, src.provenance_label_en) }}"{% endif %}>{{ source_chip_body(src) }}</span>
                   {% endif %}
                   {% endfor %}
                 </span>
@@ -2999,7 +3008,7 @@
               <div class="source-row">
                 <div class="source-chips">
                   {% for src in c.footer_sources %}
-                  <a class="src-chip src-chip-link"{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}{% if not src.is_placeholder %} href="{{ src.url }}" target="_blank" rel="noopener"{% endif %}>
+                  <a class="src-chip src-chip-link"{% if src.is_placeholder %} title="{{ bilingual_attr(src.provenance_label, src.provenance_label_en) }}"{% endif %}{% if not src.is_placeholder %} href="{{ src.url }}" target="_blank" rel="noopener"{% endif %}>
                     <span class="dot"></span>{{ source_chip_body(src) }}
                   </a>
                   {% endfor %}
@@ -3026,7 +3035,7 @@
                     {{ source_chip_body(src) }}
                   </a>
                   {% else %}
-                  <span{% if src.is_placeholder %} title="{{ bilingual_text(src.provenance_label, src.provenance_label_en or src.provenance_label) }}"{% endif %}>{{ source_chip_body(src) }}</span>
+                  <span{% if src.is_placeholder %} title="{{ bilingual_attr(src.provenance_label, src.provenance_label_en) }}"{% endif %}>{{ source_chip_body(src) }}</span>
                   {% endif %}
                   {% endfor %}
                   </span>

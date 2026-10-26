@@ -141,6 +141,44 @@ def _storyline_float_config(
 _STORYLINE_NAME_MIN_OVERLAP = 0.18
 
 
+def _cross_script_pair(name: str, content: str) -> bool:
+    """Return True when a name and today's content are in different scripts.
+
+    Token overlap cannot compare CJK against latin, and embedding cosine was
+    measured (2026-10-26, production model) to be *worse* than useless here: the
+    drifted pair ``俄乌和平谈判重启`` against "Russia to host Olympic federation
+    event" scored 0.441, while legitimate reuse scored 0.248. No threshold
+    separates them, so a score-based guard would inject fresh mislabels.
+    """
+    if not name or not content:
+        return False
+    return (_CJK_SEARCH.search(name) is not None) != (_CJK_SEARCH.search(content) is not None)
+
+
+def _chinese_anchor_text(clusters: list[ArticleCluster]) -> str:
+    """Collect whatever Chinese prose today's anchors carry.
+
+    A cluster whose lead article is a translated wire story still often carries
+    Chinese titles from Chinese outlets. Those titles are the only material that
+    can be compared against a Chinese historical label, so they are what the
+    name-coherence check should read instead of the English lead title.
+    """
+    parts: list[str] = []
+    for cluster in clusters:
+        for article in cluster.articles:
+            title = str(getattr(article, "title", "") or "")
+            if _CJK_SEARCH.search(title):
+                parts.append(title)
+        impact = getattr(cluster, "impact", None)
+        candidate = getattr(impact, "short_topic_name", None) if impact else None
+        if candidate and _CJK_SEARCH.search(str(candidate)):
+            parts.append(str(candidate))
+        category = str(getattr(cluster, "topic_category", "") or "")
+        if _CJK_SEARCH.search(category):
+            parts.append(category)
+    return " ".join(parts)
+
+
 def _storyline_name_matches_content(name: str, content: str) -> bool:
     """Return True if a (possibly historical) storyline name is still a good
     description of today's cluster content.
@@ -1167,19 +1205,31 @@ class StorylineResolver:
                 # reef content on 7/22; or "美以伊局势" on 7/30 drifted to
                 # Russia-Ukraine content on 7/31). Always validate the name
                 # against today's content: regenerate from today's anchors if
-                # the historical name no longer describes it. The
-                # ``_storyline_name_matches_content`` check is script-aware —
-                # cross-script name/content pairs (Chinese name, English
-                # headlines) pass by default since token overlap can't compare
-                # across scripts, while same-script pairs with zero overlap
-                # signal genuine topic drift.
+                # the historical name no longer describes it.
+                #
+                # Cross-script pairs (Chinese name, English headline) cannot be
+                # judged by overlap at all, and measured embedding cosine does
+                # not separate drift from legitimate reuse (2026-10-26). Today's
+                # anchors usually still carry Chinese material — a Chinese
+                # outlet's title, or the LLM's ``short_topic_name`` — so check
+                # the name against THAT. Only when no Chinese material exists is
+                # the pair genuinely unverifiable, and then the historical label
+                # is kept rather than replaced with an English fragment.
+                # The storyline KEY is never touched here, so family continuity
+                # across days is preserved either way.
                 reuse_report_date = (reuse_match or {}).get("report_date") or ""
                 today_text = " ".join(
                     str(profiles[idx]["lead_title"])
                     for idx in core_nodes[:3]
                 )
                 core_anchor_clusters = [clusters[idx] for idx in core_nodes]
-                if not _storyline_name_matches_content(historical_name, today_text):
+                if _cross_script_pair(historical_name, today_text):
+                    chinese_text = _chinese_anchor_text(core_anchor_clusters)
+                    if chinese_text and not _storyline_name_matches_content(historical_name, chinese_text):
+                        raw_storyline_name = self._build_storyline_name(core_anchor_clusters)
+                    else:
+                        raw_storyline_name = _short_name(historical_name, self.max_name_chars)
+                elif not _storyline_name_matches_content(historical_name, today_text):
                     raw_storyline_name = self._build_storyline_name(core_anchor_clusters)
                 else:
                     raw_storyline_name = _short_name(historical_name, self.max_name_chars)
@@ -1315,23 +1365,38 @@ class StorylineResolver:
     ) -> None:
         historical_name = str((history_match or {}).get("storyline_name") or "")
         current_text = str(profile.get("text") or profile.get("lead_title") or "")
+        has_history_key = bool(history_match and history_match.get("storyline_key"))
+        # A cross-script pair cannot be verified by overlap or by embedding, so
+        # keep the key (family continuity) but never inherit the label blindly:
+        # rebuild it from today's anchors, falling back to the historical label
+        # when those anchors carry no Chinese material. Without this a drifted
+        # Chinese name rides an English-headed family indefinitely (2026-10-26:
+        # 举重锦标赛 inheriting ``俄乌和平谈判重启``).
+        cross_script = _cross_script_pair(historical_name, current_text)
         history_matches_content = bool(
-            history_match
-            and history_match.get("storyline_key")
-            and _storyline_name_matches_content(historical_name, current_text)
+            has_history_key
+            and (cross_script or _storyline_name_matches_content(historical_name, current_text))
         )
         if history_matches_content:
             storyline_key = str(history_match["storyline_key"])
-            # The persisted name may itself be a foreign-script fragment written
-            # before _finalize_storyline_name existed, and
-            # _storyline_name_matches_content grants cross-script benefit of the
-            # doubt -- so the row would otherwise be re-adopted forever.
-            # Sanitising here lets existing rows self-heal on reuse
-            # (upsert_storyline_state writes summary.storyline_name back).
-            storyline_name = self._finalize_storyline_name(
-                _short_name(historical_name, self.max_name_chars),
-                [cluster],
-            )
+            if cross_script:
+                # Same reasoning as the multi-member path: prefer a rebuild, but
+                # keep the historical label when today's anchors cannot produce
+                # a Chinese one (legitimate cross-language reuse, e.g. ``关税战``
+                # over English tariff headlines).
+                rebuilt = self._build_storyline_name([cluster])
+                source_name = (
+                    rebuilt
+                    if looks_like_chinese_label(rebuilt)
+                    else _short_name(historical_name, self.max_name_chars)
+                )
+            else:
+                # The persisted name may itself be a foreign-script fragment
+                # written before _finalize_storyline_name existed, so sanitising
+                # here lets existing rows self-heal on reuse
+                # (upsert_storyline_state writes summary.storyline_name back).
+                source_name = _short_name(historical_name, self.max_name_chars)
+            storyline_name = self._finalize_storyline_name(source_name, [cluster])
             confidence = float(history_match.get("score", 0.0))
         else:
             # Content-derived key (Issue #4): per-run ``single-{N}`` collided

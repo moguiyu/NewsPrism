@@ -193,6 +193,15 @@ class ImpactAssessor:
         )
         self.batch_size = max(1, int(impact_cfg.get("batch_size", 40)))
 
+        # 今日正能量 lane bounds. Read here so the positive lane can be switched
+        # off, and its uplift/harm bars tuned, without touching selection code.
+        positive_rules = impact_cfg.get("positive", {}) if isinstance(impact_cfg, dict) else {}
+        output_cfg = cfg.output if isinstance(cfg.output, dict) else {}
+        positive_output = output_cfg.get("positive_energy", {}) if isinstance(output_cfg, dict) else {}
+        self.positive_lane_enabled = bool(positive_output.get("enabled", True))
+        self.min_feelgood = float(positive_rules.get("min_feelgood", 7.0))
+        self.max_positive_severity = float(positive_rules.get("max_severity", 4.0))
+
         reliability = editorial.get("source_reliability", {}) if isinstance(editorial, dict) else {}
         self.tier_scores = reliability.get("tier_scores", {}) if isinstance(reliability, dict) else {}
         self.source_tiers = {source.name: source.tier for source in cfg.sources}
@@ -661,8 +670,30 @@ class ImpactAssessor:
         if "official_only" in flags:
             return "needs_review", constraints
         if evaluated_by_llm and composite < self.review_floor:
+            # A positive-uplift story is soft by definition: its severity, scope
+            # and decision relevance are all low, which is exactly why its
+            # composite lands under ``review_floor``. Judging it by that floor is
+            # a category error — it is not an under-evidenced hard story, it is an
+            # intentionally light one. The lane only needs uplift plus low harm,
+            # and the publish gate still applies to everything else.
+            if self._qualifies_for_positive_lane(dims):
+                return "publishable", constraints
             return "needs_review", constraints
         return "publishable", constraints
+
+    def _qualifies_for_positive_lane(self, dims: dict[str, float]) -> bool:
+        """Return True when a low-composite story earns the 今日正能量 lane.
+
+        Requires the uplift signal the lane is built on and a harm ceiling: a
+        cheerful story about a deadly event is not a positive story. Both bounds
+        come from config so the lane stays tunable without a code change.
+        """
+        if not self.positive_lane_enabled:
+            return False
+        feelgood = float(dims.get("feelgood", 0.0))
+        if feelgood < self.min_feelgood:
+            return False
+        return float(dims.get("severity", 0.0)) <= self.max_positive_severity
 
     def _gate_cluster(self, cluster: ArticleCluster, assessment: ImpactAssessment) -> None:
         """Apply the ownership gate to each article in the cluster.
