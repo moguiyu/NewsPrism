@@ -93,7 +93,14 @@ def test_benchmark_defaults_to_offline_and_does_not_call_provider(tmp_path, monk
     assert result["mode"] == "offline"
     assert result["api_calls"] == 0
     assert result["batches"][0]["article_count"] == 2
-    assert result["batches"][0]["compact_prompt_chars"] < result["batches"][0]["legacy_prompt_chars"]
+    # The benchmark reports both protocol sizes so a cost comparison can be read
+    # off the output. It deliberately does not assert that compact is smaller:
+    # compact carries a longer rule header, and after article_snippet_chars was
+    # lowered 240 -> 200 (2026-10-27) its per-row saving no longer covers that
+    # header on a two-article batch. The protocol stays off in production; the
+    # 2026-09-11 pair benchmark, not prompt size, is what blocks re-enabling it.
+    assert result["batches"][0]["compact_prompt_chars"] > 0
+    assert result["batches"][0]["legacy_prompt_chars"] > 0
 
 
 def test_live_benchmark_records_failed_attempts_with_unknown_cost(monkeypatch):

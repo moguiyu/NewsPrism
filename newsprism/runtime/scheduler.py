@@ -121,6 +121,16 @@ _PUBLICATION_REJECTION_PATTERNS = (
 _is_real_article = is_real_article
 
 
+def _aware(value: datetime) -> datetime:
+    """Compare dates from mixed sources without raising.
+
+    `published_at` round-trips through SQLite as whatever offset the collector
+    stored; some sources carry no offset at all. Stored timestamps are UTC, so a
+    naive value is read as UTC rather than guessed against the local zone.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def _cluster_has_real_article(cluster: ArticleCluster) -> bool:
     return any(_is_real_article(article) for article in cluster.articles)
 
@@ -764,18 +774,48 @@ class Scheduler:
             # publish, which both distorts the candidate set and dominates LLM
             # clustering cost. Stored clusters keep their per-cluster marking below.
             if not shadow:
-                consumed_ids = sorted({
+                consumed_ids = {
                     article.id
                     for cluster in clusters
                     for article in cluster.articles
                     if article.id is not None
-                })
+                }
+                # The LLM omits roughly a third of every batch: articles that fit
+                # no event cluster. Those stay unclustered and, because the input
+                # window is 48h, are re-submitted on the next publish along with
+                # everything else — the same tokens paid for twice. Give an
+                # omitted article one retry, then retire it. Age, not the calendar
+                # date, is the test: a story published yesterday afternoon is new
+                # to today's publish and must keep its retry, while one that has
+                # already sat through an earlier pool has had it. Set
+                # clustering.omitted_retry_age_hours to 0 to disable retirement.
+                omitted_retry_hours = float(
+                    self.cfg.clustering.get("omitted_retry_age_hours", 24)
+                )
+                retired_omitted: list = []
+                if omitted_retry_hours > 0:
+                    retry_cutoff = datetime.now(tz=timezone.utc) - timedelta(
+                        hours=omitted_retry_hours
+                    )
+                    retired_omitted = [
+                        article
+                        for article in articles
+                        if article.id is not None
+                        and article.id not in consumed_ids
+                        and article.published_at is not None
+                        and _aware(article.published_at) < retry_cutoff
+                    ]
+                consumed_ids.update(article.id for article in retired_omitted)
+                consumed_ids = sorted(consumed_ids)
                 if consumed_ids:
                     mark_articles_clustered(consumed_ids)
                     logger.info(
-                        "Clustering consumption: marked %d articles as clustered across %d validated clusters",
+                        "Clustering consumption: marked %d articles as clustered "
+                        "(%d from %d validated clusters, %d omitted articles retired after one retry)",
                         len(consumed_ids),
+                        len(consumed_ids) - len(retired_omitted),
                         len(clusters),
+                        len(retired_omitted),
                     )
 
             hot_cfg = self.cfg.output.get("hot_topics", {}) if isinstance(self.cfg.output, dict) else {}

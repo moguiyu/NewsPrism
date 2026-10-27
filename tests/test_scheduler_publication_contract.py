@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -406,3 +406,110 @@ def test_publish_consumes_every_validated_cluster_before_editorial_selection(mon
 
     assert marked, "publish did not mark any articles"
     assert 4242 in marked[0]
+
+
+def _omitted_article(article_id: int, *, published: datetime) -> Article:
+    return Article(
+        url=f"https://example.com/omitted/{article_id}",
+        title=f"Omitted {article_id}",
+        source_name="Reuters",
+        published_at=published,
+        content="A story the clusterer left out of every event group.",
+        id=article_id,
+    )
+
+
+def test_publish_retires_an_omitted_article_after_one_retry(monkeypatch, tmp_path: Path):
+    """An article the LLM drops from every cluster must not be re-fed forever.
+
+    The 48h input window would otherwise resubmit it on the next publish and pay
+    for the same tokens twice. Retire it once it is older than one publish
+    interval, which proves it already sat in an earlier pool.
+    """
+    scheduler, _plan, input_cluster = _runtime_scheduler(monkeypatch, tmp_path)
+    input_cluster.articles[0].id = 4242
+    stale_omitted = _omitted_article(
+        7001, published=datetime.now(tz=timezone.utc) - timedelta(hours=30)
+    )
+    marked: list[list[int]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered",
+        lambda ids: marked.append(list(ids)),
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.get_unclustered_articles",
+        lambda **kwargs: [stale_omitted],
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles) + [stale_omitted],
+            push_after_render=True,
+        )
+    )
+
+    assert marked, "publish did not mark any articles"
+    assert 4242 in marked[0], "clustered article was not marked"
+    assert 7001 in marked[0], "omitted article older than one interval must be retired"
+
+
+def test_publish_keeps_a_recent_omitted_article_for_a_second_attempt(monkeypatch, tmp_path: Path):
+    """A story published just before this publish keeps its retry.
+
+    Age, not the calendar date, decides: an article published yesterday
+    afternoon is new to today's run and tomorrow's coverage may cluster it.
+    """
+    scheduler, _plan, input_cluster = _runtime_scheduler(monkeypatch, tmp_path)
+    input_cluster.articles[0].id = 4242
+    fresh_omitted = _omitted_article(
+        7002, published=datetime.now(tz=timezone.utc) - timedelta(hours=6)
+    )
+    marked: list[list[int]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered",
+        lambda ids: marked.append(list(ids)),
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles) + [fresh_omitted],
+            push_after_render=True,
+        )
+    )
+
+    assert marked
+    assert 4242 in marked[0]
+    assert 7002 not in marked[0], "a recently published article must get its retry"
+
+
+def test_omitted_retirement_can_be_disabled_with_zero_hours(monkeypatch, tmp_path: Path):
+    """Setting omitted_retry_age_hours to 0 must restore the old behaviour.
+
+    The retirement is a cost/coverage trade the operator may want to reverse
+    without a code change.
+    """
+    scheduler, _plan, input_cluster = _runtime_scheduler(monkeypatch, tmp_path)
+    scheduler.cfg.clustering["omitted_retry_age_hours"] = 0
+    input_cluster.articles[0].id = 4242
+    stale_omitted = _omitted_article(
+        7003, published=datetime.now(tz=timezone.utc) - timedelta(hours=30)
+    )
+    marked: list[list[int]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered",
+        lambda ids: marked.append(list(ids)),
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles) + [stale_omitted],
+            push_after_render=True,
+        )
+    )
+
+    assert marked
+    assert 4242 in marked[0]
+    assert 7003 not in marked[0], "0 must disable omitted-article retirement"

@@ -119,9 +119,24 @@ clustering:
   # same time; left at the code default while the protocol is off.
   compact_snippet_chars: 80
   # Phase A: cap per-article snippet length sent to the clustering prompt.
-  article_snippet_chars: 240
+  # Lowered 240 -> 200 (2026-10-27 cost review): -11% prompt characters per
+  # chunk and it is the only length with a measured quality point (the
+  # 2026-09-11 pair benchmark above retained 9 of 12 pairs at 200 vs 5 of 12 at
+  # 80). Do not go below 200 without a fresh pair benchmark; clustering is 64%
+  # of daily LLM spend and the remaining 20% saving is not worth unmeasured
+  # corroboration loss (articles/story baseline 2.24-2.58).
+  article_snippet_chars: 200
   # Keep output headroom; a lower cap alone does not reduce actual billed tokens.
   llm_max_output_tokens: 4000
+  # Retire an article the clusterer omitted from every cluster once it has been
+  # through a publish older than this many hours, so the same tokens are not paid
+  # for on a third submission. Measured on 10-27: 111 of 1838 inputs (6%) were
+  # omitted-and-older-than-24h; the steady-state share is higher because a
+  # backlog-clearing day is atypical. Cost of the setting: over 10-23..10-27,
+  # 6 articles that the retirement would have dropped did eventually cluster
+  # (2,2,2,0,0 per day), so this trades a small amount of late corroboration for
+  # the saved repeat work. Set to 0 to disable.
+  omitted_retry_age_hours: 24
   # Phase D: only cluster new/changed articles when previous clusters are supplied.
   incremental_enabled: false
   # Phase 2a: collapse same-source near-duplicate event updates before the
