@@ -192,6 +192,13 @@ class ImpactAssessor:
             status_cfg.get("single_source_severity_review", 6.0)
         )
         self.batch_size = max(1, int(impact_cfg.get("batch_size", 40)))
+        # Share of the candidate window reserved for single-source clusters.
+        # Signal ranks every multi-source cluster above every solo one, so
+        # without a reservation no solo story ever reaches the LLM. Set 0 to
+        # restore pure signal ranking.
+        self.solo_window_share = float(impact_cfg.get("solo_window_share", 0.10))
+        # Avoid one prolific single-source feed taking the whole reservation.
+        self.solo_outlet_cap = max(1, int(impact_cfg.get("solo_outlet_cap", 2)))
 
         # 今日正能量 lane bounds. Read here so the positive lane can be switched
         # off, and its uplift/harm bars tuned, without touching selection code.
@@ -238,11 +245,57 @@ class ImpactAssessor:
         Bounds how many clusters get LLM-scored. Signal rewards multi-source /
         multi-region / high-tier pickup — a non-keyword proxy for "this story
         has real coverage" — so the impact call still decides among a broad set.
+
+        **Solo-story quota.** Signal weights source count at 0.45, so every
+        multi-source cluster outranks every single-source one. Measured in
+        production on 2026-10-28: 120 multi-source groups all scored above all
+        1099 single-source groups, putting the best solo story at position 121
+        of 1354 and excluding *all* of them from the 90-cluster window (only
+        0-1 solo cluster has reached the window on any day measured).
+
+        That is the dilution vector this quota closes: an actor can flood the
+        feed with low-value pickups that each carry two source names, and bury a
+        story that only one outlet had the resources to report. Single-source
+        clusters therefore reserve a share of the window and are ranked among
+        themselves by signal (tier dominates there, since source count is flat),
+        so a wire report from an editorial outlet beats a duplicated tech reblog.
         """
         if len(clusters) <= window:
             return list(clusters)
         scored = sorted(clusters, key=lambda c: self._signal(c)[0], reverse=True)
-        return scored[:window]
+        if self.solo_window_share <= 0.0:
+            return scored[:window]
+
+        flags_by_cluster = {id(cluster): self._signal(cluster)[1] for cluster in clusters}
+        solo = [c for c in scored if "single_source" in flags_by_cluster[id(c)]]
+        # At least one reserved slot: a proportional share rounds to zero on a
+        # small window, which would silently disable the guarantee.
+        reserved = min(window, max(1, int(round(window * self.solo_window_share))))
+        if not solo:
+            return scored[:window]
+        # Spread the reserved slots across outlets. Signal is flat within a tier
+        # (every editorial solo scores 0.417), so without a cap one prolific
+        # feed takes the whole reservation — measured 2026-10-28, 5 of the top 9
+        # solos were Yonhap and included a baseball story.
+        picked: list[ArticleCluster] = []
+        per_outlet: dict[str, int] = {}
+        for cluster in solo:
+            outlet = self._dominant_source(cluster)
+            if per_outlet.get(outlet, 0) >= self.solo_outlet_cap:
+                continue
+            per_outlet[outlet] = per_outlet.get(outlet, 0) + 1
+            picked.append(cluster)
+            if len(picked) >= reserved:
+                break
+        solo_ids = {id(cluster) for cluster in picked}
+        rest = [cluster for cluster in scored if id(cluster) not in solo_ids]
+        return (picked + rest)[:window]
+
+    def _dominant_source(self, cluster: ArticleCluster) -> str:
+        """Return the source name a cluster is attributed to (first real article)."""
+        for article in _real_articles(cluster):
+            return article.source_name or ""
+        return ""
 
     def assess_clusters(self, clusters: list[ArticleCluster]) -> list[ImpactAssessment]:
         """Evaluate all clusters; attach the assessment to each cluster."""

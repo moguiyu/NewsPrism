@@ -18,6 +18,13 @@ impact:
     min_feelgood: 6.0     # seed; P2 calibration tunes against the empty-rate target
     max_severity: 4.0
   batch_size: 40
+  # Share of the impact candidate window reserved for single-source clusters.
+  # Signal scores source count at 0.45, so every multi-source cluster outranks
+  # every solo one: measured 2026-10-28, the best solo story ranked #121 of 1354
+  # and no solo cluster reached the 90-cluster window (0-1/day over five days).
+  # This reservation is the counterweight against flooding the feed with
+  # low-value pickups to bury a story only one outlet reported. 0 disables it.
+  solo_window_share: 0.10
   diversity:
     # Maximum clusters to select per display category (e.g., "World", "Tech").
     # Higher scores in one category don't preempt selection of lower-scoring items
