@@ -3774,3 +3774,79 @@ def test_source_en_uses_configured_english_name_in_payload():
     # A latin name is unchanged, and an unconfigured outlet keeps its own name.
     assert renderer._build_source_entry("Reuters", {})["source_en"] == "Reuters"
     assert renderer._build_source_entry("未知社", {})["source_en"] == "未知社"
+
+
+# ─── Beta-only aggressive label checks ──────────────────────────────────────
+
+
+class TestBetaAggressiveLabels:
+    """Beta runs the stricter label gate; production keeps the safe one.
+
+    Beta exists to try what production cannot afford to get wrong.
+    """
+
+    def test_category_name_is_rejected_as_a_hot_topic_label(self):
+        """'商业' is a section name, not an event label.
+
+        Beta shipped a tab literally labelled 商业 on 2026-10-28: two Anthropic
+        IPO stories whose LLM label degraded to the display category.
+        """
+        from newsprism.runtime.renderer import _repair_hot_topic_label
+
+        summary = _hot_family_member("Anthropic提交IPO招股书，风险提示与治理结构引关注", "商业")
+        # Beta runs with a wider tab cap (24), which is what lets the headline
+        # replacement clear the two-CJK-character gate.
+        name, _name_en = _repair_hot_topic_label(
+            "商业", None, [summary], max_chars=24, reject_category_names=True
+        )
+        assert name != "商业", "a display category must never become a tab label"
+        assert "Anthropic" in name or "IPO" in name
+
+    def test_category_name_still_allowed_by_default(self):
+        """Production keeps the old behaviour until the beta A/B says otherwise."""
+        from newsprism.runtime.renderer import _repair_hot_topic_label
+
+        summary = _hot_family_member("Anthropic提交IPO招股书", "商业")
+        name, _ = _repair_hot_topic_label("商业", None, [summary], max_chars=10)
+        assert name == "商业"
+
+    def test_beta_tab_cap_lets_a_longer_label_survive(self):
+        """Truncation cannot be repaired inside a 10-char cap.
+
+        Any replacement label is itself capped, so the earlier "replace the
+        fragment" idea was structurally unable to fire -- `_specific_hot_topic_label`
+        returns at most ``max_chars`` characters. Beta raises the cap instead, so
+        the tab carries the whole phrase; production keeps the short cap.
+        """
+        from newsprism.runtime.renderer import _repair_hot_topic_label
+
+        summary = _hot_family_member("普京与泽连斯基分别与北欧领导人通话", None)
+        wide, _ = _repair_hot_topic_label(
+            "普京与特使会谈释放美方信号", None, [summary], max_chars=24
+        )
+        assert wide == "普京与特使会谈释放美方信号"
+        assert len(wide) > 10
+
+
+def _hot_family_member(headline: str, category: str | None) -> "ClusterSummary":
+    from newsprism.types import Article, ArticleCluster, ClusterSummary
+
+    cluster = ArticleCluster(topic_category=category or "World", articles=[
+        Article(
+            url="https://example.com/a",
+            title=headline,
+            source_name="NPR",
+            published_at=__import__("datetime").datetime.now(
+                tz=__import__("datetime").timezone.utc
+            ),
+            content="body",
+        )
+    ])
+    return ClusterSummary(
+        cluster=cluster,
+        summary=headline,
+        perspectives={},
+        quality_status="publishable",
+        quality_score=1.0,
+        display_category=category,
+    )

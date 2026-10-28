@@ -192,6 +192,9 @@ class EditorialPlanner:
         self.source_regions = {
             source.name: source.region for source in (getattr(cfg, "sources", None) or [])
         }
+        # Beta-only: one outlet arriving as both domain and brand must not be
+        # counted twice. Empty in production, so counts there are unchanged.
+        self.source_aliases = dict(getattr(cfg, "source_aliases", {}) or {})
 
     def base_plan(
         self,
@@ -241,6 +244,7 @@ class EditorialPlanner:
             report_date=report_date,
             cross_family_same_event=beta_mode,
             source_regions=getattr(self, "source_regions", None),
+            source_aliases=getattr(self, "source_aliases", None),
         )
         # A tab is admitted with >=2 members, but display dedup can remove
         # members afterwards. Never ship a one-member tab: the survivor is a
@@ -972,6 +976,7 @@ def _merge_duplicate_summary(
     reason: str,
     confidence: float,
     source_regions: dict[str, str] | None = None,
+    source_aliases: dict[str, str] | None = None,
 ) -> None:
     seen_urls = {article.url for article in target.cluster.articles}
     for article in duplicate.cluster.articles:
@@ -1020,7 +1025,9 @@ def _merge_duplicate_summary(
         # Count real articles only (cluster.sources also carries placeholder
         # outlet names) and use the same region lookup as ``evidence.py``, so
         # the two producers cannot drift again.
-        sources, regions = evidence_counts(target.cluster, source_regions)
+        sources, regions = evidence_counts(
+            target.cluster, source_regions, source_aliases
+        )
         target.evidence_summary = re.sub(
             r"^\s*\d+\s*个来源、\d+\s*个地区",
             f"{sources} 个来源、{regions} 个地区",
@@ -1136,6 +1143,7 @@ def resolve_display_duplicates(
     *,
     cross_family_same_event: bool = False,
     source_regions: dict[str, str] | None = None,
+    source_aliases: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[ClusterSummary], list[ClusterSummary]]:
     displayed = _flatten_display_summaries(hot_topics, focus_storylines, regular_summaries, positive_summaries)
     positive_ids = {id(summary) for summary in positive_summaries}
@@ -1280,7 +1288,7 @@ def resolve_display_duplicates(
                 preferred = _prefer_summary(left, right)
             suppressed = right if preferred is left else left
             _merge_duplicate_summary(
-                preferred, suppressed, reason, confidence, source_regions
+                preferred, suppressed, reason, confidence, source_regions, source_aliases
             )
             suppressed_ids.add(id(suppressed))
             logger.info(
@@ -1318,7 +1326,7 @@ def resolve_display_duplicates(
                     winner = _prefer_summary(candidate, preferred)
                 loser = preferred if winner is candidate else candidate
                 _merge_duplicate_summary(
-                    winner, loser, "shared_article_url", 0.95, source_regions
+                    winner, loser, "shared_article_url", 0.95, source_regions, source_aliases
                 )
                 suppressed_ids.add(id(loser))
                 logger.info(

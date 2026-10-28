@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any
 
 import yaml
@@ -56,6 +57,10 @@ class Config:
     output: dict[str, Any]
     active_search: dict[str, Any]
     jev: dict[str, Any] = field(default_factory=dict)
+    # source_name -> canonical source_name. Populated from the configured feed
+    # list plus the outlet's own domain, so a search result that arrives named by
+    # its domain counts as the same outlet as its RSS feed.
+    source_aliases: dict[str, str] = field(default_factory=dict)
     editorial_values: dict[str, Any] = field(default_factory=dict)
     feelgood_keywords: dict[str, Any] = field(default_factory=dict)
     evolution: dict[str, Any] = field(default_factory=dict)
@@ -186,6 +191,18 @@ def load_certifications(path: Path) -> dict[str, SourceCertification]:
     return result
 
 
+def _registrable_host(url: str | None) -> str | None:
+    """Bare host for an outlet URL, used to map a domain-named article back."""
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    host = (parsed.netloc or "").lower().removeprefix("www.")
+    return host or None
+
+
 def load_config(config_path: str = "config/config.yaml") -> Config:
     path = Path(config_path)
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -283,6 +300,20 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
     if os.environ.get("NEWSPRISM_JEV_SHADOW"):
         jev["shadow"] = os.environ["NEWSPRISM_JEV_SHADOW"].lower() in {"1", "true", "yes", "on"}
 
+    # Beta-only aggressive normalisation: map an outlet's domain name onto its
+    # configured brand so one outlet cannot be counted twice on a card. Only the
+    # beta stack consumes this (see docs/design-docs/2026-10-28-beta-aggressive-checks.md).
+    # Built after the output overrides above, so NEWSPRISM_BETA_MODE is honoured.
+    source_aliases: dict[str, str] = {}
+    if bool(output.get("beta_mode", False)):
+        for source in sources:
+            canonical = source.name
+            source_aliases[canonical] = canonical
+            host = _registrable_host(source.url)
+            if host:
+                source_aliases[host] = canonical
+                source_aliases[f"www.{host}"] = canonical
+
     return Config(
         raw=raw,
         sources=sources,
@@ -295,6 +326,7 @@ def load_config(config_path: str = "config/config.yaml") -> Config:
         summarizer=raw.get("summarizer", {}),
         output=output,
         jev=jev,
+        source_aliases=source_aliases,
         active_search=active_search,
         editorial_values=editorial_values,
         feelgood_keywords=feelgood_keywords,

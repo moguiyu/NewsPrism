@@ -568,14 +568,81 @@ def _disambiguate_hot_topic_label(
     return _chinese_label_fallback(summaries, max_chars), label_en
 
 
+_DISPLAY_CATEGORY_LABELS = frozenset(
+    {
+        "国际",
+        "商业",
+        "科技",
+        "科学健康",
+        "社会",
+        "文化体育",
+        "全球焦点",
+    }
+)
+
+
+def _is_display_category_label(name: str) -> bool:
+    """True when a "topic label" is really a section name.
+
+    A reader who clicks a tab must learn what the family is about. 商业, 科技 and
+    friends carry no event, so the tab promises nothing. Beta shipped a tab
+    literally labelled 商业 on 2026-10-28 (two Anthropic IPO stories whose LLM
+    label had degraded to the display category).
+    """
+    return (name or "").strip() in _DISPLAY_CATEGORY_LABELS
+
+
+def _headline_label(
+    summaries: list[ClusterSummary],
+    max_chars: int,
+) -> tuple[str, str | None]:
+    """Label built from a member's own headline, ignoring stored topic names.
+
+    Used only when the canonical label degraded to a section name, so there is
+    nothing to preserve and the headline is the best remaining description.
+    """
+    for summary in summaries:
+        headline = _extract_headline(summary.summary)
+        if not headline:
+            article_titles = [a.title for a in summary.cluster.articles if a.title]
+            headline = article_titles[0] if article_titles else ""
+        compact = re.sub(r"\s+", "", headline or "")[:max_chars].strip(" -:：，,、。.；;")
+        if compact:
+            return compact, None
+    return "", None
+
+
 def _repair_hot_topic_label(
     name: str | None,
     name_en: str | None,
     summaries: list[ClusterSummary],
     max_chars: int = 10,
+    *,
+    reject_category_names: bool = False,
 ) -> tuple[str, str | None]:
     topic_name = _normalize_hot_topic_name(name, summaries[0] if summaries else None, max_chars)
     topic_name_en = (name_en or "").strip() or None
+
+    # Beta-only aggressive checks. Production keeps the conservative gate until
+    # the A/B shows these substitutions are safe: a wrong replacement is worse
+    # than a dull label, and only the beta page can absorb that risk.
+    if reject_category_names and _is_display_category_label(topic_name):
+        # The section name can come back from either the stored storyline name or
+        # the cluster's topic_category, so a replacement is only accepted when it
+        # is not itself a section name.
+        for candidate, candidate_en in (
+            _specific_hot_topic_label(summaries, max_chars),
+            _headline_label(summaries, max_chars),
+        ):
+            if (
+                _is_public_chinese_hot_topic_name(candidate)
+                and not _is_display_category_label(candidate)
+            ):
+                logger.info(
+                    "Beta label guard: replaced category label %s with %s", topic_name, candidate
+                )
+                return candidate, candidate_en or topic_name_en
+        return _chinese_label_fallback(summaries, max_chars), topic_name_en
     unsupported_place = _hot_label_place_mismatch(topic_name, summaries)
     if unsupported_place:
         # Shadow first: report only. The 2026-10-21 Houthi tab is the motivating
@@ -859,6 +926,9 @@ class HtmlRenderer:
         self.schedule_timezone = (schedule_timezone or "UTC").strip() or "UTC"
         self.url_prefix = (url_prefix or "").rstrip("/")
         self.beta_mode = beta_mode
+        # Beta tabs may carry a complete phrase instead of a 10-char fragment;
+        # production keeps the cap that the design review settled on.
+        self.beta_tab_name_max_chars = 24
         # Render a second English edition at /en/{date}/ (hreflang-linked with
         # the Chinese pages). Off by default; scheduler wires it from
         # output.english.separate_edition.
@@ -1808,10 +1878,16 @@ class HtmlRenderer:
             family_name_en = None
             if english_available:
                 family_name_en = str(family.get("macro_topic_name_en") or "").strip() or None
+            # Beta runs the aggressive label guards (reject section names as tab
+            # labels, allow a longer tab cap); production keeps the conservative
+            # gate until the A/B clears them. See
+            # docs/design-docs/2026-10-28-beta-aggressive-checks.md.
             topic_name, topic_name_en = _repair_hot_topic_label(
                 family_name,
                 family_name_en,
                 [summary for summary in family_summaries if isinstance(summary, ClusterSummary)],
+                max_chars=self.beta_tab_name_max_chars if self.beta_mode else 10,
+                reject_category_names=self.beta_mode,
             )
             # Full-length family label for in-body headers. Navigation tabs
             # keep the capped topic_name; overview + topic-stage headers show
@@ -1823,6 +1899,7 @@ class HtmlRenderer:
                 family_name_full_en if isinstance(family_name_full_en, str) else None,
                 [summary for summary in family_summaries if isinstance(summary, ClusterSummary)],
                 max_chars=_HOT_TOPIC_FULL_NAME_MAX_CHARS,
+                reject_category_names=self.beta_mode,
             )
             typed_summaries = [summary for summary in family_summaries if isinstance(summary, ClusterSummary)]
             storyline_name = family.get("storyline_name") if isinstance(family.get("storyline_name"), str) else None

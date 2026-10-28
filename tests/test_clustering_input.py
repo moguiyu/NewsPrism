@@ -231,3 +231,57 @@ def test_clusterer_falls_back_to_full_pool_when_nothing_is_corroborated(monkeypa
     clusterer.cluster(arts)
 
     assert seen == [2], "the full pool is retried so news is never lost to a filter"
+
+
+# ─── Beta-only aggressive outlet-alias normalisation ────────────────────────
+
+
+def test_alias_normalisation_merges_domain_and_brand_names():
+    """One outlet must count once, whatever name its article arrived under.
+
+    Measured on 95 rendered cards (2026-10-24..28): 2 inflated their source
+    count this way — 8568 counted Медуза and meduza.io as two outlets, 8483 did
+    the same with Ars Technica and arstechnica.com.
+    """
+    from newsprism.service.evidence import normalise_source_name
+
+    aliases = {
+        "Медуза": "meduza.io",
+        "meduza.io": "meduza.io",
+        "Ars Technica": "arstechnica.com",
+        "arstechnica.com": "arstechnica.com",
+        "Kyiv Independent": "kyivindependent.com",
+        "kyivindependent.com": "kyivindependent.com",
+    }
+    assert normalise_source_name("Медуза", aliases) == normalise_source_name(
+        "meduza.io", aliases
+    )
+    assert normalise_source_name("Ars Technica", aliases) == normalise_source_name(
+        "arstechnica.com", aliases
+    )
+    # an unknown outlet is returned unchanged, not collapsed
+    assert normalise_source_name("NPR", aliases) == "NPR"
+
+
+def test_alias_normalisation_counts_one_source_for_a_dual_name_card():
+    """The evidence line must not count one outlet twice."""
+    from newsprism.service.evidence import evidence_counts
+    from newsprism.types import Article, ArticleCluster
+    from datetime import datetime, timezone
+
+    def art(url, name):
+        return Article(
+            url=url, title="t", source_name=name,
+            published_at=datetime.now(tz=timezone.utc), content="b",
+        )
+
+    cluster = ArticleCluster(
+        topic_category="Event",
+        articles=[art("https://meduza.io/1", "meduza.io"), art("https://meduza.io/2", "Медуза")],
+    )
+    aliases = {"Медуза": "meduza.io", "meduza.io": "meduza.io"}
+    sources, _regions = evidence_counts(cluster, source_aliases=aliases)
+    assert sources == 1, "one outlet, two names, one source"
+
+    unnormalised, _ = evidence_counts(cluster)
+    assert unnormalised == 2, "the bug this guards: counted as two outlets"
