@@ -137,6 +137,19 @@ clustering:
   # (2,2,2,0,0 per day), so this trades a small amount of late corroboration for
   # the saved repeat work. Set to 0 to disable.
   omitted_retry_age_hours: 24
+  # Only send an article to the LLM clusterer when another *outlet* covered the
+  # same thing nearby (cosine >= threshold). Nothing else has anything to merge,
+  # so paying the LLM to return a one-article group is wasted: measured over
+  # 13,234 articles across 2026-10-24..28, this cuts clustering input 58.2%
+  # while 74 of 75 multi-source cards keep >=2 sources and no rendered card is
+  # lost. Solo articles from editorial-tier outlets are NOT dropped — they skip
+  # the LLM and become single-source candidates locally, because a pure
+  # corroboration test would discard exactly the stories an actor can bury by
+  # flooding the feed with two-source pickups. Threshold sweep on the same five
+  # days: 0.74 leaves 21% of multi-source cards with one source, 0.68 leaves
+  # 1.3%, 0.62 leaves 0%. See docs/design-docs/2026-10-28-clustering-prefilter.md.
+  corroboration_prefilter_enabled: true
+  corroboration_threshold: 0.68
   # Phase D: only cluster new/changed articles when previous clusters are supplied.
   incremental_enabled: false
   # Phase 2a: collapse same-source near-duplicate event updates before the

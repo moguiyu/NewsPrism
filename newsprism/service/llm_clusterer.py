@@ -20,6 +20,8 @@ from newsprism.service.clusterer import Clusterer
 from newsprism.service.clustering_input import (
     compact_same_source_near_duplicates,
     expand_clusters_with_collapsed_articles,
+    partition_by_corroboration,
+    solo_clusters,
 )
 from newsprism.service.llm_compat import completion_compat_kwargs
 from newsprism.service.llm_telemetry import tracked_completion
@@ -352,14 +354,43 @@ class LLMClusterer:
             return merge_incremental_clusters(previous_clusters, new_clusters)
 
         working_articles, collapsed = compact_same_source_near_duplicates(articles, self.cfg)
-        clusters = self._cluster_chunked(working_articles, report_date=report_date)
+
+        # Only articles with cross-source corroboration go to the LLM: nothing
+        # else has anything to merge. Solo articles from editorial-tier outlets
+        # become single-source candidate clusters locally (free) instead of
+        # paying for a call that would return the same one-article group. See
+        # docs/design-docs/2026-10-28-clustering-prefilter.md.
+        source_tiers = {source.name: source.tier for source in self.cfg.sources}
+        llm_articles, solo_articles, discarded = partition_by_corroboration(
+            working_articles, self.cfg, source_tiers
+        )
+        if discarded:
+            logger.info(
+                "Corroboration prefilter discarded %d uncorroborated articles: %s",
+                len(discarded),
+                ", ".join(
+                    f"{article.id}:{article.source_name or '?'}" for article in discarded[:20]
+                )
+                + (" ..." if len(discarded) > 20 else ""),
+            )
+
+        if not llm_articles:
+            logger.warning(
+                "Corroboration prefilter left no articles for the LLM; "
+                "falling back to the full pool"
+            )
+            llm_articles = list(working_articles)
+            solo_articles = []
+
+        clusters = self._cluster_chunked(llm_articles, report_date=report_date)
         if len(clusters) < self.min_clusters_fallback:
             logger.warning(
                 "LLM clustering returned %d clusters (< %d) — falling back to embedding clusterer",
                 len(clusters),
                 self.min_clusters_fallback,
             )
-            clusters = self._fallback.cluster(working_articles)
+            clusters = self._fallback.cluster(llm_articles)
+        clusters.extend(solo_clusters(solo_articles))
         return expand_clusters_with_collapsed_articles(clusters, collapsed)
 
     def _cluster_chunked(
