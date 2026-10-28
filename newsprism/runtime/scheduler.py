@@ -60,6 +60,8 @@ from newsprism.repo import (
     init_db,
     insert_article,
     insert_cluster,
+    insert_cluster_audit,
+    update_cluster_audit_outcomes,
     insert_cluster_evaluation,
     link_cluster_evaluation,
     mark_articles_clustered,
@@ -88,7 +90,7 @@ from newsprism.service.history import (
     StorylineResolver,
     StorylineStateMachine,
 )
-from newsprism.service.impact import ImpactAssessor
+from newsprism.service.impact import ImpactAssessor, cluster_key as impact_cluster_key
 from newsprism.service.jev import JevClient
 from newsprism.service.llm_telemetry import llm_run_context
 from newsprism.service.seeker import ActiveSeeker
@@ -449,6 +451,59 @@ class Scheduler:
 
     def _positive_energy_cfg(self) -> dict:
         return self.cfg.output.get("positive_energy", {}) if isinstance(self.cfg.output, dict) else {}
+
+    def _persist_cluster_audit(
+        self,
+        all_clusters: list[ArticleCluster],
+        candidate_clusters: list[ArticleCluster],
+        report_date: date,
+    ) -> None:
+        """Record every validated cluster and the stage that ended it.
+
+        ``clusters`` only holds the survivors, so a review could not explain an
+        absence. The rows written here are later updated by the render funnel
+        (display duplicate, stale, rejected) and by HTML/Telegram publication, so
+        each row ends with the real reason that story is or is not on the page.
+        """
+        # Rank comes from the window order, not from the attribute the next
+        # loop sets -- this runs before it.
+        in_window = {id(cluster): position for position, cluster in enumerate(candidate_clusters)}
+        rows = []
+        for cluster in all_clusters:
+            signal, _flags = self.impact_assessor._signal(cluster)
+            sources = {article.source_name for article in cluster.articles if article.source_name}
+            regions = {
+                article.origin_region
+                or self.impact_assessor.source_regions.get(article.source_name)
+                for article in cluster.articles
+            } - {None, ""}
+            position = in_window.get(id(cluster))
+            rank = None if position is None else position
+            if position is None:
+                outcome, reason = "window_excluded", "candidate_window"
+            else:
+                outcome, reason = "candidate", ""
+            rows.append(
+                {
+                    "report_date": report_date.isoformat(),
+                    "cluster_key": impact_cluster_key(cluster),
+                    "article_ids": [
+                        article.id for article in cluster.articles if article.id is not None
+                    ],
+                    "source_count": len(sources),
+                    "region_count": len(regions),
+                    "signal": signal,
+                    "outcome": outcome,
+                    "reason": reason,
+                    "rank": rank,
+                }
+            )
+        insert_cluster_audit(rows)
+        logger.info(
+            "Cluster audit: recorded %d clustering decisions (%d in window)",
+            len(rows),
+            len(candidate_clusters),
+        )
 
     def _persist_impact_evaluations(self, clusters: list[ArticleCluster], report_date: date) -> None:
         """Persist every candidate's impact scores (training/audit record)."""
@@ -833,6 +888,14 @@ class Scheduler:
                 len(candidate_clusters),
                 len(clusters),
             )
+            # Record every clustering decision before the window drops any of
+            # them: `clusters` keeps only what becomes a card, so without this
+            # row a review cannot say why a story is absent. Measured on
+            # 2026-10-28: 1354 validated clusters, 29 stored, 1305 unaccounted.
+            if not shadow:
+                with contextlib.suppress(Exception):
+                    self._persist_cluster_audit(clusters, candidate_clusters, today)
+
             for index, cluster in enumerate(candidate_clusters):
                 cluster._storyline_candidate_index = index  # type: ignore[attr-defined]
 
@@ -1100,6 +1163,29 @@ class Scheduler:
                 dropped_ids,
                 dropped_reasons,
             )
+            # Give each audit row its final reason: the window verdict recorded
+            # earlier cannot distinguish "rendered" from "lost to dedup", which
+            # is exactly the question a review asks.
+            if not shadow:
+                outcomes: dict[str, tuple[str, str]] = {}
+                for summary in kept_summaries:
+                    db_id = summary.cluster_db_id
+                    if db_id is None:
+                        continue
+                    key = impact_cluster_key(summary.cluster)
+                    if db_id in rendered_ids:
+                        outcomes[key] = ("rendered", "")
+                    else:
+                        reason = dropped_reasons.get(db_id, "not_selected")
+                        stage, _, detail = reason.partition(":")
+                        outcomes[key] = (stage or "not_selected", detail)
+                with contextlib.suppress(Exception):
+                    update_cluster_audit_outcomes(today.isoformat(), outcomes)
+                    logger.info(
+                        "Cluster audit outcomes: %d finalized for %s",
+                        len(outcomes),
+                        today.isoformat(),
+                    )
             hot_storyline_keys = {
                 str(family.get("macro_topic_key", ""))
                 for family in hot_topics
@@ -1263,13 +1349,21 @@ class Scheduler:
             logger.exception("Calibration run failed")
 
     async def _run_retention(self) -> None:
-        """Weekly: drop unclustered articles past the retention window."""
-        from newsprism.repo import delete_old_unclustered_articles
+        """Weekly: drop consumed articles past the retention window.
 
-        days = int(self.cfg.evolution.get("retention_days", 30)) if isinstance(self.cfg.evolution, dict) else 30
+        Age is the test, not the ``clustered`` flag: Phase 0 marks every
+        validated article clustered, and a clustered-only exemption made this
+        job a no-op (production held 21,973 clustered rows older than 30 days on
+        2026-10-28 while the old rule could only ever match 975). Articles behind
+        a published card stay, because replay and the ownership audit re-read
+        them.
+        """
+        from newsprism.repo import delete_old_articles
+
+        days = int(self.cfg.evolution.get("retention_days", 90)) if isinstance(self.cfg.evolution, dict) else 90
         try:
-            deleted = await asyncio.to_thread(delete_old_unclustered_articles, days)
-            logger.info("Retention: deleted %d unclustered articles older than %d days", deleted, days)
+            deleted = await asyncio.to_thread(delete_old_articles, days)
+            logger.info("Retention: deleted %d consumed articles older than %d days", deleted, days)
         except Exception:
             logger.exception("Retention job failed")
 

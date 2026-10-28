@@ -94,6 +94,30 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- One row per clustering decision, including the ones that never
+            -- became a card. `clusters` only holds what survived the window, so
+            -- without this table a review cannot answer "why is X not on the
+            -- page": production 2026-10-28 formed 1354 validated clusters and
+            -- persisted 29. Keyed on (report_date, cluster_key) so a re-run
+            -- updates the verdict instead of duplicating it.
+            CREATE TABLE IF NOT EXISTS cluster_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date    TEXT    NOT NULL,
+                cluster_key    TEXT    NOT NULL,
+                article_ids    TEXT    NOT NULL DEFAULT '[]',  -- JSON int array
+                source_count   INTEGER NOT NULL DEFAULT 0,
+                region_count   INTEGER NOT NULL DEFAULT 0,
+                signal         REAL    NOT NULL DEFAULT 0.0,
+                outcome        TEXT    NOT NULL,  -- rendered|display_dup|stale|rejected|window_excluded|unsummarized
+                reason         TEXT    NOT NULL DEFAULT '',
+                rank           INTEGER,
+                created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE (report_date, cluster_key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_cluster_audit_date
+                ON cluster_audit (report_date);
+
             CREATE TABLE IF NOT EXISTS search_request_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider TEXT NOT NULL,
@@ -819,6 +843,103 @@ def update_search_candidate_review_decision(
 
 # ─── CLUSTERS ──────────────────────────────────────────────────────────────────
 
+def insert_cluster_audit(
+    rows: list[dict],
+    db_path: Path = DB_PATH,
+) -> int:
+    """Record every clustering decision for the day, including dropped ones.
+
+    ``clusters`` only holds what survived the candidate window, so a review
+    could not explain why a story was absent. Each row records the decision and
+    the stage that ended it. Upserts on (report_date, cluster_key) so a re-run
+    replaces the verdict instead of duplicating it. Returns rows written.
+    """
+    if not rows:
+        return 0
+    with get_conn(db_path) as conn:
+        conn.executemany(
+            """INSERT INTO cluster_audit (
+                   report_date, cluster_key, article_ids, source_count,
+                   region_count, signal, outcome, reason, rank
+               )
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT (report_date, cluster_key) DO UPDATE SET
+                   article_ids  = excluded.article_ids,
+                   source_count = excluded.source_count,
+                   region_count = excluded.region_count,
+                   signal       = excluded.signal,
+                   outcome      = excluded.outcome,
+                   reason       = excluded.reason,
+                   rank         = excluded.rank""",
+            [
+                (
+                    str(row.get("report_date", "")),
+                    str(row.get("cluster_key", "")),
+                    json.dumps(list(row.get("article_ids") or [])),
+                    int(row.get("source_count", 0) or 0),
+                    int(row.get("region_count", 0) or 0),
+                    float(row.get("signal", 0.0) or 0.0),
+                    str(row.get("outcome", "")),
+                    str(row.get("reason", "") or ""),
+                    row.get("rank"),
+                )
+                for row in rows
+            ],
+        )
+    return len(rows)
+
+
+def update_cluster_audit_outcomes(
+    report_date: str,
+    outcomes: dict[str, tuple[str, str]],
+    db_path: Path = DB_PATH,
+) -> int:
+    """Set the final outcome/reason for audited clusters of one day.
+
+    ``_persist_cluster_audit`` records the window verdict early, before the
+    freshness gate, display dedup and publication decide the rest. This applies
+    those later verdicts so each row ends with the reason the story is or is not
+    on the page. Keys are ``impact.cluster_key`` hashes. Returns rows changed.
+    """
+    if not outcomes:
+        return 0
+    with get_conn(db_path) as conn:
+        changed = 0
+        for key, (outcome, reason) in outcomes.items():
+            cur = conn.execute(
+                """UPDATE cluster_audit SET outcome = ?, reason = ?
+                   WHERE report_date = ? AND cluster_key = ?""",
+                (str(outcome), str(reason or ""), str(report_date), str(key)),
+            )
+            changed += cur.rowcount
+        return changed
+
+
+def get_cluster_audit_for_date(
+    report_date: str,
+    db_path: Path = DB_PATH,
+) -> list[dict]:
+    """Return the audit rows for one day, ordered by rank then key."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT report_date, cluster_key, article_ids, source_count,
+                      region_count, signal, outcome, reason, rank
+               FROM cluster_audit
+               WHERE report_date = ?
+               ORDER BY rank IS NULL, rank, cluster_key""",
+            (report_date,),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["article_ids"] = json.loads(item.get("article_ids") or "[]")
+        except (TypeError, ValueError):
+            item["article_ids"] = []
+        result.append(item)
+    return result
+
+
 def insert_cluster(cluster: Cluster, db_path: Path = DB_PATH) -> int:
     with get_conn(db_path) as conn:
         cur = conn.execute(
@@ -1434,6 +1555,34 @@ def delete_old_unclustered_articles(days: int = 30, db_path: Path = DB_PATH) -> 
     with get_conn(db_path) as conn:
         cur = conn.execute(
             "DELETE FROM articles WHERE clustered = 0 AND published_at < datetime('now', ?)",
+            (f"-{days} days",),
+        )
+        return cur.rowcount
+
+
+def delete_old_articles(days: int = 90, db_path: Path = DB_PATH) -> int:
+    """Retention by age, exempting only articles a *published* card depends on.
+
+    The earlier rule deleted only ``clustered = 0`` rows, which was correct while
+    unselected articles stayed unclustered. Phase 0 (97d5236) now marks every
+    validated article as clustered so it is not re-fed into the next publish, and
+    that silently defeated retention: on 2026-10-28 production held 21,973
+    clustered articles older than 30 days while the old rule could only ever
+    match 975 rows, growing the database ~12 GB/year with no bound.
+
+    Age is the right test, not the clustered flag. Articles behind a published
+    card are exempt because replay, audit and the ownership audit all re-read
+    them (``get_articles_by_ids``, ``audit_ownership``); everything else is input
+    that has already been consumed. Returns rows deleted.
+    """
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            """DELETE FROM articles
+               WHERE published_at < datetime('now', ?)
+                 AND id NOT IN (
+                     SELECT value FROM clusters, json_each(clusters.article_ids)
+                     WHERE clusters.published_html = 1 OR clusters.published_telegram = 1
+                 )""",
             (f"-{days} days",),
         )
         return cur.rowcount

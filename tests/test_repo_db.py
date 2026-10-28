@@ -398,3 +398,199 @@ def test_init_db_migrates_llm_billed_cost_column_race_safely(tmp_path):
             (event_id,),
         ).fetchone()
     assert row == (0.000123,)
+
+
+# ─── Retention must not be defeated by the clustered flag ───────────────────
+
+
+def _insert_article(db_path, url: str, published_at: datetime, clustered: bool = False) -> int:
+    return insert_article(
+        Article(
+            url=url,
+            title=url,
+            source_name="Reuters",
+            published_at=published_at,
+            content="body " * 40,
+        ),
+        db_path=db_path,
+    )
+
+
+def _mark_clustered(db_path, ids):
+    from newsprism.repo import mark_articles_clustered
+
+    mark_articles_clustered(list(ids), db_path=db_path)
+
+
+def test_retention_deletes_old_clustered_articles(tmp_path):
+    """Phase 0 marks every article clustered, so a clustered-only exemption
+    would make retention a no-op and grow the database without bound.
+
+    Measured on production 2026-10-28: 21,973 articles were clustered AND older
+    than 30 days, while the old rule only matched 975 rows.
+    """
+    from newsprism.repo import delete_old_articles
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    old = _insert_article(db_path, "https://x.com/old", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    fresh = _insert_article(db_path, "https://x.com/new", datetime.now(tz=timezone.utc))
+    _mark_clustered(db_path, [old, fresh])
+
+    deleted = delete_old_articles(days=90, db_path=db_path)
+
+    assert deleted == 1
+    remaining = {row[0] for row in sqlite3.connect(db_path).execute("select url from articles")}
+    assert remaining == {"https://x.com/new"}
+
+
+def test_retention_keeps_articles_referenced_by_a_published_cluster(tmp_path):
+    """Replay and audit depend on the articles behind a published card."""
+    from newsprism.repo import delete_old_articles
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    old = _insert_article(db_path, "https://x.com/kept", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    other_old = _insert_article(
+        db_path, "https://x.com/dropped", datetime(2026, 1, 2, tzinfo=timezone.utc)
+    )
+    cluster_id = insert_cluster(
+        Cluster(
+            topic_category="Event",
+            article_ids=[old],
+            summary="summary",
+            perspectives={},
+            report_date="2026-01-01",
+            freshness_state="new",
+            continues_cluster_id=None,
+            storyline_key=None,
+            storyline_name=None,
+            storyline_role="none",
+            storyline_confidence=0.0,
+            storyline_state="emerging",
+            quality_status="publishable",
+            quality_score=1.0,
+        ),
+        db_path=db_path,
+    )
+    from newsprism.repo import mark_clusters_published
+
+    mark_clusters_published([cluster_id], html=True, db_path=db_path)
+
+    deleted = delete_old_articles(days=90, db_path=db_path)
+
+    assert deleted == 1
+    remaining = {row[0] for row in sqlite3.connect(db_path).execute("select url from articles")}
+    assert remaining == {"https://x.com/kept"}, "the published card's article must survive"
+    assert "https://x.com/dropped" not in remaining
+
+
+# ─── Audit persistence: every clustering decision must be recorded ──────────
+
+
+def test_insert_cluster_audit_records_dropped_clusters(tmp_path):
+    """A cluster the window discarded must still be recoverable later.
+
+    Production 2026-10-28 formed 1354 validated clusters, persisted 29, and threw
+    the other 1305 away with no row, so "why is X not on the page" could not be
+    answered after the fact.
+    """
+    from newsprism.repo import (
+        insert_cluster_audit,
+        get_cluster_audit_for_date,
+    )
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    article = _insert_article(
+        db_path, "https://x.com/a", datetime.now(tz=timezone.utc)
+    )
+
+    insert_cluster_audit(
+        [
+            {
+                "report_date": "2026-10-28",
+                "cluster_key": "abc123",
+                "article_ids": [article],
+                "source_count": 1,
+                "region_count": 0,
+                "signal": 0.417,
+                "outcome": "window_excluded",
+                "reason": "candidate_window",
+                "rank": 121,
+            }
+        ],
+        db_path=db_path,
+    )
+
+    rows = get_cluster_audit_for_date("2026-10-28", db_path=db_path)
+    assert len(rows) == 1
+    assert rows[0]["cluster_key"] == "abc123"
+    assert rows[0]["outcome"] == "window_excluded"
+    assert rows[0]["reason"] == "candidate_window"
+    assert rows[0]["rank"] == 121
+
+
+def test_cluster_audit_upsert_is_idempotent(tmp_path):
+    """The same key may be recorded twice (e.g. re-run); the last word wins."""
+    from newsprism.repo import insert_cluster_audit, get_cluster_audit_for_date
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    row = {
+        "report_date": "2026-10-28",
+        "cluster_key": "abc123",
+        "article_ids": [],
+        "source_count": 2,
+        "region_count": 1,
+        "signal": 0.53,
+        "outcome": "rendered",
+        "reason": "",
+        "rank": 3,
+    }
+    insert_cluster_audit([row], db_path=db_path)
+    insert_cluster_audit([{**row, "outcome": "display_dup", "reason": "embedding_similarity"}], db_path=db_path)
+
+    rows = get_cluster_audit_for_date("2026-10-28", db_path=db_path)
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "display_dup"
+
+
+def test_cluster_audit_outcomes_are_updated_after_selection(tmp_path):
+    """The audit row must end with the real reason, not the window verdict."""
+    from newsprism.repo import (
+        insert_cluster_audit,
+        get_cluster_audit_for_date,
+        update_cluster_audit_outcomes,
+    )
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    base = {
+        "report_date": "2026-10-28",
+        "article_ids": [],
+        "source_count": 2,
+        "region_count": 1,
+        "signal": 0.53,
+        "rank": 5,
+    }
+    insert_cluster_audit(
+        [
+            {**base, "cluster_key": "k1", "outcome": "candidate", "reason": ""},
+            {**base, "cluster_key": "k2", "outcome": "candidate", "reason": ""},
+            {**base, "cluster_key": "k3", "outcome": "window_excluded", "reason": "candidate_window"},
+        ],
+        db_path=db_path,
+    )
+
+    update_cluster_audit_outcomes(
+        "2026-10-28",
+        {"k1": ("rendered", ""), "k2": ("display_dup", "embedding_similarity")},
+        db_path=db_path,
+    )
+
+    rows = {row["cluster_key"]: row for row in get_cluster_audit_for_date("2026-10-28", db_path=db_path)}
+    assert rows["k1"]["outcome"] == "rendered"
+    assert rows["k2"]["outcome"] == "display_dup"
+    assert rows["k2"]["reason"] == "embedding_similarity"
+    assert rows["k3"]["outcome"] == "window_excluded", "untouched rows keep their verdict"

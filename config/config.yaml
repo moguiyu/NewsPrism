@@ -89,7 +89,13 @@ evolution:
     weight_bounds: [0.3, 3.0]   # clamp as multiples of each dimension's seed
     min_feedback_to_run: 10
     policy_max_bullets: 10
-  retention_days: 30
+  # Retention drops *consumed* articles older than this (age, not the clustered
+  # flag: Phase 0 marks every validated article clustered, which made the old
+  # clustered-only rule a no-op and grew the DB ~12 GB/year). Articles behind a
+  # published card are always kept for replay/audit. 90 days matches the weekly
+  # calibration window plus the 30-day output retention, so nothing a review or
+  # a re-render needs disappears.
+  retention_days: 90
 
 # ─── COLLECTION ────────────────────────────────────────────────────────────────
 collection:
