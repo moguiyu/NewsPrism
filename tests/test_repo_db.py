@@ -1,4 +1,5 @@
 """Tests for SQLite persistence of searched articles and telemetry."""
+import json
 from datetime import datetime, timezone
 import sqlite3
 
@@ -594,3 +595,70 @@ def test_cluster_audit_outcomes_are_updated_after_selection(tmp_path):
     assert rows["k2"]["outcome"] == "display_dup"
     assert rows["k2"]["reason"] == "embedding_similarity"
     assert rows["k3"]["outcome"] == "window_excluded", "untouched rows keep their verdict"
+
+
+def test_retention_removes_old_unpublished_clusters_without_dangling_refs(tmp_path):
+    """Deleting articles must not leave cluster rows pointing at nothing.
+
+    Production 2026-10-28: 4,436 unpublished cluster rows older than 90 days
+    referenced 16,834 articles that age-based retention would delete. A row whose
+    article_ids resolve to nothing breaks replay and the ownership audit, so the
+    never-published clusters go with their articles.
+    """
+    from newsprism.repo import delete_old_articles
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    old_article = _insert_article(
+        db_path, "https://x.com/old", datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    fresh_article = _insert_article(
+        db_path, "https://x.com/new", datetime.now(tz=timezone.utc)
+    )
+
+    def cluster(article_id: int, report_date: str) -> int:
+        return insert_cluster(
+            Cluster(
+                topic_category="Event",
+                article_ids=[article_id],
+                summary="summary",
+                perspectives={},
+                report_date=report_date,
+                freshness_state="new",
+                continues_cluster_id=None,
+                storyline_key=None,
+                storyline_name=None,
+                storyline_role="none",
+                storyline_confidence=0.0,
+                storyline_state="emerging",
+                quality_status="publishable",
+                quality_score=1.0,
+            ),
+            db_path=db_path,
+        )
+
+    old_unpublished = cluster(old_article, "2026-01-01")
+    fresh_cluster = cluster(fresh_article, datetime.now(tz=timezone.utc).date().isoformat())
+    old_published_article = _insert_article(
+        db_path, "https://x.com/published", datetime(2026, 1, 5, tzinfo=timezone.utc)
+    )
+    old_published = cluster(old_published_article, "2026-01-05")
+    from newsprism.repo import mark_clusters_published
+
+    mark_clusters_published([old_published], html=True, db_path=db_path)
+
+    delete_old_articles(days=90, db_path=db_path)
+
+    con = sqlite3.connect(db_path)
+    remaining_cluster_ids = {row[0] for row in con.execute("select id from clusters")}
+    assert old_unpublished not in remaining_cluster_ids, "unpublished old cluster must go"
+    assert fresh_cluster in remaining_cluster_ids
+    assert old_published in remaining_cluster_ids, "published cluster is kept for replay"
+
+    # no cluster row may reference a missing article
+    for cid, article_ids in con.execute("select id, article_ids from clusters"):
+        for aid in json.loads(article_ids):
+            assert (
+                con.execute("select 1 from articles where id = ?", (aid,)).fetchone()
+                is not None
+            ), f"cluster {cid} points at deleted article {aid}"

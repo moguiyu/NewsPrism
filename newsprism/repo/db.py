@@ -1576,6 +1576,16 @@ def delete_old_articles(days: int = 90, db_path: Path = DB_PATH) -> int:
     that has already been consumed. Returns rows deleted.
     """
     with get_conn(db_path) as conn:
+        # Never-published clusters go with their articles. They are kept out of
+        # every replay path, and leaving them behind would produce rows whose
+        # article_ids resolve to nothing: production 2026-10-28 had 4,436 such
+        # rows referencing 16,834 articles this delete removes.
+        conn.execute(
+            """DELETE FROM clusters
+               WHERE published_html = 0 AND published_telegram = 0
+                 AND report_date < date('now', ?)""",
+            (f"-{days} days",),
+        )
         cur = conn.execute(
             """DELETE FROM articles
                WHERE published_at < datetime('now', ?)
