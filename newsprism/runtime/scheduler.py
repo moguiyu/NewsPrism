@@ -62,6 +62,7 @@ from newsprism.repo import (
     insert_cluster,
     insert_cluster_audit,
     update_cluster_audit_outcomes,
+    backfill_cluster_audit_scores,
     insert_cluster_evaluation,
     link_cluster_evaluation,
     mark_articles_clustered,
@@ -74,6 +75,7 @@ from newsprism.repo import (
 from newsprism.runtime.publisher import TelegramPublisher
 from newsprism.runtime.renderer import HtmlRenderer
 from newsprism.runtime.publication_validator import validate_publication_contract
+from newsprism.service.categories import normalize_display_category
 from newsprism.service.clusterer import Clusterer
 from newsprism.service.llm_clusterer import LLMClusterer
 from newsprism.service.collector import Collector
@@ -121,6 +123,52 @@ _PUBLICATION_REJECTION_PATTERNS = (
 
 
 _is_real_article = is_real_article
+
+
+def _warn_on_outranked_candidates(
+    selected: list[ArticleCluster],
+    candidates: list[ArticleCluster],
+) -> None:
+    """Name the publishable stories a lower-scoring card displaced.
+
+    Selection caps categories and lanes, so a strong story can lose to a weak
+    one on purpose. That is a defensible product choice, but it must not be
+    silent: on 2026-10-29 five publishable candidates scored above the weakest
+    published card (0.682 vs 0.635) and the logs said nothing, so "why is this
+    missing" had no answer. This logs the displacement without changing the
+    ranking.
+    """
+    scored = [
+        cluster
+        for cluster in selected
+        if getattr(cluster, "impact", None) is not None
+    ]
+    if not scored:
+        return
+    floor = min(cluster.impact.composite for cluster in scored)  # type: ignore[union-attr]
+    selected_ids = {id(cluster) for cluster in selected}
+    outranked = [
+        cluster
+        for cluster in candidates
+        if id(cluster) not in selected_ids
+        and getattr(cluster, "impact", None) is not None
+        and cluster.impact.status == "publishable"  # type: ignore[union-attr]
+        and cluster.impact.composite > floor  # type: ignore[union-attr]
+    ]
+    if not outranked:
+        return
+    outranked.sort(key=lambda c: -c.impact.composite)  # type: ignore[union-attr]
+    logger.warning(
+        "Selection dropped %d publishable candidate(s) that outscored the weakest "
+        "published card (%.3f): %s",
+        len(outranked),
+        floor,
+        ", ".join(
+            f"{_audit_key_of(cluster)}={cluster.impact.composite:.3f}"  # type: ignore[union-attr]
+            f"({cluster.display_category or 'unclassified'})"
+            for cluster in outranked[:5]
+        ),
+    )
 
 
 def _audit_key_of(cluster: ArticleCluster) -> str:
@@ -552,6 +600,43 @@ class Scheduler:
                         "review": assessment.gate_review,
                     },
                 )
+        self._backfill_audit_scores(clusters, report_date)
+
+    def _backfill_audit_scores(
+        self,
+        clusters: list[ArticleCluster],
+        report_date: date,
+    ) -> None:
+        """Fill the selection score into the audit rows written before scoring.
+
+        ``_persist_cluster_audit`` runs before ``assess_clusters`` (it must, or a
+        story rejected by scoring would have no row at all), so it can only
+        record the local ``signal``. Selection ranks on ``composite`` -- which
+        needs the LLM dimensions -- and then applies a per-category cap, so
+        ``signal`` alone cannot explain a drop: on 2026-10-29 five publishable
+        candidates outscored the weakest published card and neither the audit
+        table nor the logs recorded the score that beat them.
+        """
+        rows = []
+        for cluster in clusters:
+            impact = getattr(cluster, "impact", None)
+            if impact is None:
+                continue
+            rows.append(
+                {
+                    "report_date": report_date.isoformat(),
+                    "cluster_key": _audit_key_of(cluster),
+                    "composite": float(impact.composite),
+                    "display_category": normalize_display_category(
+                        getattr(cluster, "display_category", None)
+                        or getattr(impact, "display_category", None)
+                    ),
+                    "lane": "hot" if getattr(cluster, "is_hot_topic", False) else "main",
+                }
+            )
+        if rows:
+            with contextlib.suppress(Exception):
+                backfill_cluster_audit_scores(rows)
 
     def _previous_clusters_for_incremental(
         self, report_date: date
@@ -948,7 +1033,14 @@ class Scheduler:
                 )
                 _log_storyline_stage("Storyline stage: resolved candidate families", candidate_clusters)
 
-            hot_clusters, main_clusters = select_report_clusters(candidate_clusters, self.cfg)
+            # Per-candidate drop reasons: "lane_quota" alone cannot tell a
+            # category-cap loss from a main-limit loss, and the two call for
+            # different fixes (2026-10-29: five publishable World/Science
+            # candidates outscored the weakest published card).
+            selection_drops: dict[int, str] = {}
+            hot_clusters, main_clusters = select_report_clusters(
+                candidate_clusters, self.cfg, drop_reasons=selection_drops
+            )
             selected_clusters = hot_clusters + main_clusters
             hot_storyline_keys = {cluster.storyline_key or "" for cluster in hot_clusters}
             _warn_on_storyline_near_miss(candidate_clusters, hot_storyline_keys, "Storyline stage")
@@ -957,7 +1049,8 @@ class Scheduler:
             selected_ids = {id(cluster) for cluster in selected_clusters}
             for cluster in candidate_clusters:
                 if id(cluster) not in selected_ids:
-                    audit_outcomes[_audit_key_of(cluster)] = ("not_selected", "lane_quota")
+                    reason = selection_drops.get(id(cluster), "lane_quota")
+                    audit_outcomes[_audit_key_of(cluster)] = ("not_selected", reason)
 
             logger.info(
                 "Selected %d hotspot candidate items and %d main candidates for enrichment/summarization (from %d total clusters; candidate window=%d)",
@@ -966,6 +1059,7 @@ class Scheduler:
                 len(clusters),
                 len(candidate_clusters),
             )
+            _warn_on_outranked_candidates(selected_clusters, candidate_clusters)
 
             # Phase 2.5: Actively seek missing perspectives (impact status decides where)
             selected_clusters = _run_llm_stage(

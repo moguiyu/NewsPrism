@@ -597,6 +597,105 @@ def test_cluster_audit_outcomes_are_updated_after_selection(tmp_path):
     assert rows["k3"]["outcome"] == "window_excluded", "untouched rows keep their verdict"
 
 
+def test_init_db_adds_selection_score_columns_to_cluster_audit(tmp_path):
+    """A pre-existing audit table must gain the selection diagnostics.
+
+    The audit row is written before scoring, so it can only carry `signal`.
+    Without these columns an operator cannot tell whether a high-scoring story
+    lost to the lane quota or to the per-category cap.
+    """
+    db_path = tmp_path / "legacy.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """CREATE TABLE cluster_audit (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   report_date    TEXT    NOT NULL,
+                   cluster_key    TEXT    NOT NULL,
+                   article_ids    TEXT    NOT NULL DEFAULT '[]',
+                   source_count   INTEGER NOT NULL DEFAULT 0,
+                   region_count   INTEGER NOT NULL DEFAULT 0,
+                   signal         REAL    NOT NULL DEFAULT 0.0,
+                   outcome        TEXT    NOT NULL,
+                   reason         TEXT    NOT NULL DEFAULT '',
+                   rank           INTEGER,
+                   created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+                   UNIQUE (report_date, cluster_key)
+               )"""
+        )
+
+    init_db(db_path)
+    init_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(cluster_audit)")}
+    assert {"composite", "display_category", "lane"} <= columns
+
+
+def test_backfill_cluster_audit_scores_explains_a_dropped_candidate(tmp_path):
+    """A dropped high-scoring story must be explainable from the audit row alone.
+
+    Production 2026-10-29: c51dc6d4671776dd scored 0.682 as the top-ranked
+    candidate yet never reached the page, and `cluster_audit` held only its
+    local `signal`, so the reason was unrecoverable.
+    """
+    from newsprism.repo import (
+        backfill_cluster_audit_scores,
+        get_cluster_audit_for_date,
+        insert_cluster_audit,
+    )
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    base = {
+        "report_date": "2026-10-29",
+        "article_ids": [],
+        "source_count": 4,
+        "region_count": 2,
+        "outcome": "not_selected",
+        "reason": "lane_quota",
+        "rank": 1,
+    }
+    insert_cluster_audit(
+        [
+            {**base, "cluster_key": "dropped", "signal": 0.610},
+            {**base, "cluster_key": "window_only", "outcome": "window_excluded",
+             "reason": "candidate_window", "signal": 0.30},
+        ],
+        db_path=db_path,
+    )
+
+    changed = backfill_cluster_audit_scores(
+        [
+            {
+                "report_date": "2026-10-29",
+                "cluster_key": "dropped",
+                "composite": 0.682,
+                "display_category": "Science & Health",
+                "lane": "main",
+            },
+            {
+                "report_date": "2026-10-29",
+                "cluster_key": "never_written",
+                "composite": 0.9,
+                "display_category": "World",
+                "lane": "main",
+            },
+        ],
+        db_path=db_path,
+    )
+
+    assert changed == 1, "only the row that exists is updated"
+    rows = {
+        row["cluster_key"]: row
+        for row in get_cluster_audit_for_date("2026-10-29", db_path=db_path)
+    }
+    assert rows["dropped"]["composite"] == 0.682
+    assert rows["dropped"]["display_category"] == "Science & Health"
+    assert rows["dropped"]["lane"] == "main"
+    assert rows["dropped"]["reason"] == "lane_quota"
+    assert rows["window_only"]["composite"] is None, "unscored rows stay null"
+
+
 def test_retention_removes_old_unpublished_clusters_without_dangling_refs(tmp_path):
     """Deleting articles must not leave cluster rows pointing at nothing.
 

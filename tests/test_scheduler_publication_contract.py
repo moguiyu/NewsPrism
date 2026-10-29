@@ -232,8 +232,13 @@ def test_gate_two_preserves_unrecognised_family_members(caplog):
     assert "single-odd" in caplog.text
 
 
-def _runtime_scheduler(monkeypatch, tmp_path: Path):
-    """Build a Scheduler whose publish() drives the real pipeline to the gates."""
+def _runtime_scheduler(monkeypatch, tmp_path: Path, *, stub_impact_persistence: bool = True):
+    """Build a Scheduler whose publish() drives the real pipeline to the gates.
+
+    ``stub_impact_persistence`` keeps the impact/audit writes off the disk for tests
+    that only assert on the funnel; a test that checks what gets persisted has to
+    turn it off so the real ``_persist_impact_evaluations`` runs.
+    """
     cfg = Config(
         raw={},
         sources=[
@@ -322,7 +327,7 @@ def _runtime_scheduler(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(
         "newsprism.runtime.scheduler.select_report_clusters",
-        lambda clusters, cfg: ([], [input_cluster]),
+        lambda clusters, cfg, drop_reasons=None: ([], [input_cluster]),
     )
     monkeypatch.setattr(
         "newsprism.runtime.scheduler.select_positive_summaries",
@@ -340,9 +345,10 @@ def _runtime_scheduler(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         "newsprism.runtime.scheduler.mark_articles_clustered", lambda ids: None
     )
-    monkeypatch.setattr(
-        Scheduler, "_persist_impact_evaluations", lambda self, clusters, report_date: None
-    )
+    if stub_impact_persistence:
+        monkeypatch.setattr(
+            Scheduler, "_persist_impact_evaluations", lambda self, clusters, report_date: None
+        )
     monkeypatch.setattr(
         Scheduler, "_promote_latest_symlink", lambda self, report_date, total_story_count: None
     )
@@ -622,7 +628,7 @@ def test_every_in_window_candidate_receives_a_final_audit_verdict(monkeypatch, t
     )
     monkeypatch.setattr(
         "newsprism.runtime.scheduler.select_report_clusters",
-        lambda clusters, cfg: ([], [input_cluster]),
+        lambda clusters, cfg, drop_reasons=None: ([], [input_cluster]),
     )
 
     asyncio.run(
@@ -641,3 +647,167 @@ def test_every_in_window_candidate_receives_a_final_audit_verdict(monkeypatch, t
         key = _audit_key_of(cluster)
         assert key in final, f"{cluster.topic_category} left without a verdict"
         assert final[key][0] != "candidate", f"{cluster.topic_category} kept the provisional verdict"
+
+
+def test_publish_backfills_the_score_selection_actually_uses(monkeypatch, tmp_path: Path):
+    """The audit row must end up carrying `composite`, not only `signal`.
+
+    `_persist_cluster_audit` runs before scoring, so the row it writes can only
+    hold the local signal. Selection ranks on `composite` and then caps each
+    display category, so without the backfill the table cannot answer why a
+    top-ranked story lost -- exactly the 2026-10-29 case where five publishable
+    candidates outscored the weakest published card and nothing recorded it.
+    """
+    from newsprism.types import ImpactAssessment
+
+    scheduler, plan, input_cluster = _runtime_scheduler(
+        monkeypatch, tmp_path, stub_impact_persistence=False
+    )
+    input_cluster.impact = ImpactAssessment(
+        cluster_key="whatever",
+        dims={"scope": 6.0, "severity": 7.0, "novelty": 9.0},
+        signal=0.61,
+        composite=0.682,
+        display_category="Science & Health",
+        status="publishable",
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered", lambda ids: None
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.insert_cluster_audit", lambda rows: len(rows)
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.update_cluster_audit_outcomes",
+        lambda report_date, outcomes: len(outcomes),
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.insert_cluster_evaluation",
+        lambda **kwargs: None,
+    )
+    backfilled: list[list[dict]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.backfill_cluster_audit_scores",
+        lambda rows: backfilled.append(list(rows)) or len(rows),
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles),
+            push_after_render=True,
+        )
+    )
+
+    assert backfilled, "publish never backfilled the audit scores"
+    rows = {row["cluster_key"]: row for row in backfilled[-1]}
+    from newsprism.runtime.scheduler import _audit_key_of
+
+    key = _audit_key_of(input_cluster)
+    assert key in rows, "the assessed cluster has no backfilled row"
+    assert rows[key]["composite"] == 0.682
+    assert rows[key]["display_category"] == "Science & Health"
+    assert rows[key]["lane"] in {"main", "hot"}
+    assert rows[key]["report_date"] == "2026-06-19"
+
+
+def test_publish_audits_the_constraint_that_dropped_a_candidate(monkeypatch, tmp_path: Path):
+    """The audit reason must name the binding constraint, not just "lane_quota".
+
+    A candidate cut by the World display-category cap and one cut because every
+    slot went to a higher score need different answers, and 2026-10-29 produced
+    five such candidates that the table could not distinguish.
+    """
+    scheduler, plan, input_cluster = _runtime_scheduler(monkeypatch, tmp_path)
+    dropped = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/dropped-by-cap",
+                title="Dropped by cap",
+                source_name="Reuters",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Body",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered", lambda ids: None
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.insert_cluster_audit", lambda rows: len(rows)
+    )
+    verdicts: list[dict[str, tuple[str, str]]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.update_cluster_audit_outcomes",
+        lambda report_date, outcomes: verdicts.append(dict(outcomes)) or len(outcomes),
+    )
+    scheduler.clusterer = SimpleNamespace(
+        cluster=lambda articles, **kwargs: [input_cluster, dropped]
+    )
+
+    def _fake_select(clusters, cfg, drop_reasons=None):
+        for cluster in clusters:
+            if cluster is dropped and drop_reasons is not None:
+                drop_reasons[id(cluster)] = "category_cap:World News"
+        return [], [input_cluster]
+
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.select_report_clusters", _fake_select
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles),
+            push_after_render=True,
+        )
+    )
+
+    assert verdicts, "publish never wrote final audit verdicts"
+    from newsprism.runtime.scheduler import _audit_key_of
+
+    assert verdicts[-1][_audit_key_of(dropped)] == ("not_selected", "category_cap:World News")
+
+
+def test_publish_warns_when_a_weak_card_displaces_a_stronger_story(caplog):
+    """A category cap may drop a stronger story, but never quietly.
+
+    Production 2026-10-29 published a 0.635 card while a publishable 0.682 card
+    was dropped, and nothing in the logs named the trade. The ranking stays; the
+    displacement gets a warning.
+    """
+    from newsprism.runtime.scheduler import _warn_on_outranked_candidates
+    from newsprism.types import ImpactAssessment
+
+    def _cluster(url: str, composite: float, status: str = "publishable") -> ArticleCluster:
+        cluster = ArticleCluster(
+            topic_category="World News",
+            articles=[
+                Article(
+                    url=url,
+                    title=url,
+                    source_name="Reuters",
+                    published_at=datetime.now(tz=timezone.utc),
+                    content="Body",
+                )
+            ],
+        )
+        cluster.impact = ImpactAssessment(
+            cluster_key=url, composite=composite, status=status, display_category="World"
+        )
+        return cluster
+
+    weak = _cluster("https://example.com/weak", 0.435)
+    strong = _cluster("https://example.com/strong", 0.682)
+    blocked = _cluster("https://example.com/blocked", 0.700, status="needs_review")
+
+    with caplog.at_level(logging.WARNING):
+        _warn_on_outranked_candidates([weak], [weak, strong, blocked])
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages, "the displacement was silent"
+    joined = "\n".join(messages)
+    assert "1 publishable candidate" in joined
+    assert "0.682" in joined
+    assert "0.700" not in joined, "a non-publishable candidate is not a loss"

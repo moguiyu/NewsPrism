@@ -334,7 +334,7 @@ def test_scheduler_ignores_focus_storylines_in_public_report_runtime(monkeypatch
 
     scheduler.publisher = SimpleNamespace(publish=publish)
 
-    monkeypatch.setattr("newsprism.runtime.scheduler.select_report_clusters", lambda clusters, cfg: ([], [input_cluster]))
+    monkeypatch.setattr("newsprism.runtime.scheduler.select_report_clusters", lambda clusters, cfg, drop_reasons=None: ([], [input_cluster]))
     monkeypatch.setattr("newsprism.runtime.scheduler.select_positive_summaries", lambda kept, cfg: [positive_summary])
     monkeypatch.setattr("newsprism.runtime.scheduler.get_recent_clusters", lambda **kwargs: [])
     monkeypatch.setattr("newsprism.runtime.scheduler.insert_cluster", lambda cluster: 123)

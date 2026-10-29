@@ -298,17 +298,28 @@ def _diverse_by_category(
     items: list,
     limit: int,
     max_per_category: int,
+    drop_reasons: dict[int, str] | None = None,
 ) -> list:
-    """Greedy top-N by composite with a per-display-category cap; spill if short."""
+    """Greedy top-N by composite with a per-display-category cap; spill if short.
+
+    ``drop_reasons`` records why each loser lost. "lane_quota" is too coarse to
+    review: a story turned away because World had used its eight slots and one
+    turned away because every slot went to a higher score call for different
+    fixes. Keys are ``id(item)`` because candidates are not hashable.
+    """
     selected: list = []
     per_category: dict[str, int] = defaultdict(int)
     overflow: list = []
     for item in items:
         if len(selected) >= limit:
-            break
+            if drop_reasons is not None:
+                drop_reasons[id(item)] = "main_limit"
+            continue
         category = _display_category(item)
         if category and per_category[category] >= max_per_category:
             overflow.append(item)
+            if drop_reasons is not None:
+                drop_reasons[id(item)] = f"category_cap:{category}"
             continue
         selected.append(item)
         if category:
@@ -317,14 +328,22 @@ def _diverse_by_category(
         if len(selected) >= limit:
             break
         selected.append(item)
+        if drop_reasons is not None:
+            drop_reasons.pop(id(item), None)
     return selected
 
 
 def select_report_clusters(
     clusters: list[ArticleCluster],
     cfg: Config,
+    drop_reasons: dict[int, str] | None = None,
 ) -> tuple[list[ArticleCluster], list[ArticleCluster]]:
-    """Split candidates into hot-topic family members and impact-ranked main clusters."""
+    """Split candidates into hot-topic family members and impact-ranked main clusters.
+
+    ``drop_reasons`` (optional) is filled with ``id(cluster) -> reason`` for every
+    candidate that did not make the page, so the audit trail can say whether the
+    main limit or a display-category cap ended a story.
+    """
     hot_cfg = cfg.output.get("hot_topics", {}) if isinstance(cfg.output, dict) else {}
     impact_cfg = (cfg.editorial_values or {}).get("impact", {})
     positive_cfg = cfg.output.get("positive_energy", {}) if isinstance(cfg.output, dict) else {}
@@ -378,7 +397,7 @@ def select_report_clusters(
     else:
         main_pool = list(ranked)
 
-    main_clusters = _diverse_by_category(main_pool, main_limit, max_per_category)
+    main_clusters = _diverse_by_category(main_pool, main_limit, max_per_category, drop_reasons)
 
     # Positive extras: high-feelgood clusters clipped by the main cap still get
     # summarized so the 今日正能量 lane can use them.

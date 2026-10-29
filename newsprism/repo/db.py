@@ -108,6 +108,13 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 source_count   INTEGER NOT NULL DEFAULT 0,
                 region_count   INTEGER NOT NULL DEFAULT 0,
                 signal         REAL    NOT NULL DEFAULT 0.0,
+                -- Selection diagnostics. Ranking uses `composite`, not `signal`,
+                -- and it is category-capped, so `signal` alone cannot explain a
+                -- drop: on 2026-10-29 five publishable candidates outscored the
+                -- weakest published card yet no row recorded why they went.
+                composite      REAL    DEFAULT NULL,
+                display_category TEXT  DEFAULT NULL,
+                lane           TEXT    NOT NULL DEFAULT '',  -- hot|main|none
                 outcome        TEXT    NOT NULL,  -- rendered|display_dup|stale|rejected|window_excluded|unsummarized
                 reason         TEXT    NOT NULL DEFAULT '',
                 rank           INTEGER,
@@ -383,6 +390,18 @@ def init_db(db_path: Path = DB_PATH) -> None:
             conn.execute("ALTER TABLE clusters ADD COLUMN quality_status TEXT NOT NULL DEFAULT 'unknown'")
         if "quality_score" not in columns:
             conn.execute("ALTER TABLE clusters ADD COLUMN quality_score REAL NOT NULL DEFAULT 0.0")
+
+        # Migration: selection diagnostics on the audit trail. Ranking uses
+        # `composite` and a per-category cap, so `signal` alone cannot explain a
+        # dropped story (2026-10-29: five publishable candidates beat the weakest
+        # published card and nothing recorded why).
+        audit_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(cluster_audit)").fetchall()
+        }
+        if audit_columns:
+            _add_column("cluster_audit", "composite", "composite REAL DEFAULT NULL")
+            _add_column("cluster_audit", "display_category", "display_category TEXT DEFAULT NULL")
+            _add_column("cluster_audit", "lane", "lane TEXT NOT NULL DEFAULT ''")
 
         # Migration: Add searched-article metadata to articles table
         cursor = conn.execute("PRAGMA table_info(articles)")
@@ -860,14 +879,18 @@ def insert_cluster_audit(
         conn.executemany(
             """INSERT INTO cluster_audit (
                    report_date, cluster_key, article_ids, source_count,
-                   region_count, signal, outcome, reason, rank
+                   region_count, signal, composite, display_category, lane,
+                   outcome, reason, rank
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (report_date, cluster_key) DO UPDATE SET
                    article_ids  = excluded.article_ids,
                    source_count = excluded.source_count,
                    region_count = excluded.region_count,
                    signal       = excluded.signal,
+                   composite    = excluded.composite,
+                   display_category = excluded.display_category,
+                   lane         = excluded.lane,
                    outcome      = excluded.outcome,
                    reason       = excluded.reason,
                    rank         = excluded.rank""",
@@ -879,6 +902,9 @@ def insert_cluster_audit(
                     int(row.get("source_count", 0) or 0),
                     int(row.get("region_count", 0) or 0),
                     float(row.get("signal", 0.0) or 0.0),
+                    row.get("composite"),
+                    row.get("display_category"),
+                    str(row.get("lane", "") or ""),
                     str(row.get("outcome", "")),
                     str(row.get("reason", "") or ""),
                     row.get("rank"),
@@ -923,7 +949,8 @@ def get_cluster_audit_for_date(
     with get_conn(db_path) as conn:
         rows = conn.execute(
             """SELECT report_date, cluster_key, article_ids, source_count,
-                      region_count, signal, outcome, reason, rank
+                      region_count, signal, composite, display_category, lane,
+                      outcome, reason, rank
                FROM cluster_audit
                WHERE report_date = ?
                ORDER BY rank IS NULL, rank, cluster_key""",
@@ -938,6 +965,40 @@ def get_cluster_audit_for_date(
             item["article_ids"] = []
         result.append(item)
     return result
+
+
+def backfill_cluster_audit_scores(
+    rows: list[dict],
+    db_path: Path = DB_PATH,
+) -> int:
+    """Attach the selection score to audit rows written before scoring.
+
+    ``_persist_cluster_audit`` has to run before ``assess_clusters`` so a story
+    the scorer rejects still leaves a row, which means it can only record
+    ``signal``. Selection ranks on ``composite`` and then applies a per-category
+    cap, so ``signal`` alone cannot say why a story lost. This fills the score
+    in once the assessment exists. Rows that were never written (the cluster
+    never reached the window) are left alone. Returns rows changed.
+    """
+    if not rows:
+        return 0
+    with get_conn(db_path) as conn:
+        changed = 0
+        for row in rows:
+            cur = conn.execute(
+                """UPDATE cluster_audit
+                   SET composite = ?, display_category = ?, lane = ?
+                   WHERE report_date = ? AND cluster_key = ?""",
+                (
+                    row.get("composite"),
+                    row.get("display_category"),
+                    str(row.get("lane", "") or ""),
+                    str(row.get("report_date", "")),
+                    str(row.get("cluster_key", "")),
+                ),
+            )
+            changed += cur.rowcount
+        return changed
 
 
 def insert_cluster(cluster: Cluster, db_path: Path = DB_PATH) -> int:

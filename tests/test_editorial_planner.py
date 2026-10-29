@@ -1037,3 +1037,45 @@ def test_empty_positive_lane_is_logged_with_the_reason(caplog):
     assert warnings, "an empty lane must emit a diagnostic"
     assert "2 carry any uplift" in warnings[0]
     assert "4.0" in warnings[0]
+
+
+def test_select_reports_which_constraint_dropped_a_candidate():
+    """`lane_quota` cannot explain a drop; the cap and the limit are different stories.
+
+    Production 2026-10-29: five publishable candidates outscored the weakest
+    published card and the audit could only say "lane_quota", so a reader of the
+    table could not tell whether World had exhausted its category cap or every
+    slot was simply taken by a higher score.
+    """
+    clusters = [_cluster(f"geo{i}", 0.90 - i * 0.01, category="World") for i in range(6)]
+    clusters += [_cluster("tech", 0.30, category="Technology")]
+    drop_reasons: dict[int, str] = {}
+
+    _hot, main = select_report_clusters(
+        clusters,
+        _config(max_per_category=3, max_clusters=4),
+        drop_reasons=drop_reasons,
+    )
+
+    by_title = {c.topic_category: c for c in clusters}
+    # geo3..geo5 lose to the World cap, not to the main limit: the fourth slot
+    # goes to technology at 0.30, far below every World candidate.
+    assert len(main) == 4
+    assert drop_reasons[id(by_title["geo3"])].startswith("category_cap")
+    assert drop_reasons[id(by_title["geo4"])].startswith("category_cap")
+    assert id(by_title["tech"]) not in drop_reasons, "the low-scoring tech card got a slot"
+    assert "World" in drop_reasons[id(by_title["geo3"])]
+
+
+def test_select_reports_the_main_limit_when_every_slot_is_taken():
+    """When the category cap is not what bound, the reason must say so."""
+    clusters = [_cluster(f"w{i}", 0.90 - i * 0.01, category="World") for i in range(8)]
+
+    drop_reasons: dict[int, str] = {}
+    _hot, main = select_report_clusters(
+        clusters, _config(max_per_category=20, max_clusters=3), drop_reasons=drop_reasons
+    )
+
+    assert len(main) == 3
+    assert set(drop_reasons.values()) == {"main_limit"}
+    assert len(drop_reasons) == 5
