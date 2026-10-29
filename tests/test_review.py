@@ -318,3 +318,56 @@ def test_portal_endpoint_records_a_dropped_candidate_verdict(tmp_path, monkeypat
     assert rows[0]["cluster_key"] == "dropped-key"
     assert rows[0]["verdict"] == 1
     assert rows[0]["channel"] == "portal"
+
+
+def test_format_review_list_hides_window_excluded_and_uses_eval_scores(tmp_path):
+    """Only candidates that were actually weighed deserve review.
+
+    Running this against production 2026-10-29 listed all 1351 audited clusters
+    at composite 0.000 -- 1261 of them were excluded by the candidate window and
+    the rest predate the `cluster_audit.composite` column. The listing must show
+    the ~90 that were weighed, with the score from their evaluation.
+    """
+    db_path = _db(tmp_path)
+    _eval(db_path, "weighed", 0.682, "Science & Health")
+    _eval(db_path, "excluded", 0.10)
+    insert_cluster_audit(
+        [
+            {
+                "report_date": "2026-10-29",
+                "cluster_key": "weighed",
+                "article_ids": [],
+                "source_count": 2,
+                "region_count": 2,
+                "signal": 0.61,
+                "composite": None,          # legacy row: column added later
+                "display_category": None,
+                "lane": "",
+                "outcome": "candidate",
+                "reason": "",
+                "rank": 1,
+            },
+            {
+                "report_date": "2026-10-29",
+                "cluster_key": "excluded",
+                "article_ids": [],
+                "source_count": 1,
+                "region_count": 1,
+                "signal": 0.1,
+                "composite": None,
+                "display_category": None,
+                "lane": "",
+                "outcome": "window_excluded",
+                "reason": "candidate_window",
+                "rank": None,
+            },
+        ],
+        db_path=db_path,
+    )
+
+    text = format_review_list("2026-10-29", db_path=db_path)
+
+    assert "weighed" in text
+    assert "excluded" not in text, "window-excluded rows are not reviewable candidates"
+    assert "0.682" in text, "fell back to 0.000 instead of the evaluation's score"
+    assert "Science & Health" in text

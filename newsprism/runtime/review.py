@@ -22,6 +22,7 @@ from newsprism.repo import (
     get_cluster_audit_for_date,
     insert_review_verdict,
     list_review_verdicts,
+    query_evaluations,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,8 +83,19 @@ def format_review_list(report_date: str, db_path: Path = DB_PATH) -> str:
     the calibration almost nothing on its own.
     """
     audit_rows = get_cluster_audit_for_date(report_date, db_path=db_path)
+    # Only candidates the pipeline actually weighed are reviewable. Rows excluded
+    # by the candidate window never reached scoring, and reading them into the
+    # list buried the ~90 real candidates under 1261 unusable entries.
+    audit_rows = [row for row in audit_rows if row.get("outcome") != "window_excluded"]
     if not audit_rows:
         return f"No audit rows for {report_date}."
+
+    # The audit row is written before scoring and `composite` only exists from
+    # 2026-10-30 on, so older days fall back to the stored evaluation.
+    evaluated = {
+        row["cluster_key"]: row
+        for row in query_evaluations(report_date, report_date, db_path=db_path)
+    }
 
     decided = {
         row["cluster_key"]: row
@@ -91,10 +103,21 @@ def format_review_list(report_date: str, db_path: Path = DB_PATH) -> str:
         if row.get("report_date") == report_date
     }
 
+    def _score(row: dict) -> float:
+        value = row.get("composite")
+        if value is None:
+            value = (evaluated.get(row["cluster_key"]) or {}).get("composite")
+        return float(value or 0.0)
+
+    def _category(row: dict) -> str:
+        value = row.get("display_category")
+        if not value:
+            value = (evaluated.get(row["cluster_key"]) or {}).get("display_category")
+        return str(value or "未分类")
+
     def _sort_key(row: dict) -> tuple:
         rendered = row.get("outcome") == "rendered"
-        composite = float(row.get("composite") or 0.0)
-        return (rendered, -composite)
+        return (rendered, -_score(row))
 
     lines = [f"Review {report_date} — {len(audit_rows)} candidate(s)"]
     for row in sorted(audit_rows, key=_sort_key):
@@ -106,10 +129,8 @@ def format_review_list(report_date: str, db_path: Path = DB_PATH) -> str:
             state = "已判定"
             state += " ✓publish" if int(verdict["verdict"]) > 0 else " ✗drop"
         shown = "显示" if row.get("outcome") == "rendered" else "未显示"
-        composite = float(row.get("composite") or 0.0)
-        category = row.get("display_category") or "未分类"
         lines.append(
-            f"  {key} [{state}] {shown} composite={composite:.3f} {category}"
+            f"  {key} [{state}] {shown} composite={_score(row):.3f} {_category(row)}"
             f" outcome={row.get('outcome')} reason={row.get('reason') or '-'}"
         )
     pending = sum(1 for row in audit_rows if row["cluster_key"] not in decided)
