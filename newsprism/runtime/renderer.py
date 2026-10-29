@@ -35,9 +35,21 @@ from newsprism.types import ClusterSummary, SourceCertification, is_real_article
 
 logger = logging.getLogger(__name__)
 
-# Any CJK codepoint. Used to decide whether an "English" payload field actually
-# contains Chinese (see ``HtmlRenderer._english_leaks``).
-_CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
+# CJK codepoints that indicate untranslated text: Han, Hiragana and Katakana.
+# Used to decide whether an "English" payload field actually holds non-English
+# text (see ``HtmlRenderer._english_leaks``) and whether a placeholder chip's
+# entity name should fall back to its region
+# (``_placeholder_source_label_en``). Restricting this to the Han block let two
+# Japanese entity names through on 2026-10-29 -- ``[ネタニヤフ voice pending]``
+# and ``[アイゼンコット voice pending]`` -- while ``english_leak_count`` still
+# reported 0, so the gate could not see its own miss.
+#
+# Hangul is deliberately EXCLUDED. A Korean outlet's masthead (``연합뉴스``) is
+# its real name, not a translation miss, and the English edition is right to
+# print it; ``test_english_leaks_flags_chinese_entity_names_in_placeholder_chips``
+# pins that. The cost is that a Hangul personal name inside a placeholder chip
+# would still pass unremarked -- narrower than today's blind spot, not wider.
+_CJK_CHAR = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]")
 
 # Matches a published daily report directory (YYYY-MM-DD) at the output root.
 _REPORT_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

@@ -3422,6 +3422,42 @@ def test_placeholder_chip_translates_a_chinese_entity_name(renderer):
     assert "voice pending" in html
 
 
+def test_placeholder_chip_replaces_a_katakana_entity_name_with_its_region(renderer):
+    """Katakana is the same failure as Han: the reader is owed a name or region.
+
+    2026-10-29 shipped ``[ネタニヤフ voice pending]`` and ``[アイゼンコット
+    voice pending]`` on card 8600. The Han-only gate both let them through and
+    declined to substitute the region, so the English page carried Japanese
+    transliterations of two people. With the region supplied (``il``), the chip
+    must read ``[Israel voice pending]``.
+    """
+    zh = _english_fixture("**Netanyahu refuses ceasefire**\n\n" + "English body text here.")
+    placeholder = Article(
+        url="placeholder:il:x",
+        title="待补充：内塔尼亚胡声音",
+        source_name="[ネタニヤフ声音待补]",
+        published_at=datetime(2026, 10, 29, tzinfo=timezone.utc),
+        content="",
+        is_searched=True,
+        search_region="il",
+        source_kind="news",
+        origin_region="il",
+        searched_provider="tavily_search",
+    )
+    placeholder.is_placeholder = True
+    placeholder.search_acceptance_status = "failed"
+    placeholder.search_acceptance_reason = "event_mismatch"
+    zh.cluster.articles.append(placeholder)
+
+    html_path = renderer.render([zh], date(2026, 10, 29))
+    html = html_path.read_text(encoding="utf-8")
+
+    # The Chinese edition keeps the outlet's own script; only the English
+    # rendering must be readable to an English reader.
+    assert "ネタニヤフ voice pending" not in html
+    assert "Israel voice pending" in html
+
+
 def test_placeholder_chip_tooltip_carries_plain_text_not_markup(renderer):
     """A title attribute must not receive the data-lang span markup.
 
@@ -3496,6 +3532,43 @@ def test_english_leaks_flags_chinese_entity_names_in_placeholder_chips(renderer)
     leaks = renderer._english_leaks(clusters, [])
 
     assert leaks == ["chip_[金正恩 voice pending]@8506"]
+
+
+def test_english_leaks_flags_japanese_entity_names_in_placeholder_chips(renderer):
+    """A katakana entity name is an untranslated name, not the outlet's masthead.
+
+    2026-10-29 shipped ``[ネタニヤフ voice pending]`` and ``[アイゼンコット
+    voice pending]`` on the English edition while ``english_leak_count``
+    reported 0: the gate only looked at the Han block, so Katakana passed
+    unseen. Unlike ``연합뉴스`` -- a Korean outlet whose real name belongs on the
+    English page -- these are transliterations of people, and the English reader
+    is owed ``Netanyahu`` or the region, not Katakana.
+    """
+    clusters = [
+        {
+            "cluster_id": 8600,
+            "headline": "内塔尼亚胡拒绝停火",
+            "summary": "中文正文。",
+            "headline_en": "Netanyahu refuses ceasefire",
+            "summary_en": "English body.",
+            "footer_sources_en": [
+                {
+                    "source": "[ネタニヤフ声音待补]",
+                    "is_placeholder": True,
+                    "compact_label_en": "[ネタニヤフ voice pending]",
+                },
+                {
+                    "source": "연합뉴스",
+                    "is_placeholder": False,
+                    "compact_label_en": "연합뉴스",
+                },
+            ],
+        }
+    ]
+
+    leaks = renderer._english_leaks(clusters, [])
+
+    assert leaks == ["chip_[ネタニヤフ voice pending]@8600"]
 
 
 def test_english_leaks_ignores_empty_english_on_a_placeholder_card(renderer):
