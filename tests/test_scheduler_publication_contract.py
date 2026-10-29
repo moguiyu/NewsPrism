@@ -513,3 +513,131 @@ def test_omitted_retirement_can_be_disabled_with_zero_hours(monkeypatch, tmp_pat
     assert marked
     assert 4242 in marked[0]
     assert 7003 not in marked[0], "0 must disable omitted-article retirement"
+
+
+def test_audit_key_survives_articles_appended_by_the_seeker():
+    """The audit row must stay findable after the funnel mutates the cluster.
+
+    ``impact.cluster_key`` hashes the first four real article URLs, and both the
+    seeker and display-dedup append articles later, so recomputing the key at
+    write-back time missed the row it was recorded under. Production 2026-10-29:
+    3 of 15 rendered cards (8604, 8611, 8617) had no audit row at all, and 72 of
+    90 in-window candidates were never given a final verdict.
+    """
+    from newsprism.runtime.scheduler import _audit_key_of
+
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url=f"https://example.com/{index}",
+                title=f"Story {index}",
+                source_name="Reuters",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Body",
+            )
+            for index in range(3)
+        ],
+    )
+    frozen = "0123456789abcdef"
+    cluster._audit_key = frozen  # type: ignore[attr-defined]
+
+    cluster.articles.append(
+        Article(
+            url="https://example.com/searched-later",
+            title="Searched later",
+            source_name="AP",
+            published_at=datetime.now(tz=timezone.utc),
+            content="Body",
+        )
+    )
+
+    assert _audit_key_of(cluster) == frozen
+
+
+def test_audit_key_falls_back_when_no_row_was_written():
+    """Shadow runs and unit paths never freeze a key; recompute instead."""
+    from newsprism.runtime.scheduler import _audit_key_of
+    from newsprism.service.impact import cluster_key
+
+    cluster = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/only",
+                title="Only",
+                source_name="Reuters",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Body",
+            )
+        ],
+    )
+
+    assert _audit_key_of(cluster) == cluster_key(cluster)
+
+
+def test_every_in_window_candidate_receives_a_final_audit_verdict(monkeypatch, tmp_path: Path):
+    """No in-window candidate may be left at "candidate".
+
+    Production 2026-10-29 wrote 1351 audit rows but finalized only 18 of the 90
+    in-window candidates: the write-back loop covered ``kept_summaries`` only, so
+    stories dropped by the lane quota, the impact status or the publication gate
+    kept the provisional "candidate" verdict forever.
+    """
+    scheduler, plan, input_cluster = _runtime_scheduler(monkeypatch, tmp_path)
+    dropped = ArticleCluster(
+        topic_category="World News",
+        articles=[
+            Article(
+                url="https://example.com/dropped-by-quota",
+                title="Dropped by quota",
+                source_name="Reuters",
+                published_at=datetime.now(tz=timezone.utc),
+                content="Body",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered", lambda ids: None
+    )
+    written: list[list[dict]] = []
+    verdicts: list[dict[str, tuple[str, str]]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.insert_cluster_audit",
+        lambda rows: written.append(list(rows)),
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.update_cluster_audit_outcomes",
+        lambda report_date, outcomes: verdicts.append(dict(outcomes)) or len(outcomes),
+    )
+    # Window holds two clusters; the lane quota keeps only one of them.
+    scheduler.impact_assessor = SimpleNamespace(
+        rank_candidates=lambda clusters, window: list(clusters),
+        assess_clusters=lambda clusters: None,
+        recompute_local=lambda cluster: None,
+        _signal=lambda cluster: (0.5, []),
+    )
+    scheduler.clusterer = SimpleNamespace(
+        cluster=lambda articles, **kwargs: [input_cluster, dropped]
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.select_report_clusters",
+        lambda clusters, cfg: ([], [input_cluster]),
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles),
+            push_after_render=True,
+        )
+    )
+
+    assert verdicts, "publish never wrote final audit verdicts"
+    final = verdicts[-1]
+    from newsprism.runtime.scheduler import _audit_key_of
+
+    for cluster in (input_cluster, dropped):
+        key = _audit_key_of(cluster)
+        assert key in final, f"{cluster.topic_category} left without a verdict"
+        assert final[key][0] != "candidate", f"{cluster.topic_category} kept the provisional verdict"

@@ -123,6 +123,18 @@ _PUBLICATION_REJECTION_PATTERNS = (
 _is_real_article = is_real_article
 
 
+def _audit_key_of(cluster: ArticleCluster) -> str:
+    """Return the audit primary key frozen when the row was written.
+
+    ``impact.cluster_key`` hashes the first four real article URLs, and the
+    seeker and display-dedup both append articles later in the funnel, so the
+    recomputed value no longer matches the stored row. Fall back to recomputing
+    only for paths that never wrote an audit row (shadow runs, tests).
+    """
+    frozen = getattr(cluster, "_audit_key", None)
+    return frozen if frozen else impact_cluster_key(cluster)
+
+
 def _aware(value: datetime) -> datetime:
     """Compare dates from mixed sources without raising.
 
@@ -483,10 +495,17 @@ class Scheduler:
                 outcome, reason = "window_excluded", "candidate_window"
             else:
                 outcome, reason = "candidate", ""
+            # Freeze the key. ``impact_cluster_key`` hashes the first four real
+            # article URLs, and both the seeker and display-dedup mutate the
+            # article list afterwards, so recomputing it later misses the row it
+            # was written under (measured 2026-10-29: 3 of 15 rendered cards had
+            # no audit row at all).
+            key = impact_cluster_key(cluster)
+            cluster._audit_key = key  # type: ignore[attr-defined]
             rows.append(
                 {
                     "report_date": report_date.isoformat(),
-                    "cluster_key": impact_cluster_key(cluster),
+                    "cluster_key": key,
                     "article_ids": [
                         article.id for article in cluster.articles if article.id is not None
                     ],
@@ -892,6 +911,11 @@ class Scheduler:
             # them: `clusters` keeps only what becomes a card, so without this
             # row a review cannot say why a story is absent. Measured on
             # 2026-10-28: 1354 validated clusters, 29 stored, 1305 unaccounted.
+            # Final verdicts are accumulated stage by stage and written once
+            # below. Every in-window candidate must leave this dict, otherwise
+            # the audit row is indistinguishable from one the funnel never
+            # reached (measured 2026-10-29: 72 of 90 rows stayed "candidate").
+            audit_outcomes: dict[str, tuple[str, str]] = {}
             if not shadow:
                 with contextlib.suppress(Exception):
                     self._persist_cluster_audit(clusters, candidate_clusters, today)
@@ -929,6 +953,11 @@ class Scheduler:
             hot_storyline_keys = {cluster.storyline_key or "" for cluster in hot_clusters}
             _warn_on_storyline_near_miss(candidate_clusters, hot_storyline_keys, "Storyline stage")
             _log_storyline_stage("Storyline stage: final candidate families before enrichment", selected_clusters)
+
+            selected_ids = {id(cluster) for cluster in selected_clusters}
+            for cluster in candidate_clusters:
+                if id(cluster) not in selected_ids:
+                    audit_outcomes[_audit_key_of(cluster)] = ("not_selected", "lane_quota")
 
             logger.info(
                 "Selected %d hotspot candidate items and %d main candidates for enrichment/summarization (from %d total clusters; candidate window=%d)",
@@ -985,6 +1014,17 @@ class Scheduler:
             summaries = _run_llm_stage(
                 today.isoformat(), self.summarizer.summarize_all_batch, selected_clusters
             )
+            # A cluster the summarizer failed to return (LLM error, parse
+            # failure) leaves the funnel silently: it was selected, so no stage
+            # below will ever see it, and its audit row would keep the
+            # provisional "candidate" verdict.
+            summarized_ids = {id(item.cluster) for item in summaries}
+            for cluster in selected_clusters:
+                if id(cluster) not in summarized_ids:
+                    audit_outcomes[_audit_key_of(cluster)] = (
+                        "rejected",
+                        "summarization_failed",
+                    )
 
             # Phase 2.6: Evaluate freshness against historical clusters
             historical = get_recent_clusters(
@@ -1012,6 +1052,10 @@ class Scheduler:
                 rejection_reason = _summary_publication_rejection(cs)
                 if rejection_reason:
                     stats["rejected"] += 1
+                    audit_outcomes[_audit_key_of(cs.cluster)] = (
+                        "rejected",
+                        rejection_reason.split(";")[0],
+                    )
                     logger.warning(
                         "Skipping non-publishable summary: reason=%s headline=%s",
                         rejection_reason,
@@ -1028,6 +1072,7 @@ class Scheduler:
 
                 if freshness.state == "stale":
                     logger.info("Skipping stale cluster: %s", cs.summary[:60])
+                    audit_outcomes[_audit_key_of(cs.cluster)] = ("stale", "freshness")
                     continue
 
                 # Attach freshness metadata to the ClusterSummary for rendering
@@ -1166,26 +1211,37 @@ class Scheduler:
             # Give each audit row its final reason: the window verdict recorded
             # earlier cannot distinguish "rendered" from "lost to dedup", which
             # is exactly the question a review asks.
+            for summary in kept_summaries:
+                db_id = summary.cluster_db_id
+                if db_id is None:
+                    continue
+                key = _audit_key_of(summary.cluster)
+                if db_id in rendered_ids:
+                    audit_outcomes[key] = ("rendered", "")
+                else:
+                    reason = dropped_reasons.get(db_id, "not_selected")
+                    stage, _, detail = reason.partition(":")
+                    audit_outcomes[key] = (stage or "not_selected", detail)
             if not shadow:
-                outcomes: dict[str, tuple[str, str]] = {}
-                for summary in kept_summaries:
-                    db_id = summary.cluster_db_id
-                    if db_id is None:
-                        continue
-                    key = impact_cluster_key(summary.cluster)
-                    if db_id in rendered_ids:
-                        outcomes[key] = ("rendered", "")
-                    else:
-                        reason = dropped_reasons.get(db_id, "not_selected")
-                        stage, _, detail = reason.partition(":")
-                        outcomes[key] = (stage or "not_selected", detail)
                 with contextlib.suppress(Exception):
-                    update_cluster_audit_outcomes(today.isoformat(), outcomes)
+                    changed = update_cluster_audit_outcomes(today.isoformat(), audit_outcomes)
                     logger.info(
-                        "Cluster audit outcomes: %d finalized for %s",
-                        len(outcomes),
+                        "Cluster audit outcomes: %d recorded, %d rows updated for %s",
+                        len(audit_outcomes),
+                        changed,
                         today.isoformat(),
                     )
+                    unresolved = sum(
+                        1 for cluster in candidate_clusters
+                        if _audit_key_of(cluster) not in audit_outcomes
+                    )
+                    if unresolved:
+                        logger.warning(
+                            "Cluster audit: %d of %d in-window candidates left without a "
+                            "final verdict",
+                            unresolved,
+                            len(candidate_clusters),
+                        )
             hot_storyline_keys = {
                 str(family.get("macro_topic_key", ""))
                 for family in hot_topics
