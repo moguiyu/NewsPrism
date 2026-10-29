@@ -600,7 +600,6 @@ class Scheduler:
                         "review": assessment.gate_review,
                     },
                 )
-        self._backfill_audit_scores(clusters, report_date)
 
     def _backfill_audit_scores(
         self,
@@ -1013,6 +1012,13 @@ class Scheduler:
             audit = getattr(self.impact_assessor, "audit_importance", None)
             if audit is not None:
                 audit(candidate_clusters, report_date=today.isoformat())
+            # Record the score selection ranks on. This must happen here, not in
+            # `_persist_impact_evaluations`: the seeker calls `recompute_local`
+            # and rewrites `composite` after selection, so backfilling later
+            # would store a number the ranking never used and quietly hide a
+            # story that beat a published card.
+            if not shadow:
+                self._backfill_audit_scores(candidate_clusters, today)
 
             if hot_cfg.get("enabled", False):
                 history_window_days = hot_cfg.get("history_window_days", 5)

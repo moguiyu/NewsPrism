@@ -811,3 +811,82 @@ def test_publish_warns_when_a_weak_card_displaces_a_stronger_story(caplog):
     assert "1 publishable candidate" in joined
     assert "0.682" in joined
     assert "0.700" not in joined, "a non-publishable candidate is not a loss"
+
+
+def test_audit_score_is_the_one_selection_used_not_the_post_seeker_one(
+    monkeypatch, tmp_path: Path
+):
+    """The backfill must run before the seeker rewrites `composite`.
+
+    The seeker appends sources and calls `recompute_local`, which overwrites
+    `composite`. Ranking already happened by then, so a later backfill stores a
+    number the sort never saw -- and a story that genuinely outscored a published
+    card would look like it never did. 2026-10-29 produced exactly that puzzle:
+    five candidates scored 0.682-0.636 while the weakest published card was
+    0.435, yet a replay on the stored numbers could not reproduce the drop.
+    """
+    from newsprism.types import ImpactAssessment
+
+    scheduler, plan, input_cluster = _runtime_scheduler(
+        monkeypatch, tmp_path, stub_impact_persistence=False
+    )
+    input_cluster.impact = ImpactAssessment(
+        cluster_key="whatever",
+        dims={"scope": 6.0},
+        signal=0.61,
+        composite=0.682,
+        display_category="Science & Health",
+        status="publishable",
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.mark_articles_clustered", lambda ids: None
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.insert_cluster_audit", lambda rows: len(rows)
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.update_cluster_audit_outcomes",
+        lambda report_date, outcomes: len(outcomes),
+    )
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.insert_cluster_evaluation", lambda **kwargs: None
+    )
+    backfilled: list[list[dict]] = []
+    monkeypatch.setattr(
+        "newsprism.runtime.scheduler.backfill_cluster_audit_scores",
+        lambda rows: backfilled.append(list(rows)) or len(rows),
+    )
+    # The seeker rewrites the composite, exactly as `recompute_local` does.
+    scheduler.seeker = SimpleNamespace(
+        enhance_clusters=lambda clusters: [
+            setattr(
+                cluster,
+                "impact",
+                ImpactAssessment(
+                    cluster_key="whatever",
+                    dims={"scope": 6.0},
+                    signal=0.955,
+                    composite=0.91,
+                    display_category="Science & Health",
+                    status="publishable",
+                ),
+            )
+            or cluster
+            for cluster in clusters
+        ]
+    )
+
+    asyncio.run(
+        scheduler.publish(
+            report_date=date(2026, 6, 19),
+            articles_override=list(input_cluster.articles),
+            push_after_render=True,
+        )
+    )
+
+    assert backfilled, "publish never backfilled the audit scores"
+    from newsprism.runtime.scheduler import _audit_key_of
+
+    key = _audit_key_of(input_cluster)
+    rows = {row["cluster_key"]: row for row in backfilled[-1]}
+    assert rows[key]["composite"] == 0.682, "stored the post-seeker score instead"
