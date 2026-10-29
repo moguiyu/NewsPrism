@@ -239,6 +239,23 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- Editor judgement keyed by (report_date, cluster_key) rather than
+            -- cluster_id. `editorial_feedback` joins `clusters`, which holds only
+            -- what survived selection (809 of 2790 evaluations in the 30 days to
+            -- 2026-10-29), so a verdict on a *dropped* candidate had nowhere to
+            -- go -- and calibration needs rejected examples to move a weight.
+            CREATE TABLE IF NOT EXISTS review_verdicts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL,
+                cluster_key TEXT NOT NULL,
+                verdict INTEGER NOT NULL,           -- +1 publish / -1 drop
+                stage TEXT NOT NULL DEFAULT 'dropped',  -- dropped|rendered
+                reason TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL DEFAULT 'cli',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE (report_date, cluster_key)
+            );
+
             CREATE TABLE IF NOT EXISTS calibration_weights (
                 dimension TEXT PRIMARY KEY,
                 weight REAL NOT NULL,
@@ -361,6 +378,9 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 ON cluster_evaluations(report_date);
             CREATE INDEX IF NOT EXISTS idx_editorial_feedback_cluster
                 ON editorial_feedback(cluster_id);
+
+            CREATE INDEX IF NOT EXISTS idx_review_verdicts_date
+                ON review_verdicts(report_date);
             CREATE INDEX IF NOT EXISTS idx_llm_call_events_created_at
                 ON llm_call_events(created_at);
             CREATE INDEX IF NOT EXISTS idx_llm_call_events_stage_date
@@ -1378,6 +1398,95 @@ def insert_editorial_feedback(
             (cluster_id, 1 if verdict >= 0 else -1, channel, note),
         )
         return cur.lastrowid
+
+
+def insert_review_verdict(
+    report_date: str,
+    cluster_key: str,
+    verdict: int,
+    stage: str = "dropped",
+    reason: str = "",
+    channel: str = "cli",
+    db_path: Path = DB_PATH,
+) -> int:
+    """Record an editor's publish/drop judgement on one evaluated candidate.
+
+    Keyed by ``(report_date, cluster_key)`` so it works for a candidate that
+    never became a cluster row -- the case ``editorial_feedback`` cannot express,
+    because that table requires a non-null ``cluster_id``. Verdict is +1 (should
+    have run) / -1 (correctly dropped). Re-reviewing the same card updates it.
+    Returns the row id.
+    """
+    with get_conn(db_path) as conn:
+        conn.execute(
+            """INSERT INTO review_verdicts
+                   (report_date, cluster_key, verdict, stage, reason, channel)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT (report_date, cluster_key) DO UPDATE SET
+                   verdict = excluded.verdict,
+                   stage   = excluded.stage,
+                   reason  = excluded.reason,
+                   channel = excluded.channel,
+                   created_at = datetime('now')""",
+            (
+                str(report_date),
+                str(cluster_key),
+                1 if verdict >= 0 else -1,
+                str(stage or "dropped"),
+                str(reason or ""),
+                str(channel or "cli"),
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM review_verdicts WHERE report_date = ? AND cluster_key = ?",
+            (str(report_date), str(cluster_key)),
+        ).fetchone()
+        return int(row["id"]) if row else 0
+
+
+def list_review_verdicts(days: int = 30, db_path: Path = DB_PATH) -> list[dict[str, object]]:
+    """Recent review verdicts newest first, with the evaluated scores attached."""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT v.id, v.report_date, v.cluster_key, v.verdict, v.stage,
+                      v.reason, v.channel, v.created_at,
+                      e.composite, e.signal, e.display_category, e.status,
+                      e.rationale
+               FROM review_verdicts v
+               LEFT JOIN cluster_evaluations e
+                      ON e.report_date = v.report_date AND e.cluster_key = v.cluster_key
+               WHERE v.created_at >= datetime('now', ?)
+               ORDER BY v.id DESC""",
+            (f"-{days} days",),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_review_training_rows(days: int = 30, db_path: Path = DB_PATH) -> list[dict[str, object]]:
+    """Verdicts joined to their evaluation dims -- the calibration training set.
+
+    Mirrors ``get_feedback_training_rows`` but reaches candidates that were never
+    stored as a cluster, which is where most of the signal about selection lives.
+    """
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """SELECT v.verdict, v.reason AS note, v.stage, e.dims, e.rationale,
+                      e.composite, e.signal, e.display_category, e.report_date
+               FROM review_verdicts v
+               JOIN cluster_evaluations e
+                      ON e.report_date = v.report_date AND e.cluster_key = v.cluster_key
+               WHERE v.created_at >= datetime('now', ?)""",
+            (f"-{days} days",),
+        ).fetchall()
+    result: list[dict[str, object]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["dims"] = json.loads(item["dims"]) if item.get("dims") else {}
+        except (TypeError, ValueError):
+            item["dims"] = {}
+        result.append(item)
+    return result
 
 
 def list_editorial_feedback(limit: int = 50, db_path: Path = DB_PATH) -> list[dict[str, object]]:

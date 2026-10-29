@@ -761,3 +761,81 @@ def test_retention_removes_old_unpublished_clusters_without_dangling_refs(tmp_pa
                 con.execute("select 1 from articles where id = ?", (aid,)).fetchone()
                 is not None
             ), f"cluster {cid} points at deleted article {aid}"
+
+
+def test_review_verdicts_record_a_judgement_on_a_dropped_candidate(tmp_path):
+    """A verdict must attach to a candidate that never reached the page.
+
+    `editorial_feedback` requires a non-null `cluster_id` and joins `clusters`,
+    which only holds what survived selection: on 2026-10-29 that was 21 of 2790
+    evaluations in the 30-day window. Every verdict an editor can give about a
+    *dropped* story was therefore unrecordable, and the calibration loop stayed
+    dead because it needs accepted **and** rejected examples.
+    """
+    from newsprism.repo import (
+        get_review_training_rows,
+        insert_cluster_evaluation,
+        insert_review_verdict,
+        list_review_verdicts,
+    )
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    insert_cluster_evaluation(
+        report_date="2026-10-29",
+        cluster_key="dropped-key",
+        dims={"scope": 6.0, "severity": 7.0},
+        rationale="AI overturns the exponential-time hypothesis",
+        signal=0.61,
+        composite=0.682,
+        rank=1,
+        display_category="Science & Health",
+        status="publishable",
+        flags=[],
+        evaluated_by_llm=True,
+        model="deepseek/deepseek-v4.1-flash-1017",
+        db_path=db_path,
+    )
+
+    insert_review_verdict(
+        report_date="2026-10-29",
+        cluster_key="dropped-key",
+        verdict=1,
+        stage="dropped",
+        reason="should have published",
+        db_path=db_path,
+    )
+
+    verdicts = list_review_verdicts(days=1, db_path=db_path)
+    assert len(verdicts) == 1
+    assert verdicts[0]["cluster_key"] == "dropped-key"
+    assert verdicts[0]["verdict"] == 1
+    assert verdicts[0]["stage"] == "dropped"
+
+    rows = get_review_training_rows(days=1, db_path=db_path)
+    assert len(rows) == 1, "a dropped candidate must produce a training row"
+    assert rows[0]["verdict"] == 1
+    assert rows[0]["dims"]["scope"] == 6.0
+    assert rows[0]["signal"] == 0.61
+    assert rows[0]["composite"] == 0.682
+
+
+def test_review_verdict_upsert_replaces_rather_than_duplicates(tmp_path):
+    """Re-reviewing a card must correct the verdict, not double-count it."""
+    from newsprism.repo import insert_review_verdict, list_review_verdicts
+
+    db_path = tmp_path / "newsprism.db"
+    init_db(db_path)
+    first = insert_review_verdict(
+        report_date="2026-10-29", cluster_key="k1", verdict=1, db_path=db_path
+    )
+    second = insert_review_verdict(
+        report_date="2026-10-29", cluster_key="k1", verdict=-1,
+        reason="changed my mind", db_path=db_path,
+    )
+
+    assert first == second, "the upsert keeps the row id"
+    rows = list_review_verdicts(days=1, db_path=db_path)
+    assert len(rows) == 1
+    assert rows[0]["verdict"] == -1
+    assert rows[0]["reason"] == "changed my mind"

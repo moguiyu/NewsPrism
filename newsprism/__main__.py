@@ -61,6 +61,20 @@ def main() -> None:
     fb_list = feedback_sub.add_parser("list", help="Show recent feedback")
     fb_list.add_argument("--limit", type=int, default=30)
 
+    review_parser = sub.add_parser(
+        "review", help="Judge the day's candidates, including ones the page dropped"
+    )
+    review_sub = review_parser.add_subparsers(dest="review_cmd")
+    rv_list = review_sub.add_parser("list", help="List the day's candidates, dropped first")
+    rv_list.add_argument("--date", dest="review_date", help="Report date (default: today)")
+    rv_list.add_argument("--db-path", default="data/newsprism.db")
+    rv_add = review_sub.add_parser("verdict", help="Record a publish/drop judgement")
+    rv_add.add_argument("--date", dest="review_date", help="Report date (default: today)")
+    rv_add.add_argument("--key", dest="review_key", required=True, help="cluster_key from `review list`")
+    rv_add.add_argument("--verdict", choices=["publish", "drop"], required=True)
+    rv_add.add_argument("--reason", default="", help="Optional note")
+    rv_add.add_argument("--db-path", default="data/newsprism.db")
+
     calibrate_parser = sub.add_parser("calibrate", help="Tune impact weights and refresh editorial policy memory")
     calibrate_sub = calibrate_parser.add_subparsers(dest="calibrate_cmd")
     calibrate_sub.add_parser("run", help="Run weekly calibration now")
@@ -148,6 +162,29 @@ def main() -> None:
                 print(format_feedback_list(limit=args.limit))
             else:
                 feedback_parser.print_help()
+                sys.exit(1)
+        elif args.cmd == "review":
+            from pathlib import Path
+            from newsprism.runtime.review import format_review_list, record_verdict
+
+            review_date = getattr(args, "review_date", None) or date.today().isoformat()
+            if args.review_cmd == "list":
+                print(format_review_list(review_date, db_path=Path(args.db_path)))
+            elif args.review_cmd == "verdict":
+                row_id = record_verdict(
+                    review_date,
+                    args.review_key,
+                    verdict=args.verdict,
+                    reason=args.reason,
+                    db_path=Path(args.db_path),
+                )
+                if row_id:
+                    print(f"Recorded verdict #{row_id}: {args.review_key} {args.verdict}")
+                else:
+                    print(f"No audit row for {args.review_key} on {review_date}")
+                    sys.exit(1)
+            else:
+                review_parser.print_help()
                 sys.exit(1)
         elif args.cmd == "calibrate":
             from newsprism.service.calibrate import (

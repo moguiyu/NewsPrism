@@ -34,6 +34,13 @@ class VerdictIn(BaseModel):
     note: str = ""
 
 
+class ReviewVerdictIn(BaseModel):
+    report_date: str
+    cluster_key: str
+    verdict: int                     # +1 publish / -1 drop
+    reason: str = ""
+
+
 class CorrectionIn(BaseModel):
     evaluation_id: int
     kind: str                       # dimension | category | promote | demote
@@ -201,6 +208,25 @@ def create_app(db_path: Path = DB_PATH) -> FastAPI:
         insert_editorial_feedback(body.cluster_id, body.verdict, channel="portal",
                                   note=body.note, db_path=db_path)
         return {"ok": True}
+
+    @app.post("/api/review-verdict")
+    def api_review_verdict(body: ReviewVerdictIn):
+        """Judge a candidate the page dropped -- `editorial_feedback` cannot.
+
+        It keys on `cluster_id`, which only exists for stored clusters, so the
+        stories an editor most needs to weigh in on were unreachable.
+        """
+        from newsprism.runtime.review import record_verdict
+
+        row_id = record_verdict(
+            body.report_date,
+            body.cluster_key,
+            verdict=body.verdict,
+            reason=body.reason,
+            channel="portal",
+            db_path=db_path,
+        )
+        return {"ok": bool(row_id), "id": row_id}
 
     @app.post("/api/correction")
     def api_correction(body: CorrectionIn):

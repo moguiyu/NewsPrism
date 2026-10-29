@@ -25,6 +25,7 @@ from newsprism.repo import (
     get_correction_training_rows,
     get_feedback_training_rows,
     get_latest_editorial_policy,
+    get_review_training_rows,
     insert_editorial_policy,
     list_corrections,
     reset_calibration_weights,
@@ -55,6 +56,10 @@ def _get_feedback_rows(days: int) -> list[dict]:
 
 def _get_correction_rows(days: int) -> list[dict]:
     return get_correction_training_rows(days=days)
+
+
+def _get_review_rows(days: int) -> list[dict]:
+    return get_review_training_rows(days=days)
 
 
 def _get_all_corrections(days: int) -> list[dict]:
@@ -230,7 +235,7 @@ def run_calibration(cfg) -> dict:
     min_feedback: int = int(cal_cfg.get("min_feedback_to_run", 10))
     policy_max_bullets: int = int(cal_cfg.get("policy_max_bullets", 10))
 
-    rows = _get_feedback_rows(window_days) + _get_correction_rows(window_days)
+    rows = _get_review_rows(window_days) + _get_feedback_rows(window_days) + _get_correction_rows(window_days)
     if len(rows) < min_feedback:
         return {
             "status": "skipped",
